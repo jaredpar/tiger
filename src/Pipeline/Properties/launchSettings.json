@@ -1,0 +1,9 @@
+{
+  "profiles": {
+    "Pipeline": {
+      "commandName": "Project",
+      "commandLineArgs": "helix --repo dotnet/sdk --build 1308335",
+      "workingDirectory": "C:\\users\\jaredpar\\code\\pipeline-triage"
+    }
+  }
+}
