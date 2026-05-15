@@ -4,17 +4,14 @@
     <OutputType>Exe</OutputType>
     <TargetFramework>net10.0</TargetFramework>
     <PackAsTool>true</PackAsTool>
-    <ToolCommandName>basic-triage-mcp</ToolCommandName>
-    <PackageId>basic-triage-mcp</PackageId>
+    <ToolCommandName>tiger</ToolCommandName>
+    <PackageId>tiger</PackageId>
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="Azure.Identity" Version="1.17.1" />
     <PackageReference Include="ModelContextProtocol" Version="*-*" />
     <PackageReference Include="Microsoft.Extensions.Hosting" Version="*" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <ProjectReference Include="..\Pipeline.Core\Pipeline.Core.csproj" />
   </ItemGroup>
 
 </Project>

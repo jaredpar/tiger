@@ -1,14 +1,14 @@
 using Azure.Identity;
 
-namespace Pipeline.Core;
+namespace Tiger;
 
 /// <summary>
-/// Configuration and credentials for the pipeline tools.
+/// Configuration and credentials for the tiger tools.
 /// </summary>
-public sealed class PipelineContext
+public sealed class TigerContext
 {
     /// <summary>
-    /// The directory where pipeline configuration and data files are stored.
+    /// The directory where tiger configuration and data files are stored.
     /// </summary>
     public string ConfigDirectory { get; }
 
@@ -22,7 +22,7 @@ public sealed class PipelineContext
     /// </summary>
     public string? HelixToken { get; }
 
-    internal PipelineContext(string configDirectory, DefaultAzureCredential azureCredential, string? helixToken)
+    internal TigerContext(string configDirectory, DefaultAzureCredential azureCredential, string? helixToken)
     {
         ConfigDirectory = configDirectory;
         AzureCredential = azureCredential;
@@ -30,9 +30,9 @@ public sealed class PipelineContext
     }
 }
 
-public static class PipelineUtils
+public static class TigerUtils
 {
-    private const string ConfigDirectoryName = ".pipeline-triage";
+    private const string ConfigDirectoryName = ".tiger";
 
     public static DefaultAzureCredential CreateCredential() =>
         new DefaultAzureCredential(new DefaultAzureCredentialOptions()
@@ -41,20 +41,20 @@ public static class PipelineUtils
         });
 
     /// <summary>
-    /// Creates a <see cref="PipelineContext"/> with the configuration directory,
+    /// Creates a <see cref="TigerContext"/> with the configuration directory,
     /// Azure credential, and optional Helix token read from helix.txt.
     /// </summary>
-    public static PipelineContext CreateContext()
+    public static TigerContext CreateContext()
     {
         var configDir = GetConfigDirectory();
         var credential = CreateCredential();
         var helixToken = ReadHelixToken(configDir);
-        return new PipelineContext(configDir, credential, helixToken);
+        return new TigerContext(configDir, credential, helixToken);
     }
 
     /// <summary>
     /// Gets the configuration directory, creating it if it doesn't exist.
-    /// Located at ~/.pipeline-triage.
+    /// Located at ~/.tiger.
     /// </summary>
     public static string GetConfigDirectory()
     {

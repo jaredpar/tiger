@@ -3,7 +3,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Azure.Core;
 
-namespace Pipeline.Core;
+namespace Tiger;
 
 public sealed class AzdoClient
 {

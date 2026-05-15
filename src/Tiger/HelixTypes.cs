@@ -1,6 +1,6 @@
 using System.Text.Json.Serialization;
 
-namespace Pipeline.Core;
+namespace Tiger;
 
 /// <summary>
 /// Summary information about a Helix job.

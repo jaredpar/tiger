@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="src\Tiger\Tiger.csproj" />
+  <Project Path="src\Tiger.Tests\Tiger.Tests.csproj" />
+</Solution>

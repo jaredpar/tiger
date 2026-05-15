@@ -1,0 +1,8 @@
+{
+  "profiles": {
+    "Tiger": {
+      "commandName": "Project",
+      "commandLineArgs": "azdo builds --repo dotnet/roslyn --top 5"
+    }
+  }
+}

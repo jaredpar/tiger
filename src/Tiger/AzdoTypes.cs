@@ -1,7 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
-namespace Pipeline.Core;
+namespace Tiger;
 
 public class AzdoBuild
 {

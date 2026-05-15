@@ -1,6 +1,0 @@
-<Solution>
-  <Project Path="src\Pipeline.Core\Pipeline.Core.csproj" />
-  <Project Path="src\Pipeline.Mcp\Pipeline.Mcp.csproj" />
-  <Project Path="src\Pipeline\Pipeline.csproj" />
-  <Project Path="src\Scratch\Scratch.csproj" />
-</Solution>

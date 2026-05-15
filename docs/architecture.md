@@ -35,16 +35,17 @@ CLI commands like `tiger report` query the SQLite DB and exit.
 ```
 Tiger.slnx
 src/
-  Tiger/              — Main CLI + HTTP host (OutputType=Exe, PackAsTool)
-    Program.cs        — Entry point, host builder, CLI routing
-    Commands/         — CLI command handlers
-    Poller/           — BackgroundService for AzDO polling
-    Mcp/              — MCP tool definitions + HTTP setup
-  Tiger.Core/         — Shared library (AzDO client, Helix client, DB access)
+  Tiger/              — Single project: CLI + HTTP host + MCP tools (OutputType=Exe, PackAsTool)
+    Program.cs        — Entry point, CLI routing
     AzdoClient.cs     — HTTP client for AzDO REST API
     HelixClient.cs    — HTTP client for Helix API
-    Database/         — SQLite schema, migrations, query helpers
-    Config/           — Configuration model + loading
+    TigerUtils.cs     — Context/credential helpers
+    Mcp/              — MCP tool definitions
+    Commands/         — CLI command handlers (future)
+    Poller/           — BackgroundService for AzDO polling (future)
+    Database/         — SQLite schema, migrations, query helpers (future)
+    Config/           — Configuration model + loading (future)
+  Tiger.Tests/        — xUnit test project
 ```
 
 ## Configuration (`~/.tiger/config.json`)

@@ -1,7 +1,7 @@
 using System.Net.Http.Headers;
 using System.Text.Json;
 
-namespace Pipeline.Core;
+namespace Tiger;
 
 public sealed class HelixClient
 {

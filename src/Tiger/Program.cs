@@ -1,5 +1,5 @@
 using System.Text.Json;
-using Pipeline.Core;
+using Tiger;
 
 if (args.Length == 0)
 {
@@ -167,7 +167,7 @@ static async Task<int> RunAzdoBuildsAsync(string[] args)
         }
     }
 
-    var credential = PipelineUtils.CreateCredential();
+    var credential = TigerUtils.CreateCredential();
     var client = await AzdoClient.CreateAsync(credential, org, project);
     var builds = await client.GetRecentBuildsAsync(definitionId, top);
 
@@ -195,7 +195,7 @@ static async Task<int> RunAzdoTestsAsync(string[] args)
         return 1;
     }
 
-    var credential = PipelineUtils.CreateCredential();
+    var credential = TigerUtils.CreateCredential();
     var client = await AzdoClient.CreateAsync(credential, org, project);
     var failures = await client.GetTestFailuresAsync(buildId);
 
@@ -217,34 +217,34 @@ static string? GetOption(string[] args, string name)
 static int PrintUsage()
 {
     Console.Error.WriteLine("Usage:");
-    Console.Error.WriteLine("  pipeline helix ...");
-    Console.Error.WriteLine("  pipeline azdo ...");
+    Console.Error.WriteLine("  tiger helix ...");
+    Console.Error.WriteLine("  tiger azdo ...");
     Console.Error.WriteLine();
-    Console.Error.WriteLine("Run 'pipeline <subcommand>' for more details.");
+    Console.Error.WriteLine("Run 'tiger <subcommand>' for more details.");
     return 1;
 }
 
 static int PrintHelixUsage()
 {
     Console.Error.WriteLine("Usage:");
-    Console.Error.WriteLine("  pipeline helix workitems --job <jobName> [--workitem <name>]");
-    Console.Error.WriteLine("  pipeline helix console --job <jobName> --workitem <name>");
-    Console.Error.WriteLine("  pipeline helix files --job <jobName> --workitem <name> [--download [dir]]");
+    Console.Error.WriteLine("  tiger helix workitems --job <jobName> [--workitem <name>]");
+    Console.Error.WriteLine("  tiger helix console --job <jobName> --workitem <name>");
+    Console.Error.WriteLine("  tiger helix files --job <jobName> --workitem <name> [--download [dir]]");
     return 1;
 }
 
 static int PrintAzdoUsage()
 {
     Console.Error.WriteLine("Usage:");
-    Console.Error.WriteLine("  pipeline azdo builds [--definition <id>] [--top <n>] [--org <org>] [--project <project>]");
-    Console.Error.WriteLine("  pipeline azdo tests --build <id> [--org <org>] [--project <project>]");
-    Console.Error.WriteLine("  pipeline azdo test-summary --build <id> [--org <org>] [--project <project>]");
-    Console.Error.WriteLine("  pipeline azdo timeline --build <id> [--org <org>] [--project <project>]");
-    Console.Error.WriteLine("  pipeline azdo artifacts --build <id> [--org <org>] [--project <project>]");
-    Console.Error.WriteLine("  pipeline azdo jobs --build <id> [--org <org>] [--project <project>]");
-    Console.Error.WriteLine("  pipeline azdo pr-builds --repo <owner/repo> --pr <number> [--top <n>] [--org <org>] [--project <project>]");
-    Console.Error.WriteLine("  pipeline azdo repo-builds --repo <owner/repo> [--pr] [--ci] [--top <n>] [--org <org>] [--project <project>]");
-    Console.Error.WriteLine("  pipeline azdo download --build <id> --artifact <name> --output <path> [--org <org>] [--project <project>]");
+    Console.Error.WriteLine("  tiger azdo builds [--definition <id>] [--top <n>] [--org <org>] [--project <project>]");
+    Console.Error.WriteLine("  tiger azdo tests --build <id> [--org <org>] [--project <project>]");
+    Console.Error.WriteLine("  tiger azdo test-summary --build <id> [--org <org>] [--project <project>]");
+    Console.Error.WriteLine("  tiger azdo timeline --build <id> [--org <org>] [--project <project>]");
+    Console.Error.WriteLine("  tiger azdo artifacts --build <id> [--org <org>] [--project <project>]");
+    Console.Error.WriteLine("  tiger azdo jobs --build <id> [--org <org>] [--project <project>]");
+    Console.Error.WriteLine("  tiger azdo pr-builds --repo <owner/repo> --pr <number> [--top <n>] [--org <org>] [--project <project>]");
+    Console.Error.WriteLine("  tiger azdo repo-builds --repo <owner/repo> [--pr] [--ci] [--top <n>] [--org <org>] [--project <project>]");
+    Console.Error.WriteLine("  tiger azdo download --build <id> --artifact <name> --output <path> [--org <org>] [--project <project>]");
     return 1;
 }
 
@@ -267,7 +267,7 @@ static async Task<int> RunAzdoTestSummaryAsync(string[] args)
         return 1;
     }
 
-    var credential = PipelineUtils.CreateCredential();
+    var credential = TigerUtils.CreateCredential();
     var client = await AzdoClient.CreateAsync(credential, org, project);
     var summaries = await client.GetTestSummaryByJobAsync(buildId);
 
@@ -295,7 +295,7 @@ static async Task<int> RunAzdoTimelineAsync(string[] args)
         return 1;
     }
 
-    var credential = PipelineUtils.CreateCredential();
+    var credential = TigerUtils.CreateCredential();
     var client = await AzdoClient.CreateAsync(credential, org, project);
     var timeline = await client.GetTimelineAsync(buildId);
 
@@ -323,7 +323,7 @@ static async Task<int> RunAzdoArtifactsAsync(string[] args)
         return 1;
     }
 
-    var credential = PipelineUtils.CreateCredential();
+    var credential = TigerUtils.CreateCredential();
     var client = await AzdoClient.CreateAsync(credential, org, project);
     var artifacts = await client.GetArtifactsAsync(buildId);
 
@@ -353,7 +353,7 @@ static async Task<int> RunAzdoDownloadAsync(string[] args)
         return 1;
     }
 
-    var credential = PipelineUtils.CreateCredential();
+    var credential = TigerUtils.CreateCredential();
     var client = await AzdoClient.CreateAsync(credential, org, project);
     await client.DownloadArtifactAsync(buildId, artifactName, outputPath);
 
@@ -380,7 +380,7 @@ static async Task<int> RunAzdoJobsAsync(string[] args)
         return 1;
     }
 
-    var credential = PipelineUtils.CreateCredential();
+    var credential = TigerUtils.CreateCredential();
     var client = await AzdoClient.CreateAsync(credential, org, project);
     var timeline = await client.GetTimelineAsync(buildId);
     var jobs = timeline.Records
@@ -424,7 +424,7 @@ static async Task<int> RunAzdoPrBuildsAsync(string[] args)
         }
     }
 
-    var credential = PipelineUtils.CreateCredential();
+    var credential = TigerUtils.CreateCredential();
     var client = await AzdoClient.CreateAsync(credential, org, project);
     var builds = await client.GetBuildsForPullRequestAsync(repo, prNumber, top);
 
@@ -469,7 +469,7 @@ static async Task<int> RunAzdoRepoBuildsAsync(string[] args)
         _ => null,
     };
 
-    var credential = PipelineUtils.CreateCredential();
+    var credential = TigerUtils.CreateCredential();
     var client = await AzdoClient.CreateAsync(credential, org, project);
     var builds = await client.GetBuildsForRepositoryAsync(repo, top, reasonFilter);
 
