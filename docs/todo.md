@@ -35,7 +35,7 @@ Items are ordered by dependency — work top-to-bottom.
 - [x] **poller-service** — `BackgroundService` that polls each configured AzDO org/project
   for completed builds. Tracks watermark (last-seen build ID) per org/project in SQLite.
 
-- [ ] **poller-ingestion** — On new completed build: fetch test runs + test results via
+- [x] **poller-ingestion** — On new completed build: fetch test runs + test results via
   `AzdoClient`, insert into SQLite.
 
 - [ ] **poller-lifecycle** — Poller starts automatically when tiger runs. Add `tiger status`

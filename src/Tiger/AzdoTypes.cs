@@ -26,6 +26,18 @@ public class AzdoBuild
     [JsonPropertyName("definitionName")]
     public required string DefinitionName { get; init; }
 
+    [JsonPropertyName("definitionId")]
+    public int DefinitionId { get; init; }
+
+    [JsonPropertyName("sourceVersion")]
+    public string? SourceVersion { get; init; }
+
+    [JsonPropertyName("repositoryName")]
+    public string? RepositoryName { get; init; }
+
+    [JsonPropertyName("prNumber")]
+    public int? PrNumber { get; init; }
+
     [JsonPropertyName("finishTime")]
     public DateTime? FinishTime { get; init; }
 }

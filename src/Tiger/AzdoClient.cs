@@ -53,6 +53,34 @@ public sealed class AzdoClient : IBuildDataSource
     private string GetBuildUri(int buildId) =>
         $"https://dev.azure.com/{Organization}/{Project}/_build/results?buildId={buildId}";
 
+    private AzdoBuild MapBuild(AzdoBuildRaw b) => new()
+    {
+        Id = b.Id,
+        BuildNumber = b.BuildNumber,
+        Status = b.Status,
+        Result = b.Result,
+        Uri = GetBuildUri(b.Id),
+        SourceBranch = b.SourceBranch,
+        DefinitionName = b.Definition?.Name ?? "unknown",
+        DefinitionId = b.Definition?.Id ?? 0,
+        SourceVersion = b.SourceVersion,
+        RepositoryName = b.Repository?.Name,
+        PrNumber = ExtractPrNumber(b.SourceBranch),
+        FinishTime = b.FinishTime,
+    };
+
+    private static int? ExtractPrNumber(string sourceBranch)
+    {
+        // refs/pull/42/merge → 42
+        if (sourceBranch.StartsWith("refs/pull/", StringComparison.Ordinal))
+        {
+            var parts = sourceBranch.Split('/');
+            if (parts.Length >= 3 && int.TryParse(parts[2], out var pr))
+                return pr;
+        }
+        return null;
+    }
+
     public async Task<List<AzdoBuild>> GetRecentBuildsAsync(int? definitionId = null, int top = 10)
     {
         var url = $"_apis/build/builds?api-version=7.1&$top={top}";
@@ -68,17 +96,7 @@ public sealed class AzdoClient : IBuildDataSource
         var result = JsonSerializer.Deserialize<AzdoListResponse<AzdoBuildRaw>>(json, s_jsonOptions)
             ?? throw new InvalidOperationException("Failed to deserialize builds response");
 
-        return result.Value.Select(b => new AzdoBuild
-        {
-            Id = b.Id,
-            BuildNumber = b.BuildNumber,
-            Status = b.Status,
-            Result = b.Result,
-            Uri = GetBuildUri(b.Id),
-            SourceBranch = b.SourceBranch,
-            DefinitionName = b.Definition?.Name ?? "unknown",
-            FinishTime = b.FinishTime,
-        }).ToList();
+        return result.Value.Select(MapBuild).ToList();
     }
 
     public async Task<List<AzdoBuild>> GetBuildsForRepositoryAsync(string repository, int top = 10, string? reasonFilter = null)
@@ -96,17 +114,7 @@ public sealed class AzdoClient : IBuildDataSource
         var result = JsonSerializer.Deserialize<AzdoListResponse<AzdoBuildRaw>>(json, s_jsonOptions)
             ?? throw new InvalidOperationException("Failed to deserialize builds response");
 
-        return result.Value.Select(b => new AzdoBuild
-        {
-            Id = b.Id,
-            BuildNumber = b.BuildNumber,
-            Status = b.Status,
-            Result = b.Result,
-            Uri = GetBuildUri(b.Id),
-            SourceBranch = b.SourceBranch,
-            DefinitionName = b.Definition?.Name ?? "unknown",
-            FinishTime = b.FinishTime,
-        }).ToList();
+        return result.Value.Select(MapBuild).ToList();
     }
 
     public async Task<List<AzdoBuild>> GetBuildsForPullRequestAsync(string repository, int prNumber, int top = 10)
@@ -121,17 +129,7 @@ public sealed class AzdoClient : IBuildDataSource
         var result = JsonSerializer.Deserialize<AzdoListResponse<AzdoBuildRaw>>(json, s_jsonOptions)
             ?? throw new InvalidOperationException("Failed to deserialize builds response");
 
-        return result.Value.Select(b => new AzdoBuild
-        {
-            Id = b.Id,
-            BuildNumber = b.BuildNumber,
-            Status = b.Status,
-            Result = b.Result,
-            Uri = GetBuildUri(b.Id),
-            SourceBranch = b.SourceBranch,
-            DefinitionName = b.Definition?.Name ?? "unknown",
-            FinishTime = b.FinishTime,
-        }).ToList();
+        return result.Value.Select(MapBuild).ToList();
     }
 
     public async Task<List<AzdoTestResult>> GetTestFailuresAsync(int buildId)
@@ -334,8 +332,14 @@ public sealed class AzdoClient : IBuildDataSource
         [JsonPropertyName("sourceBranch")]
         public required string SourceBranch { get; init; }
 
+        [JsonPropertyName("sourceVersion")]
+        public string? SourceVersion { get; init; }
+
         [JsonPropertyName("definition")]
         public AzdoBuildDefinition? Definition { get; init; }
+
+        [JsonPropertyName("repository")]
+        public AzdoBuildRepository? Repository { get; init; }
 
         [JsonPropertyName("finishTime")]
         public DateTime? FinishTime { get; init; }
@@ -343,8 +347,17 @@ public sealed class AzdoClient : IBuildDataSource
 
     private class AzdoBuildDefinition
     {
+        [JsonPropertyName("id")]
+        public int Id { get; init; }
+
         [JsonPropertyName("name")]
         public required string Name { get; init; }
+    }
+
+    private class AzdoBuildRepository
+    {
+        [JsonPropertyName("name")]
+        public string? Name { get; init; }
     }
 
     private class AzdoTestRun
