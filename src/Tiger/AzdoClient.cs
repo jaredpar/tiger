@@ -5,7 +5,7 @@ using Azure.Core;
 
 namespace Tiger;
 
-public sealed class AzdoClient
+public sealed class AzdoClient : IBuildDataSource
 {
     public const string DefaultOrganization = "dnceng-public";
     public const string DefaultProject = "public";

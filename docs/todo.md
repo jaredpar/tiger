@@ -25,7 +25,7 @@ Items are ordered by dependency — work top-to-bottom.
   `(organization, project)` so we can monitor multiple AzDO instances. Core tables:
   `builds`, `test_runs`, `test_results`, `flaky_tests`.
 
-- [ ] **data-source-interface** — Extract `IBuildDataSource` interface from `AzdoClient`
+- [x] **data-source-interface** — Extract `IBuildDataSource` interface from `AzdoClient`
   (analysis-oriented methods: builds, test failures, test summary). Implement it on both
   `AzdoClient` (live) and a new `SqliteBuildDataSource` (cached). Consumers use the
   interface so they work seamlessly against either backend.
