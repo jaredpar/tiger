@@ -32,7 +32,7 @@ Items are ordered by dependency — work top-to-bottom.
 
 ## Phase 2: Background Poller
 
-- [ ] **poller-service** — `BackgroundService` that polls each configured AzDO org/project
+- [x] **poller-service** — `BackgroundService` that polls each configured AzDO org/project
   for completed builds. Tracks watermark (last-seen build ID) per org/project in SQLite.
 
 - [ ] **poller-ingestion** — On new completed build: fetch test runs + test results via
