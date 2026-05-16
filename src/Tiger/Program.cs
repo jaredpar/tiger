@@ -51,6 +51,16 @@ app.Configure(config =>
         cfg.AddCommand<ConfigPathCommand>("path")
             .WithDescription("Print config file path");
     });
+
+    config.AddBranch("poll", poll =>
+    {
+        poll.SetDescription("Build poller management");
+        poll.AddCommand<PollStartCommand>("start")
+            .WithDescription("Start the build poller (foreground, Ctrl+C to stop)");
+    });
+
+    config.AddCommand<StatusCommand>("status")
+        .WithDescription("Show poller status, build counts, and recent activity");
 });
 
 return await app.RunAsync(args);

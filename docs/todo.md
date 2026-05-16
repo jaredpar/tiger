@@ -38,7 +38,7 @@ Items are ordered by dependency — work top-to-bottom.
 - [x] **poller-ingestion** — On new completed build: fetch test runs + test results via
   `AzdoClient`, insert into SQLite.
 
-- [ ] **poller-lifecycle** — Poller starts automatically when tiger runs. Add `tiger status`
+- [x] **poller-lifecycle** — Poller starts automatically when tiger runs. Add `tiger status`
   command showing poller health, last poll time, build count.
 
 ## Phase 3: Flaky Test Detection
