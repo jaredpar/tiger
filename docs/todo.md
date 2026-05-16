@@ -17,7 +17,7 @@ Items are ordered by dependency — work top-to-bottom.
   as today). This is the foundation for `tiger status`, `tiger report`,
   `tiger mcp serve`, etc.
 
-- [ ] **config-system** — Create config at `~/.tiger/config.json`. Schema supports a list of
+- [x] **config-system** — Create config at `~/.tiger/config.json`. Schema supports a list of
   AzDO org/project pairs to monitor, plus poll interval. Replace hardcoded
   `dnceng-public`/`public` defaults with config-driven values.
 

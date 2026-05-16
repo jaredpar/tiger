@@ -22,11 +22,17 @@ public sealed class TigerContext
     /// </summary>
     public string? HelixToken { get; }
 
-    internal TigerContext(string configDirectory, DefaultAzureCredential azureCredential, string? helixToken)
+    /// <summary>
+    /// The loaded tiger configuration.
+    /// </summary>
+    public TigerConfig Config { get; }
+
+    internal TigerContext(string configDirectory, DefaultAzureCredential azureCredential, string? helixToken, TigerConfig config)
     {
         ConfigDirectory = configDirectory;
         AzureCredential = azureCredential;
         HelixToken = helixToken;
+        Config = config;
     }
 }
 
@@ -42,14 +48,15 @@ public static class TigerUtils
 
     /// <summary>
     /// Creates a <see cref="TigerContext"/> with the configuration directory,
-    /// Azure credential, and optional Helix token read from helix.txt.
+    /// Azure credential, config, and optional Helix token.
     /// </summary>
     public static TigerContext CreateContext()
     {
         var configDir = GetConfigDirectory();
         var credential = CreateCredential();
         var helixToken = ReadHelixToken(configDir);
-        return new TigerContext(configDir, credential, helixToken);
+        var config = TigerConfig.Load(configDir);
+        return new TigerContext(configDir, credential, helixToken, config);
     }
 
     /// <summary>

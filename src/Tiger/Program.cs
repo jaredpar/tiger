@@ -40,6 +40,17 @@ app.Configure(config =>
         helix.AddCommand<HelixFilesCommand>("files")
             .WithDescription("List or download files from a Helix work item");
     });
+
+    config.AddBranch("config", cfg =>
+    {
+        cfg.SetDescription("Configuration management");
+        cfg.AddCommand<ConfigShowCommand>("show")
+            .WithDescription("Display current configuration");
+        cfg.AddCommand<ConfigInitCommand>("init")
+            .WithDescription("Create default config file");
+        cfg.AddCommand<ConfigPathCommand>("path")
+            .WithDescription("Print config file path");
+    });
 });
 
 return await app.RunAsync(args);
