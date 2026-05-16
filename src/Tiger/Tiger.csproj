@@ -12,6 +12,7 @@
     <PackageReference Include="Azure.Identity" Version="1.17.1" />
     <PackageReference Include="ModelContextProtocol" Version="*-*" />
     <PackageReference Include="Microsoft.Extensions.Hosting" Version="*" />
+    <PackageReference Include="Spectre.Console.Cli" Version="0.55.0" />
   </ItemGroup>
 
 </Project>

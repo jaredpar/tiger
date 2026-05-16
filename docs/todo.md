@@ -5,10 +5,17 @@ Items are ordered by dependency — work top-to-bottom.
 
 ## Phase 1: Foundation — Rename & Restructure
 
-- [ ] **rename-solution** — Rename `Pipeline.slnx` → `Tiger.slnx`. Rename projects:
+- [x] **rename-solution** — Rename `Pipeline.slnx` → `Tiger.slnx`. Rename projects:
   `Pipeline` → `Tiger`, `Pipeline.Core` → `Tiger.Core`, `Pipeline.Mcp` → merged into Tiger.
   Update all namespaces from `Pipeline.*` → `Tiger.*`. Tool command name becomes `tiger`.
   Drop `Scratch` project or rename to `Tiger.Scratch`.
+
+- [x] **cli-framework** — Convert from single-shot command app to a long-running application
+  using Spectre.Console (or similar). Add subcommand routing, interactive menus, and the
+  ability to keep running (hosting the poller + MCP server). Existing AzDO/Helix query
+  commands persist as one-shot subcommands (e.g. `tiger azdo builds` still works exactly
+  as today). This is the foundation for `tiger status`, `tiger report`,
+  `tiger mcp serve`, etc.
 
 - [ ] **config-system** — Create config at `~/.tiger/config.json`. Schema supports a list of
   AzDO org/project pairs to monitor, plus poll interval. Replace hardcoded
