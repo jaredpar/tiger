@@ -21,7 +21,7 @@ Items are ordered by dependency — work top-to-bottom.
   AzDO org/project pairs to monitor, plus poll interval. Replace hardcoded
   `dnceng-public`/`public` defaults with config-driven values.
 
-- [ ] **sqlite-schema** — Design SQLite schema at `~/.tiger/tiger.db`. All tables keyed by
+- [x] **sqlite-schema** — Design SQLite schema at `~/.tiger/tiger.db`. All tables keyed by
   `(organization, project)` so we can monitor multiple AzDO instances. Core tables:
   `builds`, `test_runs`, `test_results`, `flaky_tests`.
 

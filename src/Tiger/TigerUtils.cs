@@ -27,6 +27,22 @@ public sealed class TigerContext
     /// </summary>
     public TigerConfig Config { get; }
 
+    /// <summary>
+    /// Path to the SQLite database file.
+    /// </summary>
+    public string DatabasePath => Path.Combine(ConfigDirectory, "tiger.db");
+
+    private TigerDatabase? _database;
+
+    /// <summary>
+    /// Opens (or returns the already-open) SQLite database.
+    /// </summary>
+    public TigerDatabase GetDatabase()
+    {
+        _database ??= TigerDatabase.Open(DatabasePath);
+        return _database;
+    }
+
     internal TigerContext(string configDirectory, DefaultAzureCredential azureCredential, string? helixToken, TigerConfig config)
     {
         ConfigDirectory = configDirectory;
