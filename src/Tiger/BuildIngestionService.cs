@@ -1,9 +1,9 @@
-using Microsoft.Data.Sqlite;
 namespace Tiger;
 
 /// <summary>
 /// Ingests build and test data from AzDO into the SQLite database.
-/// Used as the callback for <see cref="BuildPoller.OnNewBuilds"/>.
+/// Build rows are inserted immediately; detailed data (tests, timeline, helix)
+/// is handled via ingestion tasks processed by <see cref="IngestionWorker"/>.
 /// </summary>
 public sealed class BuildIngestionService
 {
@@ -17,85 +17,20 @@ public sealed class BuildIngestionService
     }
 
     /// <summary>
-    /// Ingests a batch of new builds for a given org/project.
-    /// Fetches test runs and failed results for each build and stores everything in SQLite.
+    /// Inserts build rows and creates ingestion tasks for async processing.
     /// </summary>
-    public async Task IngestBuildsAsync(AzdoClient client, string organization, string project, List<AzdoBuild> builds)
+    public Task IngestBuildsAsync(AzdoClient client, string organization, string project, List<AzdoBuild> builds)
     {
         foreach (var build in builds)
         {
-            try
-            {
-                await IngestBuildAsync(client, organization, project, build);
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException)
-            {
-                _log?.Error("Ingestion",
-                    $"Failed build #{build.Id} {build.DefinitionName} {build.BuildNumber}: {ex.Message}");
-            }
+            var result = build.Result ?? "unknown";
+            _log?.Info("Ingestion",
+                $"#{build.Id} {build.DefinitionName} {build.BuildNumber} [{result}] {build.RepositoryName ?? ""}");
+
+            InsertBuild(organization, project, build);
+            CreateIngestionTasks(organization, project, build.Id);
         }
-    }
-
-    private async Task IngestBuildAsync(AzdoClient client, string organization, string project, AzdoBuild build)
-    {
-        var result = build.Result ?? "unknown";
-        _log?.Info("Ingestion",
-            $"#{build.Id} {build.DefinitionName} {build.BuildNumber} [{result}] {build.RepositoryName ?? ""}");
-
-        InsertBuild(organization, project, build);
-
-        // Fetch test summary (runs) and insert them
-        var testSummary = await client.GetTestSummaryByJobAsync(build.Id);
-        // We also need run IDs — GetTestSummaryByJobAsync doesn't return them.
-        // Instead, fetch test failures which includes run IDs from the test run objects.
-
-        var failures = await client.GetTestFailuresAsync(build.Id);
-
-        // Group failures by run to build run-level data
-        var runGroups = failures.GroupBy(f => f.TestRunId);
-        foreach (var group in runGroups)
-        {
-            var first = group.First();
-            // Match test summary if available
-            var summary = testSummary.FirstOrDefault(s => s.JobName == first.TestRunName);
-            InsertTestRun(organization, project, build.Id, group.Key, first.TestRunName,
-                summary?.TotalCount ?? group.Count(),
-                summary?.PassedCount ?? 0,
-                summary?.FailedCount ?? group.Count(),
-                summary?.SkippedCount ?? 0);
-
-            foreach (var r in group)
-            {
-                InsertTestResult(organization, project, group.Key, r);
-            }
-        }
-
-        // Also insert runs that had no failures (from test summary)
-        foreach (var summary in testSummary)
-        {
-            if (!runGroups.Any(g => g.First().TestRunName == summary.JobName))
-            {
-                // No run_id available for all-pass runs — skip inserting them for now
-                // as we don't have the run ID from the summary endpoint
-            }
-        }
-
-        if (failures.Count > 0)
-        {
-            _log?.Warning("Ingestion",
-                $"  #{build.Id} — {failures.Count} test failure(s) across {runGroups.Count()} run(s)");
-        }
-
-        // Fetch timeline and store error/warning issues from failed jobs
-        try
-        {
-            var timeline = await client.GetTimelineAsync(build.Id);
-            IngestTimelineIssues(organization, project, build.Id, timeline);
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            _log?.Warning("Ingestion", $"  #{build.Id} — could not fetch timeline: {ex.Message}");
-        }
+        return Task.CompletedTask;
     }
 
     internal void InsertBuild(string organization, string project, AzdoBuild build)
@@ -123,6 +58,25 @@ public sealed class BuildIngestionService
         cmd.Parameters.AddWithValue("@prNumber", build.PrNumber.HasValue ? build.PrNumber.Value : DBNull.Value);
         cmd.Parameters.AddWithValue("@finishTime", build.FinishTime?.ToString("o") ?? (object)DBNull.Value);
         cmd.ExecuteNonQuery();
+    }
+
+    internal void CreateIngestionTasks(string organization, string project, int buildId)
+    {
+        foreach (var taskType in new[] { "tests", "timeline", "helix" })
+        {
+            using var cmd = _db.Connection.CreateCommand();
+            cmd.CommandText = """
+                INSERT OR IGNORE INTO build_ingestion_tasks
+                    (organization, project, build_id, task_type, status)
+                VALUES
+                    (@org, @proj, @buildId, @type, 'pending')
+                """;
+            cmd.Parameters.AddWithValue("@org", organization);
+            cmd.Parameters.AddWithValue("@proj", project);
+            cmd.Parameters.AddWithValue("@buildId", buildId);
+            cmd.Parameters.AddWithValue("@type", taskType);
+            cmd.ExecuteNonQuery();
+        }
     }
 
     internal void InsertTestRun(string organization, string project, int buildId, int runId,
@@ -173,7 +127,6 @@ public sealed class BuildIngestionService
 
     internal void IngestTimelineIssues(string organization, string project, int buildId, AzdoTimeline timeline)
     {
-        // Delete existing issues for this build (in case of re-ingestion)
         using (var delCmd = _db.Connection.CreateCommand())
         {
             delCmd.CommandText = "DELETE FROM build_timeline_issues WHERE organization = @org AND project = @proj AND build_id = @buildId";
@@ -183,7 +136,6 @@ public sealed class BuildIngestionService
             delCmd.ExecuteNonQuery();
         }
 
-        // Build a lookup of record id → name for parent resolution
         var recordNames = timeline.Records.ToDictionary(r => r.Id, r => r.Name);
 
         foreach (var record in timeline.Records)

@@ -178,6 +178,23 @@ public sealed class TigerDatabase : IDisposable
 
             CREATE INDEX IF NOT EXISTS ix_timeline_issues_build
                 ON build_timeline_issues (organization, project, build_id);
+
+            CREATE TABLE IF NOT EXISTS build_ingestion_tasks (
+                organization TEXT NOT NULL,
+                project TEXT NOT NULL,
+                build_id INTEGER NOT NULL,
+                task_type TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                attempts INTEGER NOT NULL DEFAULT 0,
+                last_error TEXT,
+                last_attempt_time TEXT,
+                next_retry_time TEXT,
+                completed_time TEXT,
+                PRIMARY KEY (organization, project, build_id, task_type)
+            );
+
+            CREATE INDEX IF NOT EXISTS ix_ingestion_tasks_status
+                ON build_ingestion_tasks (status, next_retry_time);
             """;
         cmd.ExecuteNonQuery();
     }

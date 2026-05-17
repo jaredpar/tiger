@@ -137,7 +137,8 @@ public sealed class BuildBrowser
             {
                 var result = FormatResultPlain(b.Result);
                 var pr = b.PrNumber is not null ? $" PR#{b.PrNumber}" : "";
-                return $"#{b.BuildId} {b.DefinitionName} {b.BuildNumber}{pr} {result}";
+                var pending = b.IngestionStatus != "complete" ? " ⏳" : "";
+                return $"#{b.BuildId} {b.DefinitionName} {b.BuildNumber}{pr} {result}{pending}";
             }).ToList();
 
             var selected = SelectWithEscape("Select a build:", choices,
@@ -186,36 +187,41 @@ public sealed class BuildBrowser
         if (_filter.RepoPattern is not null)
         {
             var (pattern, isExact) = BuildFilter.ToSqlPattern(_filter.RepoPattern);
-            where.Add(isExact ? "repository_name = @repo" : "repository_name LIKE @repo");
+            where.Add(isExact ? "b.repository_name = @repo" : "b.repository_name LIKE @repo");
             cmd.Parameters.AddWithValue("@repo", pattern);
         }
         if (_filter.DefinitionPattern is not null)
         {
             var (pattern, isExact) = BuildFilter.ToSqlPattern(_filter.DefinitionPattern);
-            where.Add(isExact ? "definition_name = @def" : "definition_name LIKE @def");
+            where.Add(isExact ? "b.definition_name = @def" : "b.definition_name LIKE @def");
             cmd.Parameters.AddWithValue("@def", pattern);
         }
         if (_filter.NumberPattern is not null)
         {
             var (pattern, isExact) = BuildFilter.ToSqlPattern(_filter.NumberPattern);
-            where.Add(isExact ? "build_number = @num" : "build_number LIKE @num");
+            where.Add(isExact ? "b.build_number = @num" : "b.build_number LIKE @num");
             cmd.Parameters.AddWithValue("@num", pattern);
         }
         if (_filter.ResultPattern is not null)
         {
             var (pattern, isExact) = BuildFilter.ToSqlPattern(_filter.ResultPattern);
-            where.Add(isExact ? "result = @result" : "result LIKE @result");
+            where.Add(isExact ? "b.result = @result" : "b.result LIKE @result");
             cmd.Parameters.AddWithValue("@result", pattern);
         }
 
         var whereClause = where.Count > 0 ? "WHERE " + string.Join(" AND ", where) : "";
 
         cmd.CommandText = $"""
-            SELECT organization, project, build_id, build_number, definition_name,
-                   result, source_branch, pr_number, finish_time
-            FROM builds
+            SELECT b.organization, b.project, b.build_id, b.build_number, b.definition_name,
+                   b.result, b.source_branch, b.pr_number, b.finish_time,
+                   CASE WHEN EXISTS (
+                       SELECT 1 FROM build_ingestion_tasks t
+                       WHERE t.organization = b.organization AND t.project = b.project
+                         AND t.build_id = b.build_id AND t.status != 'complete'
+                   ) THEN 'pending' ELSE 'complete' END as ingestion_status
+            FROM builds b
             {whereClause}
-            ORDER BY finish_time DESC, ingested_at DESC
+            ORDER BY b.finish_time DESC, b.ingested_at DESC
             LIMIT 50
             """;
 
@@ -231,7 +237,8 @@ public sealed class BuildBrowser
                 reader.IsDBNull(5) ? null : reader.GetString(5),
                 reader.GetString(6),
                 reader.IsDBNull(7) ? null : reader.GetInt32(7),
-                reader.IsDBNull(8) ? null : reader.GetString(8)));
+                reader.IsDBNull(8) ? null : reader.GetString(8),
+                reader.GetString(9)));
         }
         return builds;
     }
@@ -470,6 +477,30 @@ public sealed class BuildBrowser
 
         AnsiConsole.Write(headerTable);
         AnsiConsole.WriteLine();
+
+        // Show per-task ingestion status
+        var taskStatuses = GetIngestionTaskStatuses(page.Org, page.Project, page.BuildId);
+        if (taskStatuses.Count > 0)
+        {
+            var allComplete = taskStatuses.All(t => t.Status == "complete");
+            if (!allComplete)
+            {
+                var parts = taskStatuses.Select(t =>
+                {
+                    var icon = t.Status switch
+                    {
+                        "complete" => "[green]✓[/]",
+                        "running" => "[blue]⏳[/]",
+                        "failed" => $"[yellow]✗ retry {t.Attempts}/{5}[/]",
+                        "abandoned" => "[red]✗ abandoned[/]",
+                        _ => "[yellow]⏳[/]",
+                    };
+                    return $"{t.TaskType}: {icon}";
+                });
+                AnsiConsole.MarkupLine($"[bold]Ingestion:[/] {string.Join("  ", parts)}");
+                AnsiConsole.WriteLine();
+            }
+        }
 
         // Failed tests section (from DB)
         AnsiConsole.MarkupLine("[bold underline]Failed Tests[/]");
@@ -868,6 +899,26 @@ public sealed class BuildBrowser
         }
     }
 
+    private List<(string TaskType, string Status, int Attempts)> GetIngestionTaskStatuses(
+        string org, string project, int buildId)
+    {
+        var tasks = new List<(string, string, int)>();
+        using var cmd = _db.Connection.CreateCommand();
+        cmd.CommandText = """
+            SELECT task_type, status, attempts
+            FROM build_ingestion_tasks
+            WHERE organization = @org AND project = @proj AND build_id = @buildId
+            ORDER BY task_type
+            """;
+        cmd.Parameters.AddWithValue("@org", org);
+        cmd.Parameters.AddWithValue("@proj", project);
+        cmd.Parameters.AddWithValue("@buildId", buildId);
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+            tasks.Add((reader.GetString(0), reader.GetString(1), reader.GetInt32(2)));
+        return tasks;
+    }
+
     private static string FormatResult(string? result) => result switch
     {
         "succeeded" => "[green]✓ succeeded[/]",
@@ -1020,5 +1071,5 @@ public sealed class BuildBrowser
     private record BuildRow(
         string Org, string Project, int BuildId, string BuildNumber,
         string DefinitionName, string? Result, string Branch,
-        int? PrNumber, string? FinishTime);
+        int? PrNumber, string? FinishTime, string IngestionStatus = "pending");
 }

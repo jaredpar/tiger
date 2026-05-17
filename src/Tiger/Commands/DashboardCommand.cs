@@ -27,14 +27,18 @@ public sealed class DashboardCommand : AsyncCommand
 
         // Start background services (non-blocking)
         BuildPoller? poller = null;
-        Task? backfillTask = null;
+        IngestionWorker? worker = null;
         if (config.Sources.Count > 0)
         {
             var ingestion = new BuildIngestionService(db, serviceLog);
 
             // Backfill runs in the background
             var backfill = new BuildBackfillService(config, db, ingestion, clientFactory, serviceLog);
-            backfillTask = Task.Run(() => backfill.BackfillAsync(ct), ct);
+            _ = Task.Run(() => backfill.BackfillAsync(ct), ct);
+
+            // Start the ingestion worker (processes tests, timeline, helix tasks)
+            worker = new IngestionWorker(db, ingestion, clientFactory, serviceLog);
+            worker.Start();
 
             // Start the ongoing poller
             poller = new BuildPoller(config, db, clientFactory, serviceLog);
@@ -44,22 +48,20 @@ public sealed class DashboardCommand : AsyncCommand
 
         try
         {
-            RenderBanner(config, tigerContext, poller);
+            RenderBanner(config, tigerContext, poller, worker);
             await RunMenuLoopAsync(tigerContext, db, clientFactory, poller, serviceLog, ct);
         }
         finally
         {
-            if (poller is not null)
-            {
-                AnsiConsole.MarkupLine("[yellow]Stopping services...[/]");
-                await poller.StopAsync();
-            }
+            AnsiConsole.MarkupLine("[yellow]Stopping services...[/]");
+            if (worker is not null) await worker.StopAsync();
+            if (poller is not null) await poller.StopAsync();
         }
 
         return 0;
     }
 
-    private static void RenderBanner(TigerConfig config, TigerContext tigerContext, BuildPoller? poller)
+    private static void RenderBanner(TigerConfig config, TigerContext tigerContext, BuildPoller? poller, IngestionWorker? worker)
     {
         AnsiConsole.Write(new FigletText("tiger").Color(Color.Orange1));
         AnsiConsole.MarkupLine("[dim]CI/CD Infrastructure Management[/]");
@@ -67,6 +69,7 @@ public sealed class DashboardCommand : AsyncCommand
 
         var table = new Table().Border(TableBorder.Rounded).AddColumn("Service").AddColumn("Status");
         table.AddRow("Poller", poller?.IsRunning == true ? "[green]Running[/]" : "[red]Stopped[/]");
+        table.AddRow("Ingestion Worker", worker?.IsRunning == true ? "[green]Running[/]" : "[red]Stopped[/]");
         table.AddRow("Backfill", "[green]Running[/]");
         table.AddRow("Database", $"[blue]{tigerContext.DatabasePath}[/]");
         table.AddRow("Sources", $"[blue]{config.Sources.Count}[/]");
