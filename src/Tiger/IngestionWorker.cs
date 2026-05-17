@@ -232,7 +232,7 @@ public sealed class IngestionWorker : IDisposable
             FROM build_ingestion_tasks
             WHERE status IN ('pending', 'failed')
               AND (next_retry_time IS NULL OR next_retry_time <= datetime('now'))
-            ORDER BY build_id ASC, task_type ASC
+            ORDER BY build_id DESC, task_type ASC
             LIMIT 20
             """;
 
