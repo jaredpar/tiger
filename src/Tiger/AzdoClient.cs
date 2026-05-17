@@ -99,6 +99,50 @@ public sealed class AzdoClient : IBuildDataSource
         return result.Value.Select(MapBuild).ToList();
     }
 
+    /// <summary>
+    /// Fetches all completed builds since <paramref name="minFinishTime"/>, paginating
+    /// through the AzDO API using continuation tokens. Returns builds ordered oldest-first.
+    /// Optionally filters to a specific repository.
+    /// </summary>
+    public async Task<List<AzdoBuild>> GetCompletedBuildsSinceAsync(
+        DateTime minFinishTime,
+        string? repositoryId = null,
+        int pageSize = 100,
+        CancellationToken ct = default)
+    {
+        var all = new List<AzdoBuild>();
+        string? continuationToken = null;
+        var minTimeStr = minFinishTime.ToUniversalTime().ToString("o");
+
+        do
+        {
+            ct.ThrowIfCancellationRequested();
+
+            var url = $"_apis/build/builds?api-version=7.1&statusFilter=completed&minTime={Uri.EscapeDataString(minTimeStr)}&$top={pageSize}&queryOrder=finishTimeAscending";
+            if (repositoryId is not null)
+                url += $"&repositoryId={Uri.EscapeDataString(repositoryId)}&repositoryType=GitHub";
+            if (continuationToken is not null)
+                url += $"&continuationToken={Uri.EscapeDataString(continuationToken)}";
+
+            var response = await HttpClient.GetAsync(url, ct);
+            response.EnsureSuccessStatusCode();
+
+            // AzDO returns continuation token in the x-ms-continuationtoken header
+            continuationToken = response.Headers.TryGetValues("x-ms-continuationtoken", out var values)
+                ? values.FirstOrDefault()
+                : null;
+
+            var json = await response.Content.ReadAsStringAsync(ct);
+            var result = JsonSerializer.Deserialize<AzdoListResponse<AzdoBuildRaw>>(json, s_jsonOptions)
+                ?? throw new InvalidOperationException("Failed to deserialize builds response");
+
+            all.AddRange(result.Value.Select(MapBuild));
+        }
+        while (continuationToken is not null);
+
+        return all;
+    }
+
     public async Task<List<AzdoBuild>> GetBuildsForRepositoryAsync(string repository, int top = 10, string? reasonFilter = null)
     {
         var url = $"_apis/build/builds?api-version=7.1&$top={top}&repositoryId={Uri.EscapeDataString(repository)}&repositoryType=GitHub";

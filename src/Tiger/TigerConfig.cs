@@ -75,7 +75,7 @@ public sealed class TigerConfig
             {
                 Organization = "dnceng-public",
                 Project = "public",
-                Repositories = [],
+                Repositories = ["dotnet/roslyn"],
             }
         ],
     };

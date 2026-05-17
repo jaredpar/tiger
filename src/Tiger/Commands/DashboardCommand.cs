@@ -9,7 +9,7 @@ namespace Tiger.Commands;
 /// </summary>
 public sealed class DashboardCommand : AsyncCommand
 {
-    private const string MenuStatus = "Status";
+    private const string MenuStatus = "Status (live service log)";
     private const string MenuBuilds = "Recent builds";
     private const string MenuFailures = "Test failures";
     private const string MenuConfig = "Configuration";
@@ -20,14 +20,24 @@ public sealed class DashboardCommand : AsyncCommand
         var tigerContext = TigerUtils.CreateContext();
         var db = tigerContext.GetDatabase();
         var config = tigerContext.Config;
+        var serviceLog = new ServiceLog();
 
-        // Start background poller
+        Func<string, string, AzdoClient> clientFactory = (org, proj) =>
+            AzdoClient.Create(tigerContext.AzureCredential, org, proj);
+
+        // Start background services (non-blocking)
         BuildPoller? poller = null;
+        Task? backfillTask = null;
         if (config.Sources.Count > 0)
         {
             var ingestion = new BuildIngestionService(db);
-            poller = new BuildPoller(config, db, (org, proj) =>
-                AzdoClient.Create(tigerContext.AzureCredential, org, proj));
+
+            // Backfill runs in the background
+            var backfill = new BuildBackfillService(config, db, ingestion, clientFactory, serviceLog);
+            backfillTask = Task.Run(() => backfill.BackfillAsync(ct), ct);
+
+            // Start the ongoing poller
+            poller = new BuildPoller(config, db, clientFactory, serviceLog);
             poller.OnNewBuilds = ingestion.IngestBuildsAsync;
             poller.Start();
         }
@@ -35,7 +45,7 @@ public sealed class DashboardCommand : AsyncCommand
         try
         {
             RenderBanner(config, tigerContext, poller);
-            await RunMenuLoopAsync(tigerContext, db, poller, ct);
+            await RunMenuLoopAsync(tigerContext, db, poller, serviceLog, ct);
         }
         finally
         {
@@ -57,6 +67,7 @@ public sealed class DashboardCommand : AsyncCommand
 
         var table = new Table().Border(TableBorder.Rounded).AddColumn("Service").AddColumn("Status");
         table.AddRow("Poller", poller?.IsRunning == true ? "[green]Running[/]" : "[red]Stopped[/]");
+        table.AddRow("Backfill", "[green]Running[/]");
         table.AddRow("Database", $"[blue]{tigerContext.DatabasePath}[/]");
         table.AddRow("Sources", $"[blue]{config.Sources.Count}[/]");
 
@@ -69,7 +80,9 @@ public sealed class DashboardCommand : AsyncCommand
         AnsiConsole.WriteLine();
     }
 
-    private static async Task RunMenuLoopAsync(TigerContext tigerContext, TigerDatabase db, BuildPoller? poller, CancellationToken ct)
+    private static async Task RunMenuLoopAsync(
+        TigerContext tigerContext, TigerDatabase db, BuildPoller? poller,
+        ServiceLog serviceLog, CancellationToken ct)
     {
         while (!ct.IsCancellationRequested)
         {
@@ -81,10 +94,11 @@ public sealed class DashboardCommand : AsyncCommand
             switch (choice)
             {
                 case MenuStatus:
-                    ShowStatus(db, poller);
+                    await ShowLiveStatusAsync(serviceLog, ct);
                     break;
                 case MenuBuilds:
-                    ShowRecentBuilds(db);
+                    var browser = new BuildBrowser(db);
+                    browser.Browse();
                     break;
                 case MenuFailures:
                     ShowTestFailures(db);
@@ -100,102 +114,84 @@ public sealed class DashboardCommand : AsyncCommand
         }
     }
 
-    private static void ShowStatus(TigerDatabase db, BuildPoller? poller)
+    /// <summary>
+    /// Live tail view of background service log. Auto-refreshes when new entries arrive.
+    /// Press any key to return to the menu.
+    /// </summary>
+    private static async Task ShowLiveStatusAsync(ServiceLog serviceLog, CancellationToken ct)
     {
-        AnsiConsole.MarkupLine($"[bold]Poller:[/] {(poller?.IsRunning == true ? "[green]Running[/]" : "[red]Stopped[/]")}");
+        AnsiConsole.Clear();
+        AnsiConsole.MarkupLine("[bold underline]Service Log (live)[/]");
+        AnsiConsole.MarkupLine("[dim]Press any key to return to menu...[/]");
         AnsiConsole.WriteLine();
 
-        using var cmd = db.Connection.CreateCommand();
-        cmd.CommandText = """
-            SELECT
-                w.organization,
-                w.project,
-                w.last_build_id,
-                w.last_poll_time,
-                (SELECT COUNT(*) FROM builds b WHERE b.organization = w.organization AND b.project = w.project),
-                (SELECT COUNT(*) FROM test_results tr
-                 JOIN test_runs r ON tr.organization = r.organization AND tr.project = r.project AND tr.run_id = r.run_id
-                 WHERE r.organization = w.organization AND r.project = w.project AND tr.outcome = 'Failed')
-            FROM poll_watermarks w
-            ORDER BY w.organization, w.project
-            """;
+        // Show existing entries
+        RenderLogEntries(serviceLog.GetRecent(30));
 
-        using var reader = cmd.ExecuteReader();
-        var hasRows = false;
-        var table = new Table()
-            .AddColumn("Org/Project")
-            .AddColumn("Last Build")
-            .AddColumn("Last Poll")
-            .AddColumn("Builds")
-            .AddColumn("Failed Tests");
-
-        while (reader.Read())
+        // Set up auto-refresh on new entries
+        using var refreshCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        var newEntryEvent = new ManualResetEventSlim(false);
+        void OnEntry()
         {
-            hasRows = true;
-            table.AddRow(
-                $"{reader.GetString(0)}/{reader.GetString(1)}",
-                reader.GetInt32(2).ToString(),
-                reader.IsDBNull(3) ? "-" : reader.GetString(3),
-                reader.GetInt64(4).ToString(),
-                reader.GetInt64(5).ToString());
+            newEntryEvent.Set();
         }
 
-        if (!hasRows)
+        serviceLog.EntryAdded += OnEntry;
+        try
         {
-            AnsiConsole.MarkupLine("[yellow]No polling data yet. The poller will populate this on the next cycle.[/]");
+            // Wait for either a keypress or new log entries
+            while (!refreshCts.Token.IsCancellationRequested)
+            {
+                // Check for keypress (non-blocking)
+                if (Console.KeyAvailable)
+                {
+                    Console.ReadKey(true);
+                    return;
+                }
+
+                // Wait briefly for new entries
+                if (newEntryEvent.Wait(500, refreshCts.Token))
+                {
+                    newEntryEvent.Reset();
+                    // Re-render
+                    AnsiConsole.Clear();
+                    AnsiConsole.MarkupLine("[bold underline]Service Log (live)[/]");
+                    AnsiConsole.MarkupLine("[dim]Press any key to return to menu...[/]");
+                    AnsiConsole.WriteLine();
+                    RenderLogEntries(serviceLog.GetRecent(30));
+                }
+            }
         }
-        else
+        catch (OperationCanceledException)
         {
-            AnsiConsole.Write(table);
+        }
+        finally
+        {
+            serviceLog.EntryAdded -= OnEntry;
         }
     }
 
-    private static void ShowRecentBuilds(TigerDatabase db)
+    private static void RenderLogEntries(List<ServiceLogEntry> entries)
     {
-        using var cmd = db.Connection.CreateCommand();
-        cmd.CommandText = """
-            SELECT organization, project, build_id, build_number, definition_name, result, finish_time
-            FROM builds
-            ORDER BY build_id DESC
-            LIMIT 15
-            """;
-
-        var table = new Table()
-            .AddColumn("Org/Project")
-            .AddColumn("Build")
-            .AddColumn("Definition")
-            .AddColumn("Result")
-            .AddColumn("Finished");
-
-        using var reader = cmd.ExecuteReader();
-        var hasRows = false;
-        while (reader.Read())
+        if (entries.Count == 0)
         {
-            hasRows = true;
-            var result = reader.IsDBNull(5) ? "-" : reader.GetString(5);
-            var resultMarkup = result switch
+            AnsiConsole.MarkupLine("[dim]No log entries yet...[/]");
+            return;
+        }
+
+        foreach (var entry in entries)
+        {
+            var time = entry.Timestamp.ToLocalTime().ToString("HH:mm:ss");
+            var levelColor = entry.Level switch
             {
-                "succeeded" => "[green]succeeded[/]",
-                "failed" => "[red]failed[/]",
-                "partiallySucceeded" => "[yellow]partial[/]",
-                _ => result,
+                ServiceLogLevel.Success => "green",
+                ServiceLogLevel.Warning => "yellow",
+                ServiceLogLevel.Error => "red",
+                _ => "blue",
             };
-
-            table.AddRow(
-                $"{reader.GetString(0)}/{reader.GetString(1)}",
-                $"{reader.GetString(3)} (#{reader.GetInt32(2)})",
-                reader.GetString(4),
-                resultMarkup,
-                reader.IsDBNull(6) ? "-" : reader.GetString(6));
-        }
-
-        if (!hasRows)
-        {
-            AnsiConsole.MarkupLine("[yellow]No builds ingested yet.[/]");
-        }
-        else
-        {
-            AnsiConsole.Write(table);
+            var service = Markup.Escape(entry.Service);
+            var message = Markup.Escape(entry.Message);
+            AnsiConsole.MarkupLine($"[dim]{time}[/] [{levelColor}]{service}[/] {message}");
         }
     }
 

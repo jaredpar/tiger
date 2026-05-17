@@ -12,7 +12,7 @@ public sealed class BuildPoller : IDisposable
     private readonly TigerConfig _config;
     private readonly TigerDatabase _db;
     private readonly Func<string, string, AzdoClient> _clientFactory;
-    private readonly ILogger<BuildPoller>? _logger;
+    private readonly ServiceLog? _log;
     private CancellationTokenSource? _cts;
     private Task? _pollingTask;
 
@@ -28,12 +28,12 @@ public sealed class BuildPoller : IDisposable
         TigerConfig config,
         TigerDatabase db,
         Func<string, string, AzdoClient> clientFactory,
-        ILogger<BuildPoller>? logger = null)
+        ServiceLog? log = null)
     {
         _config = config;
         _db = db;
         _clientFactory = clientFactory;
-        _logger = logger;
+        _log = log;
     }
 
     public void Start()
@@ -61,6 +61,7 @@ public sealed class BuildPoller : IDisposable
     {
         while (!ct.IsCancellationRequested)
         {
+            _log?.Info("Poller", "Polling...");
             foreach (var source in _config.Sources)
             {
                 if (ct.IsCancellationRequested) break;
@@ -70,10 +71,11 @@ public sealed class BuildPoller : IDisposable
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)
                 {
-                    _logger?.LogError(ex, "Error polling {Org}/{Proj}", source.Organization, source.Project);
+                    _log?.Error("Poller", $"Error polling {source.Organization}/{source.Project}: {ex.Message}");
                 }
             }
 
+            _log?.Info("Poller", $"Sleeping {_config.PollIntervalSeconds}s...");
             try
             {
                 await Task.Delay(TimeSpan.FromSeconds(_config.PollIntervalSeconds), ct);
@@ -90,8 +92,22 @@ public sealed class BuildPoller : IDisposable
         var watermark = GetWatermark(source.Organization, source.Project);
         var client = _clientFactory(source.Organization, source.Project);
 
-        // Fetch recent completed builds
-        var builds = await client.GetRecentBuildsAsync(top: 50);
+        // Fetch recent completed builds, filtered by repository if configured
+        List<AzdoBuild> builds;
+        if (source.Repositories.Count > 0)
+        {
+            builds = [];
+            foreach (var repo in source.Repositories)
+            {
+                var repoBuilds = await client.GetBuildsForRepositoryAsync(repo, top: 50);
+                builds.AddRange(repoBuilds);
+            }
+        }
+        else
+        {
+            builds = await client.GetRecentBuildsAsync(top: 50);
+        }
+
         var newBuilds = builds
             .Where(b => b.Id > watermark && b.Status == "completed")
             .OrderBy(b => b.Id)
@@ -99,9 +115,8 @@ public sealed class BuildPoller : IDisposable
 
         if (newBuilds.Count == 0) return;
 
-        _logger?.LogInformation(
-            "Found {Count} new builds for {Org}/{Proj} (watermark: {Watermark})",
-            newBuilds.Count, source.Organization, source.Project, watermark);
+        _log?.Info("Poller",
+            $"Found {newBuilds.Count} new builds for {source.Organization}/{source.Project}");
 
         if (OnNewBuilds is not null)
         {
@@ -111,6 +126,9 @@ public sealed class BuildPoller : IDisposable
         // Update watermark to the highest build ID we processed
         var newWatermark = newBuilds.Max(b => b.Id);
         SetWatermark(source.Organization, source.Project, newWatermark);
+
+        _log?.Success("Poller",
+            $"Ingested {newBuilds.Count} builds for {source.Organization}/{source.Project}");
     }
 
     internal int GetWatermark(string organization, string project)
