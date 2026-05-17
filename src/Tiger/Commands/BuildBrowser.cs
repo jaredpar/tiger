@@ -196,17 +196,17 @@ public sealed class BuildBrowser
             where.Add(isExact ? "b.definition_name = @def" : "b.definition_name LIKE @def");
             cmd.Parameters.AddWithValue("@def", pattern);
         }
-        if (_filter.NumberPattern is not null)
-        {
-            var (pattern, isExact) = BuildFilter.ToSqlPattern(_filter.NumberPattern);
-            where.Add(isExact ? "b.build_number = @num" : "b.build_number LIKE @num");
-            cmd.Parameters.AddWithValue("@num", pattern);
-        }
         if (_filter.ResultPattern is not null)
         {
             var (pattern, isExact) = BuildFilter.ToSqlPattern(_filter.ResultPattern);
             where.Add(isExact ? "b.result = @result" : "b.result LIKE @result");
             cmd.Parameters.AddWithValue("@result", pattern);
+        }
+        if (_filter.IdPattern is not null)
+        {
+            var (pattern, isExact) = BuildFilter.ToSqlPattern(_filter.IdPattern);
+            where.Add(isExact ? "CAST(b.build_id AS TEXT) = @bid" : "CAST(b.build_id AS TEXT) LIKE @bid");
+            cmd.Parameters.AddWithValue("@bid", pattern);
         }
 
         var whereClause = where.Count > 0 ? "WHERE " + string.Join(" AND ", where) : "";
@@ -296,7 +296,7 @@ public sealed class BuildBrowser
         AnsiConsole.WriteLine();
         AnsiConsole.MarkupLine("  [blue]R[/] Filter by repository");
         AnsiConsole.MarkupLine("  [blue]D[/] Filter by definition");
-        AnsiConsole.MarkupLine("  [blue]N[/] Filter by build number");
+        AnsiConsole.MarkupLine("  [blue]I[/] Filter by build ID");
         AnsiConsole.MarkupLine("  [blue]O[/] Filter by outcome (failed, succeeded, partiallySucceeded)");
         AnsiConsole.MarkupLine("  [blue]C[/] Clear all filters");
         AnsiConsole.MarkupLine("  [blue]Esc[/] Cancel");
@@ -310,8 +310,8 @@ public sealed class BuildBrowser
             case ConsoleKey.D:
                 _filter.DefinitionPattern = PromptPattern("Definition pattern (e.g. ci, roslyn-CI*):");
                 break;
-            case ConsoleKey.N:
-                _filter.NumberPattern = PromptPattern("Build number pattern (e.g. 14*, 20250517*):");
+            case ConsoleKey.I:
+                _filter.IdPattern = PromptPattern("Build ID pattern (e.g. 1423*, 142333):");
                 break;
             case ConsoleKey.O:
                 _filter.ResultPattern = PromptResultFilter();
@@ -393,7 +393,7 @@ public sealed class BuildBrowser
         AnsiConsole.MarkupLine("[bold]Filter prefixes:[/]");
         AnsiConsole.MarkupLine("  [blue]repo:[/]    Repository name");
         AnsiConsole.MarkupLine("  [blue]def:[/]     Definition/pipeline name");
-        AnsiConsole.MarkupLine("  [blue]num:[/]     Build number");
+        AnsiConsole.MarkupLine("  [blue]id:[/]      Build ID (e.g. 1423*, 142333)");
         AnsiConsole.MarkupLine("  [blue]result:[/]  Outcome (failed, succeeded, partiallySucceeded)");
         AnsiConsole.WriteLine();
         AnsiConsole.MarkupLine("[bold]Multiple filters combine with AND.[/]");
@@ -961,18 +961,18 @@ public sealed class BuildBrowser
 
         public string? RepoPattern { get; set; }
         public string? DefinitionPattern { get; set; }
-        public string? NumberPattern { get; set; }
         public string? ResultPattern { get; set; }
+        public string? IdPattern { get; set; }
 
         public bool IsActive => RepoPattern is not null || DefinitionPattern is not null
-            || NumberPattern is not null || ResultPattern is not null;
+            || ResultPattern is not null || IdPattern is not null;
 
         public void Clear()
         {
             RepoPattern = null;
             DefinitionPattern = null;
-            NumberPattern = null;
             ResultPattern = null;
+            IdPattern = null;
         }
 
         public static BuildFilter Load(string configDirectory)
@@ -1013,10 +1013,10 @@ public sealed class BuildBrowser
                     RepoPattern = part[5..];
                 else if (part.StartsWith("def:", StringComparison.OrdinalIgnoreCase))
                     DefinitionPattern = part[4..];
-                else if (part.StartsWith("num:", StringComparison.OrdinalIgnoreCase))
-                    NumberPattern = part[4..];
                 else if (part.StartsWith("result:", StringComparison.OrdinalIgnoreCase))
                     ResultPattern = part[7..];
+                else if (part.StartsWith("id:", StringComparison.OrdinalIgnoreCase))
+                    IdPattern = part[3..];
             }
         }
 
@@ -1025,8 +1025,8 @@ public sealed class BuildBrowser
             var parts = new List<string>();
             if (RepoPattern is not null) parts.Add($"repo:{RepoPattern}");
             if (DefinitionPattern is not null) parts.Add($"def:{DefinitionPattern}");
-            if (NumberPattern is not null) parts.Add($"num:{NumberPattern}");
             if (ResultPattern is not null) parts.Add($"result:{ResultPattern}");
+            if (IdPattern is not null) parts.Add($"id:{IdPattern}");
             return parts.Count > 0 ? string.Join(" ", parts) : "(none)";
         }
 
@@ -1044,9 +1044,9 @@ public sealed class BuildBrowser
                 return (input[..^1], true);
             }
 
-            // Escape SQL LIKE special chars, then convert * to %
-            var escaped = input.Replace("%", "[%]").Replace("_", "[_]");
-            var pattern = escaped.Replace("*", "%");
+            // Convert user * to SQL %, leave % and _ as literals by not escaping
+            // (users won't type raw SQL wildcards)
+            var pattern = input.Replace("*", "%");
             // If no wildcard was present, do contains match
             if (!pattern.Contains('%'))
                 pattern = $"%{pattern}%";

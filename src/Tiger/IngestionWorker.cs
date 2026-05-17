@@ -60,6 +60,9 @@ public sealed class IngestionWorker : IDisposable
         }
     }
 
+    private const int MaxParallelism = 4;
+    private readonly object _dbLock = new();
+
     private async Task WorkLoopAsync(CancellationToken ct)
     {
         var consecutiveFailures = 0;
@@ -68,7 +71,12 @@ public sealed class IngestionWorker : IDisposable
         {
             try
             {
-                var tasks = GetReadyTasks();
+                List<IngestionTask> tasks;
+                lock (_dbLock)
+                {
+                    tasks = GetReadyTasks();
+                }
+
                 if (tasks.Count == 0)
                 {
                     consecutiveFailures = 0;
@@ -76,45 +84,62 @@ public sealed class IngestionWorker : IDisposable
                     continue;
                 }
 
-                foreach (var task in tasks)
+                // Mark all as running before launching parallel work
+                lock (_dbLock)
                 {
-                    if (ct.IsCancellationRequested) break;
+                    foreach (var task in tasks)
+                        MarkTaskRunning(task);
+                }
 
+                using var semaphore = new SemaphoreSlim(MaxParallelism);
+                var taskList = tasks.Select(async task =>
+                {
+                    await semaphore.WaitAsync(ct);
                     try
                     {
-                        MarkTaskRunning(task);
                         await ProcessTaskAsync(task, ct);
-                        MarkTaskComplete(task);
-                        consecutiveFailures = 0;
+                        lock (_dbLock)
+                        {
+                            MarkTaskComplete(task);
+                        }
+                        Interlocked.Exchange(ref consecutiveFailures, 0);
                     }
                     catch (Exception ex) when (ex is not OperationCanceledException)
                     {
                         var newAttempts = task.Attempts + 1;
-                        if (newAttempts >= MaxAttempts)
+                        lock (_dbLock)
                         {
-                            MarkTaskAbandoned(task, ex.Message);
-                            _log?.Error("Worker",
-                                $"Task {task.TaskType} for build #{task.BuildId} abandoned after {newAttempts} attempts: {ex.Message}");
+                            if (newAttempts >= MaxAttempts)
+                            {
+                                MarkTaskAbandoned(task, ex.Message);
+                                _log?.Error("Worker",
+                                    $"Task {task.TaskType} for build #{task.BuildId} abandoned after {newAttempts} attempts: {ex.Message}");
+                            }
+                            else
+                            {
+                                var backoffIndex = Math.Min(newAttempts - 1, s_backoffSeconds.Length - 1);
+                                var delaySecs = s_backoffSeconds[backoffIndex];
+                                MarkTaskFailed(task, ex.Message, delaySecs);
+                                _log?.Warning("Worker",
+                                    $"Task {task.TaskType} for build #{task.BuildId} failed (attempt {newAttempts}), retry in {delaySecs}s: {ex.Message}");
+                            }
                         }
-                        else
-                        {
-                            var backoffIndex = Math.Min(newAttempts - 1, s_backoffSeconds.Length - 1);
-                            var delaySecs = s_backoffSeconds[backoffIndex];
-                            MarkTaskFailed(task, ex.Message, delaySecs);
-                            _log?.Warning("Worker",
-                                $"Task {task.TaskType} for build #{task.BuildId} failed (attempt {newAttempts}), retry in {delaySecs}s: {ex.Message}");
-                        }
-
-                        consecutiveFailures++;
-                        if (consecutiveFailures >= CircuitBreakerThreshold)
-                        {
-                            _log?.Warning("Worker",
-                                $"Circuit breaker: {consecutiveFailures} consecutive failures, cooling down {CircuitBreakerCooldownSeconds}s");
-                            await Task.Delay(TimeSpan.FromSeconds(CircuitBreakerCooldownSeconds), ct);
-                            consecutiveFailures = 0;
-                            break;
-                        }
+                        Interlocked.Increment(ref consecutiveFailures);
                     }
+                    finally
+                    {
+                        semaphore.Release();
+                    }
+                }).ToList();
+
+                await Task.WhenAll(taskList);
+
+                if (consecutiveFailures >= CircuitBreakerThreshold)
+                {
+                    _log?.Warning("Worker",
+                        $"Circuit breaker: {consecutiveFailures} consecutive failures, cooling down {CircuitBreakerCooldownSeconds}s");
+                    await Task.Delay(TimeSpan.FromSeconds(CircuitBreakerCooldownSeconds), ct);
+                    consecutiveFailures = 0;
                 }
             }
             catch (OperationCanceledException)
