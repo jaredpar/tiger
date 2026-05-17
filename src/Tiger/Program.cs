@@ -1,7 +1,8 @@
 using Spectre.Console.Cli;
 using Tiger.Commands;
 
-var app = new CommandApp();
+// Running `tiger` with no arguments starts the interactive dashboard
+var app = new CommandApp<DashboardCommand>();
 
 app.Configure(config =>
 {
