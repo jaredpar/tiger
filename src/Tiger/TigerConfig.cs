@@ -81,6 +81,6 @@ public sealed class TigerConfig
                 Repositories = ["dotnet/roslyn"],
             }
         ],
-        BackfillDays = 1,
+        BackfillDays = 3,
     };
 }

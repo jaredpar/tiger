@@ -84,8 +84,8 @@ public sealed class BuildBrowser
             if (_filter.IsActive)
                 AnsiConsole.MarkupLine($"[dim]Filter: {Markup.Escape(_filter.ToString())}[/]");
             AnsiConsole.MarkupLine(_filter.IsActive
-                ? "[dim]F filter  C clear  H help  Esc back[/]"
-                : "[dim]F filter  H help  Esc back[/]");
+                ? "[dim]E edit filter  F filter menu  C clear  H help  Esc back[/]"
+                : "[dim]E edit filter  F filter menu  H help  Esc back[/]");
             AnsiConsole.WriteLine();
 
             var builds = QueryBuilds();
@@ -95,9 +95,14 @@ public sealed class BuildBrowser
                 AnsiConsole.MarkupLine(_filter.IsActive
                     ? "[yellow]No builds match the current filter.[/]"
                     : "[yellow]No builds ingested yet.[/]");
-                AnsiConsole.MarkupLine("[dim]Press F to change filter, Esc to go back...[/]");
+                AnsiConsole.MarkupLine("[dim]Press E to edit filter, F for filter menu, Esc to go back...[/]");
 
                 var emptyKey = Console.ReadKey(true);
+                if (emptyKey.Key == ConsoleKey.E)
+                {
+                    EditFilter();
+                    continue;
+                }
                 if (emptyKey.Key == ConsoleKey.F)
                 {
                     ShowFilterMenu();
@@ -128,11 +133,17 @@ public sealed class BuildBrowser
 
             var selected = SelectWithEscape("Select a build:", choices,
                 extraKeys: new Dictionary<ConsoleKey, int> {
+                    { ConsoleKey.E, -5 },
                     { ConsoleKey.F, -2 },
                     { ConsoleKey.H, -3 },
                     { ConsoleKey.C, -4 },
                 });
 
+            if (selected == -5) // E pressed
+            {
+                EditFilter();
+                continue;
+            }
             if (selected == -2) // F pressed
             {
                 ShowFilterMenu();
@@ -164,18 +175,27 @@ public sealed class BuildBrowser
         var where = new List<string>();
         if (_filter.RepoPattern is not null)
         {
-            where.Add("repository_name LIKE @repo");
-            cmd.Parameters.AddWithValue("@repo", BuildFilter.ToLikePattern(_filter.RepoPattern));
+            var (pattern, isExact) = BuildFilter.ToSqlPattern(_filter.RepoPattern);
+            where.Add(isExact ? "repository_name = @repo" : "repository_name LIKE @repo");
+            cmd.Parameters.AddWithValue("@repo", pattern);
         }
         if (_filter.DefinitionPattern is not null)
         {
-            where.Add("definition_name LIKE @def");
-            cmd.Parameters.AddWithValue("@def", BuildFilter.ToLikePattern(_filter.DefinitionPattern));
+            var (pattern, isExact) = BuildFilter.ToSqlPattern(_filter.DefinitionPattern);
+            where.Add(isExact ? "definition_name = @def" : "definition_name LIKE @def");
+            cmd.Parameters.AddWithValue("@def", pattern);
         }
         if (_filter.NumberPattern is not null)
         {
-            where.Add("build_number LIKE @num");
-            cmd.Parameters.AddWithValue("@num", BuildFilter.ToLikePattern(_filter.NumberPattern));
+            var (pattern, isExact) = BuildFilter.ToSqlPattern(_filter.NumberPattern);
+            where.Add(isExact ? "build_number = @num" : "build_number LIKE @num");
+            cmd.Parameters.AddWithValue("@num", pattern);
+        }
+        if (_filter.ResultPattern is not null)
+        {
+            var (pattern, isExact) = BuildFilter.ToSqlPattern(_filter.ResultPattern);
+            where.Add(isExact ? "result = @result" : "result LIKE @result");
+            cmd.Parameters.AddWithValue("@result", pattern);
         }
 
         var whereClause = where.Count > 0 ? "WHERE " + string.Join(" AND ", where) : "";
@@ -206,6 +226,50 @@ public sealed class BuildBrowser
         return builds;
     }
 
+    private void EditFilter()
+    {
+        AnsiConsole.Clear();
+        AnsiConsole.MarkupLine("[bold underline]Edit Filter[/]");
+        AnsiConsole.MarkupLine("[dim]Syntax: repo:VALUE def:VALUE num:VALUE result:VALUE[/]");
+        AnsiConsole.MarkupLine("[dim]Examples: repo:roslyn  result:failed  repo:dotnet/* def:*-CI[/]");
+        AnsiConsole.MarkupLine("[dim]Append ! for exact match: repo:dotnet/roslyn![/]");
+        AnsiConsole.MarkupLine("[dim]Press Esc to cancel[/]");
+        AnsiConsole.WriteLine();
+        if (_filter.IsActive)
+            AnsiConsole.MarkupLine($"[dim]Current: {Markup.Escape(_filter.ToString())}[/]");
+        AnsiConsole.Markup("[blue]> [/]");
+
+        var buffer = new System.Text.StringBuilder();
+        while (true)
+        {
+            var key = Console.ReadKey(true);
+            if (key.Key == ConsoleKey.Escape)
+                return; // keep existing filter
+            if (key.Key == ConsoleKey.Enter)
+            {
+                AnsiConsole.WriteLine();
+                var input = buffer.ToString().Trim();
+                if (!string.IsNullOrEmpty(input))
+                    _filter.ParseExpression(input);
+                return;
+            }
+            if (key.Key == ConsoleKey.Backspace)
+            {
+                if (buffer.Length > 0)
+                {
+                    buffer.Remove(buffer.Length - 1, 1);
+                    Console.Write("\b \b");
+                }
+                continue;
+            }
+            if (key.KeyChar >= 32)
+            {
+                buffer.Append(key.KeyChar);
+                Console.Write(key.KeyChar);
+            }
+        }
+    }
+
     private void ShowFilterMenu()
     {
         AnsiConsole.Clear();
@@ -215,6 +279,7 @@ public sealed class BuildBrowser
         AnsiConsole.MarkupLine("  [blue]R[/] Filter by repository");
         AnsiConsole.MarkupLine("  [blue]D[/] Filter by definition");
         AnsiConsole.MarkupLine("  [blue]N[/] Filter by build number");
+        AnsiConsole.MarkupLine("  [blue]O[/] Filter by outcome (failed, succeeded, partiallySucceeded)");
         AnsiConsole.MarkupLine("  [blue]C[/] Clear all filters");
         AnsiConsole.MarkupLine("  [blue]Esc[/] Cancel");
 
@@ -230,19 +295,63 @@ public sealed class BuildBrowser
             case ConsoleKey.N:
                 _filter.NumberPattern = PromptPattern("Build number pattern (e.g. 14*, 20250517*):");
                 break;
+            case ConsoleKey.O:
+                _filter.ResultPattern = PromptResultFilter();
+                break;
             case ConsoleKey.C:
                 _filter.Clear();
                 break;
         }
     }
 
+    /// <summary>
+    /// Prompts for a text pattern. Supports Escape to cancel (returns null).
+    /// </summary>
     private static string? PromptPattern(string prompt)
     {
         AnsiConsole.WriteLine();
         AnsiConsole.MarkupLine($"[bold]{Markup.Escape(prompt)}[/]");
+        AnsiConsole.MarkupLine("[dim]Press Esc to cancel[/]");
         AnsiConsole.Markup("[blue]> [/]");
-        var input = Console.ReadLine()?.Trim();
-        return string.IsNullOrEmpty(input) ? null : input;
+
+        var buffer = new System.Text.StringBuilder();
+        while (true)
+        {
+            var key = Console.ReadKey(true);
+            if (key.Key == ConsoleKey.Escape)
+                return null;
+            if (key.Key == ConsoleKey.Enter)
+            {
+                AnsiConsole.WriteLine();
+                var result = buffer.ToString().Trim();
+                return string.IsNullOrEmpty(result) ? null : result;
+            }
+            if (key.Key == ConsoleKey.Backspace)
+            {
+                if (buffer.Length > 0)
+                {
+                    buffer.Remove(buffer.Length - 1, 1);
+                    Console.Write("\b \b");
+                }
+                continue;
+            }
+            if (key.KeyChar >= 32) // printable
+            {
+                buffer.Append(key.KeyChar);
+                Console.Write(key.KeyChar);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Selection menu for outcome filter. Returns null if cancelled.
+    /// </summary>
+    private static string? PromptResultFilter()
+    {
+        AnsiConsole.WriteLine();
+        var choices = new[] { "failed", "succeeded", "partiallySucceeded" };
+        var selected = SelectWithEscape("Select outcome:", choices.ToList(), pageSize: 5);
+        return selected >= 0 ? choices[selected] : null;
     }
 
     private static void ShowFilterHelp()
@@ -250,18 +359,23 @@ public sealed class BuildBrowser
         AnsiConsole.Clear();
         AnsiConsole.MarkupLine("[bold underline]Filter Help[/]");
         AnsiConsole.WriteLine();
-        AnsiConsole.MarkupLine("[bold]Matching:[/]");
-        AnsiConsole.MarkupLine("  Plain text does a [blue]contains[/] match:");
-        AnsiConsole.MarkupLine("    [dim]roslyn → matches 'dotnet/roslyn', 'roslyn-CI', etc.[/]");
-        AnsiConsole.MarkupLine("  Use [blue]*[/] as a wildcard:");
-        AnsiConsole.MarkupLine("    [dim]dotnet/* → matches 'dotnet/roslyn', 'dotnet/runtime', etc.[/]");
-        AnsiConsole.MarkupLine("    [dim]14* → matches build numbers starting with '14'[/]");
-        AnsiConsole.MarkupLine("    [dim]*-CI → matches definition names ending with '-CI'[/]");
+        AnsiConsole.MarkupLine("[bold]Quick filter (E):[/]");
+        AnsiConsole.MarkupLine("  Type an expression like: [blue]repo:roslyn def:ci[/]");
         AnsiConsole.WriteLine();
-        AnsiConsole.MarkupLine("[bold]Filter types:[/]");
-        AnsiConsole.MarkupLine("  [blue]R[/]  Repository name (e.g. roslyn, dotnet/runtime)");
-        AnsiConsole.MarkupLine("  [blue]D[/]  Definition/pipeline name (e.g. ci, roslyn-CI)");
-        AnsiConsole.MarkupLine("  [blue]N[/]  Build number (e.g. 14*, 20250517*)");
+        AnsiConsole.MarkupLine("[bold]Matching (default: contains / LIKE):[/]");
+        AnsiConsole.MarkupLine("  [dim]ros → matches 'dotnet/roslyn', 'roslyn-CI', etc.[/]");
+        AnsiConsole.MarkupLine("  [dim]dotnet/* → matches 'dotnet/roslyn', 'dotnet/runtime'[/]");
+        AnsiConsole.MarkupLine("  [dim]14* → matches build numbers starting with '14'[/]");
+        AnsiConsole.MarkupLine("  [dim]*-CI → matches definition names ending with '-CI'[/]");
+        AnsiConsole.WriteLine();
+        AnsiConsole.MarkupLine("[bold]Exact match (append !):[/]");
+        AnsiConsole.MarkupLine("  [dim]dotnet/roslyn! → matches exactly 'dotnet/roslyn'[/]");
+        AnsiConsole.WriteLine();
+        AnsiConsole.MarkupLine("[bold]Filter prefixes:[/]");
+        AnsiConsole.MarkupLine("  [blue]repo:[/]    Repository name");
+        AnsiConsole.MarkupLine("  [blue]def:[/]     Definition/pipeline name");
+        AnsiConsole.MarkupLine("  [blue]num:[/]     Build number");
+        AnsiConsole.MarkupLine("  [blue]result:[/]  Outcome (failed, succeeded, partiallySucceeded)");
         AnsiConsole.WriteLine();
         AnsiConsole.MarkupLine("[bold]Multiple filters combine with AND.[/]");
         AnsiConsole.MarkupLine("[dim]Press any key to continue...[/]");
@@ -727,14 +841,39 @@ public sealed class BuildBrowser
         public string? RepoPattern { get; set; }
         public string? DefinitionPattern { get; set; }
         public string? NumberPattern { get; set; }
+        public string? ResultPattern { get; set; }
 
-        public bool IsActive => RepoPattern is not null || DefinitionPattern is not null || NumberPattern is not null;
+        public bool IsActive => RepoPattern is not null || DefinitionPattern is not null
+            || NumberPattern is not null || ResultPattern is not null;
 
         public void Clear()
         {
             RepoPattern = null;
             DefinitionPattern = null;
             NumberPattern = null;
+            ResultPattern = null;
+        }
+
+        /// <summary>
+        /// Parses an inline filter expression like "repo:roslyn def:ci num:14*".
+        /// Unrecognized tokens are ignored.
+        /// </summary>
+        public void ParseExpression(string expression)
+        {
+            // Reset before applying
+            Clear();
+            var parts = expression.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            foreach (var part in parts)
+            {
+                if (part.StartsWith("repo:", StringComparison.OrdinalIgnoreCase))
+                    RepoPattern = part[5..];
+                else if (part.StartsWith("def:", StringComparison.OrdinalIgnoreCase))
+                    DefinitionPattern = part[4..];
+                else if (part.StartsWith("num:", StringComparison.OrdinalIgnoreCase))
+                    NumberPattern = part[4..];
+                else if (part.StartsWith("result:", StringComparison.OrdinalIgnoreCase))
+                    ResultPattern = part[7..];
+            }
         }
 
         public override string ToString()
@@ -743,22 +882,31 @@ public sealed class BuildBrowser
             if (RepoPattern is not null) parts.Add($"repo:{RepoPattern}");
             if (DefinitionPattern is not null) parts.Add($"def:{DefinitionPattern}");
             if (NumberPattern is not null) parts.Add($"num:{NumberPattern}");
+            if (ResultPattern is not null) parts.Add($"result:{ResultPattern}");
             return parts.Count > 0 ? string.Join(" ", parts) : "(none)";
         }
 
         /// <summary>
-        /// Converts a user glob pattern (with *) to a SQL LIKE pattern.
-        /// If no wildcard present, wraps in %...% for contains matching.
+        /// Converts a user pattern to a SQL LIKE pattern or exact match.
+        /// Default: contains match (ros → %ros%).
+        /// Trailing ! means exact match (roslyn! → roslyn).
+        /// * is a wildcard (dotnet/* → dotnet/%).
         /// </summary>
-        public static string ToLikePattern(string input)
+        public static (string Pattern, bool IsExact) ToSqlPattern(string input)
         {
-            // Escape SQL LIKE special chars (% and _) in user input, then convert * to %
+            // Exact match: trailing !
+            if (input.EndsWith('!'))
+            {
+                return (input[..^1], true);
+            }
+
+            // Escape SQL LIKE special chars, then convert * to %
             var escaped = input.Replace("%", "[%]").Replace("_", "[_]");
             var pattern = escaped.Replace("*", "%");
             // If no wildcard was present, do contains match
             if (!pattern.Contains('%'))
                 pattern = $"%{pattern}%";
-            return pattern;
+            return (pattern, false);
         }
     }
 
