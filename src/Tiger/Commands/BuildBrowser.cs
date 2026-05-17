@@ -9,14 +9,21 @@ namespace Tiger.Commands;
 public sealed class BuildBrowser
 {
     private readonly TigerDatabase _db;
+    private readonly Func<string, string, AzdoClient> _clientFactory;
+    private readonly string _configDirectory;
     private readonly List<Page> _history = [];
-    private readonly BuildFilter _filter = new();
+    private readonly BuildFilter _filter;
     private int _position = -1;
 
-    public BuildBrowser(TigerDatabase db)
+    public BuildBrowser(TigerDatabase db, Func<string, string, AzdoClient> clientFactory, string configDirectory)
     {
         _db = db;
+        _clientFactory = clientFactory;
+        _configDirectory = configDirectory;
+        _filter = BuildFilter.Load(configDirectory);
     }
+
+    private void SaveFilter() => _filter.Save(_configDirectory);
 
     /// <summary>
     /// Entry point — shows the build list and enters the navigation loop.
@@ -70,6 +77,7 @@ public sealed class BuildBrowser
         BuildDetailPage p => RenderBuildDetail(p),
         TestListPage p => RenderTestList(p),
         TestDetailPage p => RenderTestDetail(p),
+        JobListPage p => RenderJobList(p),
         _ => NavAction.Exit,
     };
 
@@ -116,6 +124,7 @@ public sealed class BuildBrowser
                 if (emptyKey.Key == ConsoleKey.C)
                 {
                     _filter.Clear();
+                    SaveFilter();
                     continue;
                 }
                 return NavAction.Back.Instance;
@@ -157,6 +166,7 @@ public sealed class BuildBrowser
             if (selected == -4) // C pressed
             {
                 _filter.Clear();
+                SaveFilter();
                 continue;
             }
             if (selected < 0)
@@ -251,6 +261,7 @@ public sealed class BuildBrowser
                 var input = buffer.ToString().Trim();
                 if (!string.IsNullOrEmpty(input))
                     _filter.ParseExpression(input);
+                SaveFilter();
                 return;
             }
             if (key.Key == ConsoleKey.Backspace)
@@ -302,6 +313,7 @@ public sealed class BuildBrowser
                 _filter.Clear();
                 break;
         }
+        SaveFilter();
     }
 
     /// <summary>
@@ -386,7 +398,7 @@ public sealed class BuildBrowser
 
     private NavAction RenderBuildDetail(BuildDetailPage page)
     {
-        // Header info
+        // Header info from DB
         using var buildCmd = _db.Connection.CreateCommand();
         buildCmd.CommandText = """
             SELECT build_number, definition_name, result, source_branch, pr_number, finish_time
@@ -430,7 +442,7 @@ public sealed class BuildBrowser
             headerTable.AddRow("[bold]Finished[/]", finishTime);
         headerTable.AddRow("[bold]URL[/]", $"[link={url}]{url}[/]");
 
-        // Pass/fail counts
+        // Pass/fail counts from DB
         using var countCmd = _db.Connection.CreateCommand();
         countCmd.CommandText = """
             SELECT
@@ -459,38 +471,7 @@ public sealed class BuildBrowser
         AnsiConsole.Write(headerTable);
         AnsiConsole.WriteLine();
 
-        // Failed test runs section
-        AnsiConsole.MarkupLine("[bold underline]Failed Test Runs[/]");
-        using var runsCmd = _db.Connection.CreateCommand();
-        runsCmd.CommandText = """
-            SELECT run_name, failed_tests, total_tests
-            FROM test_runs
-            WHERE organization = @org AND project = @proj AND build_id = @buildId
-                  AND failed_tests > 0
-            ORDER BY failed_tests DESC
-            LIMIT 15
-            """;
-        runsCmd.Parameters.AddWithValue("@org", page.Org);
-        runsCmd.Parameters.AddWithValue("@proj", page.Project);
-        runsCmd.Parameters.AddWithValue("@buildId", page.BuildId);
-
-        using var runsReader = runsCmd.ExecuteReader();
-        var hasFailedRuns = false;
-        while (runsReader.Read())
-        {
-            hasFailedRuns = true;
-            var name = runsReader.GetString(0);
-            var failed = runsReader.GetInt32(1);
-            var total = runsReader.GetInt32(2);
-            AnsiConsole.MarkupLine($"  [red]✗[/] {Markup.Escape(name)}  [red]{failed}[/]/{total} failed");
-        }
-        if (!hasFailedRuns)
-            AnsiConsole.MarkupLine("  [green]No failed test runs[/]");
-        runsReader.Close();
-
-        AnsiConsole.WriteLine();
-
-        // Failed tests section
+        // Failed tests section (from DB)
         AnsiConsole.MarkupLine("[bold underline]Failed Tests[/]");
         using var testsCmd = _db.Connection.CreateCommand();
         testsCmd.CommandText = """
@@ -515,7 +496,6 @@ public sealed class BuildBrowser
             var error = testsReader.IsDBNull(1) ? "" : testsReader.GetString(1);
             if (title.Length > 70) title = title[..67] + "...";
             if (error.Length > 60) error = error[..57] + "...";
-            // Replace newlines in error for single-line display
             error = error.ReplaceLineEndings(" ");
             AnsiConsole.MarkupLine($"  [red]✗[/] {Markup.Escape(title)}");
             if (!string.IsNullOrWhiteSpace(error))
@@ -655,6 +635,88 @@ public sealed class BuildBrowser
         return new NavAction.Push(new BuildDetailPage(b2.Org, b2.Project, b2.BuildId));
     }
 
+    // ── Job List (timeline) ─────────────────────────────────────────
+
+    private NavAction RenderJobList(JobListPage page)
+    {
+        AnsiConsole.MarkupLine($"[bold underline]Failed Jobs — Build #{page.BuildId}[/]");
+        AnsiConsole.WriteLine();
+
+        // Read timeline issues from DB
+        using var cmd = _db.Connection.CreateCommand();
+        cmd.CommandText = """
+            SELECT parent_name, record_name, record_type, record_result, issue_type, issue_message
+            FROM build_timeline_issues
+            WHERE organization = @org AND project = @proj AND build_id = @buildId
+            ORDER BY parent_name, record_name, issue_type
+            """;
+        cmd.Parameters.AddWithValue("@org", page.Org);
+        cmd.Parameters.AddWithValue("@proj", page.Project);
+        cmd.Parameters.AddWithValue("@buildId", page.BuildId);
+
+        // Group by job (parent_name for task issues, record_name for job-level issues)
+        var jobIssues = new Dictionary<string, List<(string Type, string Message)>>();
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+        {
+            var parentName = reader.IsDBNull(0) ? null : reader.GetString(0);
+            var recordName = reader.GetString(1);
+            var recordType = reader.GetString(2);
+            var issueType = reader.GetString(4);
+            var message = reader.GetString(5);
+
+            // Use parent_name as the job key for Task records, record_name for Job records
+            var jobName = recordType == "Job" ? recordName : (parentName ?? recordName);
+
+            if (!jobIssues.TryGetValue(jobName, out var list))
+            {
+                list = [];
+                jobIssues[jobName] = list;
+            }
+            list.Add((issueType, message));
+        }
+        reader.Close();
+
+        if (jobIssues.Count == 0)
+        {
+            AnsiConsole.MarkupLine("[green]No timeline issues recorded for this build.[/]");
+            AnsiConsole.MarkupLine("[dim]Press any key to go back...[/]");
+            Console.ReadKey(true);
+            return NavAction.Back.Instance;
+        }
+
+        foreach (var (jobName, issues) in jobIssues)
+        {
+            var errorCount = issues.Count(i => i.Type == "error");
+            var warnCount = issues.Count(i => i.Type == "warning");
+            var summary = new List<string>();
+            if (errorCount > 0) summary.Add($"[red]{errorCount} error(s)[/]");
+            if (warnCount > 0) summary.Add($"[yellow]{warnCount} warning(s)[/]");
+            AnsiConsole.MarkupLine($"[bold]{Markup.Escape(jobName)}[/]  {string.Join(" ", summary)}");
+
+            foreach (var (type, message) in issues.Take(10))
+            {
+                var icon = type == "error" ? "[red]error[/]" : "[yellow]warn[/]";
+                var msg = message.ReplaceLineEndings(" ");
+                if (msg.Length > 120) msg = msg[..117] + "...";
+                AnsiConsole.MarkupLine($"  {icon}: {Markup.Escape(msg)}");
+            }
+
+            if (issues.Count > 10)
+                AnsiConsole.MarkupLine($"  [dim]... and {issues.Count - 10} more[/]");
+
+            AnsiConsole.WriteLine();
+        }
+
+        AnsiConsole.MarkupLine("[dim]Press Esc/B to go back...[/]");
+        while (true)
+        {
+            var key = Console.ReadKey(true);
+            if (key.Key is ConsoleKey.Escape or ConsoleKey.B)
+                return NavAction.Back.Instance;
+        }
+    }
+
     // ── Key Navigation (for detail pages) ───────────────────────────
 
     private NavAction ReadNavKey(BuildDetailPage page)
@@ -668,8 +730,7 @@ public sealed class BuildBrowser
                 case ConsoleKey.T:
                     return new NavAction.Push(new TestListPage(page.Org, page.Project, page.BuildId));
                 case ConsoleKey.J:
-                    // Jobs drill-down — show failed test runs (same as test runs section, interactive)
-                    return new NavAction.Push(new TestListPage(page.Org, page.Project, page.BuildId));
+                    return new NavAction.Push(new JobListPage(page.Org, page.Project, page.BuildId));
                 case ConsoleKey.H:
                     ShowHelixInfo(page);
                     return new NavAction.Push(page); // re-render after showing helix
@@ -832,12 +893,21 @@ public sealed class BuildBrowser
     private record BuildDetailPage(string Org, string Project, int BuildId) : Page;
     private record TestListPage(string Org, string Project, int BuildId) : Page;
     private record TestDetailPage(string Org, string Project, string TestName) : Page;
+    private record JobListPage(string Org, string Project, int BuildId) : Page;
 
     /// <summary>
-    /// Persistent build filter. Survives navigation within the browser session.
+    /// Persistent build filter. Survives across app runs via ~/.tiger/filter.json.
     /// </summary>
     private sealed class BuildFilter
     {
+        private const string FileName = "filter.json";
+
+        private static readonly System.Text.Json.JsonSerializerOptions s_jsonOptions = new()
+        {
+            WriteIndented = true,
+            DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull,
+        };
+
         public string? RepoPattern { get; set; }
         public string? DefinitionPattern { get; set; }
         public string? NumberPattern { get; set; }
@@ -852,6 +922,29 @@ public sealed class BuildBrowser
             DefinitionPattern = null;
             NumberPattern = null;
             ResultPattern = null;
+        }
+
+        public static BuildFilter Load(string configDirectory)
+        {
+            var path = Path.Combine(configDirectory, FileName);
+            if (!File.Exists(path))
+                return new BuildFilter();
+            try
+            {
+                var json = File.ReadAllText(path);
+                return System.Text.Json.JsonSerializer.Deserialize<BuildFilter>(json, s_jsonOptions) ?? new BuildFilter();
+            }
+            catch
+            {
+                return new BuildFilter();
+            }
+        }
+
+        public void Save(string configDirectory)
+        {
+            var path = Path.Combine(configDirectory, FileName);
+            var json = System.Text.Json.JsonSerializer.Serialize(this, s_jsonOptions);
+            File.WriteAllText(path, json);
         }
 
         /// <summary>

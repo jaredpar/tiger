@@ -85,6 +85,17 @@ public sealed class BuildIngestionService
             _log?.Warning("Ingestion",
                 $"  #{build.Id} — {failures.Count} test failure(s) across {runGroups.Count()} run(s)");
         }
+
+        // Fetch timeline and store error/warning issues from failed jobs
+        try
+        {
+            var timeline = await client.GetTimelineAsync(build.Id);
+            IngestTimelineIssues(organization, project, build.Id, timeline);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _log?.Warning("Ingestion", $"  #{build.Id} — could not fetch timeline: {ex.Message}");
+        }
     }
 
     internal void InsertBuild(string organization, string project, AzdoBuild build)
@@ -158,5 +169,54 @@ public sealed class BuildIngestionService
         cmd.Parameters.AddWithValue("@helixJob", (object?)result.HelixJobName ?? DBNull.Value);
         cmd.Parameters.AddWithValue("@helixWi", (object?)result.HelixWorkItemName ?? DBNull.Value);
         cmd.ExecuteNonQuery();
+    }
+
+    internal void IngestTimelineIssues(string organization, string project, int buildId, AzdoTimeline timeline)
+    {
+        // Delete existing issues for this build (in case of re-ingestion)
+        using (var delCmd = _db.Connection.CreateCommand())
+        {
+            delCmd.CommandText = "DELETE FROM build_timeline_issues WHERE organization = @org AND project = @proj AND build_id = @buildId";
+            delCmd.Parameters.AddWithValue("@org", organization);
+            delCmd.Parameters.AddWithValue("@proj", project);
+            delCmd.Parameters.AddWithValue("@buildId", buildId);
+            delCmd.ExecuteNonQuery();
+        }
+
+        // Build a lookup of record id → name for parent resolution
+        var recordNames = timeline.Records.ToDictionary(r => r.Id, r => r.Name);
+
+        foreach (var record in timeline.Records)
+        {
+            var issues = record.Issues.Where(i => i.Type is "error" or "warning").ToList();
+            if (issues.Count == 0) continue;
+
+            var parentName = record.ParentId is not null && recordNames.TryGetValue(record.ParentId, out var pn)
+                ? pn : null;
+
+            foreach (var issue in issues)
+            {
+                using var cmd = _db.Connection.CreateCommand();
+                cmd.CommandText = """
+                    INSERT INTO build_timeline_issues
+                        (organization, project, build_id, record_name, record_type,
+                         parent_name, record_result, issue_type, issue_message, issue_category)
+                    VALUES
+                        (@org, @proj, @buildId, @name, @type,
+                         @parent, @result, @issueType, @message, @category)
+                    """;
+                cmd.Parameters.AddWithValue("@org", organization);
+                cmd.Parameters.AddWithValue("@proj", project);
+                cmd.Parameters.AddWithValue("@buildId", buildId);
+                cmd.Parameters.AddWithValue("@name", record.Name);
+                cmd.Parameters.AddWithValue("@type", record.RecordType);
+                cmd.Parameters.AddWithValue("@parent", (object?)parentName ?? DBNull.Value);
+                cmd.Parameters.AddWithValue("@result", (object?)record.Result ?? DBNull.Value);
+                cmd.Parameters.AddWithValue("@issueType", issue.Type);
+                cmd.Parameters.AddWithValue("@message", issue.Message);
+                cmd.Parameters.AddWithValue("@category", (object?)issue.Category ?? DBNull.Value);
+                cmd.ExecuteNonQuery();
+            }
+        }
     }
 }

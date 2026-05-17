@@ -45,7 +45,7 @@ public sealed class DashboardCommand : AsyncCommand
         try
         {
             RenderBanner(config, tigerContext, poller);
-            await RunMenuLoopAsync(tigerContext, db, poller, serviceLog, ct);
+            await RunMenuLoopAsync(tigerContext, db, clientFactory, poller, serviceLog, ct);
         }
         finally
         {
@@ -81,7 +81,9 @@ public sealed class DashboardCommand : AsyncCommand
     }
 
     private static async Task RunMenuLoopAsync(
-        TigerContext tigerContext, TigerDatabase db, BuildPoller? poller,
+        TigerContext tigerContext, TigerDatabase db,
+        Func<string, string, AzdoClient> clientFactory,
+        BuildPoller? poller,
         ServiceLog serviceLog, CancellationToken ct)
     {
         while (!ct.IsCancellationRequested)
@@ -89,7 +91,7 @@ public sealed class DashboardCommand : AsyncCommand
             var choice = AnsiConsole.Prompt(
                 new SelectionPrompt<string>()
                     .Title("[bold]What would you like to do?[/]")
-                    .AddChoices(MenuStatus, MenuBuilds, MenuFailures, MenuConfig, MenuQuit));
+                    .AddChoices(MenuBuilds, MenuFailures, MenuConfig, MenuStatus, MenuQuit));
 
             switch (choice)
             {
@@ -97,7 +99,7 @@ public sealed class DashboardCommand : AsyncCommand
                     await ShowLiveStatusAsync(serviceLog, ct);
                     break;
                 case MenuBuilds:
-                    var browser = new BuildBrowser(db);
+                    var browser = new BuildBrowser(db, clientFactory, tigerContext.ConfigDirectory);
                     browser.Browse();
                     break;
                 case MenuFailures:

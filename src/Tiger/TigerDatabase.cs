@@ -160,6 +160,24 @@ public sealed class TigerDatabase : IDisposable
 
             CREATE INDEX IF NOT EXISTS ix_flaky_tests_status
                 ON flaky_tests (organization, project, status);
+
+            CREATE TABLE IF NOT EXISTS build_timeline_issues (
+                organization TEXT NOT NULL,
+                project TEXT NOT NULL,
+                build_id INTEGER NOT NULL,
+                record_name TEXT NOT NULL,
+                record_type TEXT NOT NULL,
+                parent_name TEXT,
+                record_result TEXT,
+                issue_type TEXT NOT NULL,
+                issue_message TEXT NOT NULL,
+                issue_category TEXT,
+                FOREIGN KEY (organization, project, build_id)
+                    REFERENCES builds (organization, project, build_id)
+            );
+
+            CREATE INDEX IF NOT EXISTS ix_timeline_issues_build
+                ON build_timeline_issues (organization, project, build_id);
             """;
         cmd.ExecuteNonQuery();
     }
