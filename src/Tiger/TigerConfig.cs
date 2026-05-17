@@ -32,6 +32,9 @@ public sealed class TigerConfig
     [JsonPropertyName("pollIntervalSeconds")]
     public int PollIntervalSeconds { get; set; } = 300;
 
+    [JsonPropertyName("backfillDays")]
+    public int BackfillDays { get; set; } = 7;
+
     [JsonPropertyName("sources")]
     public List<AzdoSource> Sources { get; set; } = [];
 
@@ -78,5 +81,6 @@ public sealed class TigerConfig
                 Repositories = ["dotnet/roslyn"],
             }
         ],
+        BackfillDays = 1,
     };
 }

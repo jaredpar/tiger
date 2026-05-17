@@ -116,29 +116,18 @@ public sealed class BuildBrowser
 
         var choices = builds.Select(b =>
         {
-            var result = FormatResult(b.Result);
+            var result = FormatResultPlain(b.Result);
             var pr = b.PrNumber is not null ? $" PR#{b.PrNumber}" : "";
             return $"#{b.BuildId} {b.DefinitionName} {b.BuildNumber}{pr} {result}";
-        }).Append("← Back").ToList();
+        }).ToList();
 
-        var prompt = new SelectionPrompt<string>()
-            .Title("[bold]Select a build:[/]")
-            .PageSize(20)
-            .AddChoices(choices);
+        var selected = SelectWithEscape("[bold]Select a build:[/]", choices);
 
-        var selected = AnsiConsole.Prompt(prompt);
+        if (selected < 0)
+            return NavAction.Back.Instance;
 
-        if (selected == "← Back")
-            return NavAction.Exit;
-
-        var index = choices.IndexOf(selected);
-        if (index >= 0 && index < builds.Count)
-        {
-            var b = builds[index];
-            return new NavAction.Push(new BuildDetailPage(b.Org, b.Project, b.BuildId));
-        }
-
-        return NavAction.Exit;
+        var b2 = builds[selected];
+        return new NavAction.Push(new BuildDetailPage(b2.Org, b2.Project, b2.BuildId));
     }
 
     // ── Build Detail ────────────────────────────────────────────────
@@ -335,25 +324,15 @@ public sealed class BuildBrowser
         {
             var title = t.Title.Length > 80 ? t.Title[..77] + "..." : t.Title;
             return title;
-        }).Append("← Back").ToList();
+        }).ToList();
 
-        var selected = AnsiConsole.Prompt(
-            new SelectionPrompt<string>()
-                .Title($"[bold]{tests.Count} failed test(s):[/]")
-                .PageSize(20)
-                .AddChoices(choices));
+        var selected = SelectWithEscape($"{tests.Count} failed test(s):", choices);
 
-        if (selected == "← Back")
+        if (selected < 0)
             return NavAction.Back.Instance;
 
-        var idx = choices.IndexOf(selected);
-        if (idx >= 0 && idx < tests.Count)
-        {
-            return new NavAction.Push(
-                new TestDetailPage(page.Org, page.Project, tests[idx].Title));
-        }
-
-        return NavAction.Back.Instance;
+        return new NavAction.Push(
+            new TestDetailPage(page.Org, page.Project, tests[selected].Title));
     }
 
     // ── Test Detail (across builds) ─────────────────────────────────
@@ -413,25 +392,15 @@ public sealed class BuildBrowser
             var pr = b.PrNumber is not null ? $" PR#{b.PrNumber}" : "";
             var time = b.FinishTime ?? "";
             return $"#{b.BuildId} {b.DefinitionName} {b.BuildNumber}{pr} [{result}] {time}";
-        }).Append("← Back").ToList();
+        }).ToList();
 
-        var selected = AnsiConsole.Prompt(
-            new SelectionPrompt<string>()
-                .Title("[bold]Select a build to view details:[/]")
-                .PageSize(20)
-                .AddChoices(choices));
+        var selected = SelectWithEscape("Select a build to view details:", choices);
 
-        if (selected == "← Back")
+        if (selected < 0)
             return NavAction.Back.Instance;
 
-        var idx = choices.IndexOf(selected);
-        if (idx >= 0 && idx < builds.Count)
-        {
-            var b = builds[idx];
-            return new NavAction.Push(new BuildDetailPage(b.Org, b.Project, b.BuildId));
-        }
-
-        return NavAction.Back.Instance;
+        var b2 = builds[selected];
+        return new NavAction.Push(new BuildDetailPage(b2.Org, b2.Project, b2.BuildId));
     }
 
     // ── Key Navigation (for detail pages) ───────────────────────────
@@ -505,6 +474,77 @@ public sealed class BuildBrowser
     }
 
     // ── Helpers ──────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Custom selection list that supports Escape/B to go back.
+    /// Returns the selected index, or -1 if the user pressed Escape/B.
+    /// </summary>
+    private static int SelectWithEscape(string title, List<string> items, int pageSize = 20)
+    {
+        if (items.Count == 0) return -1;
+
+        var selected = 0;
+        var scrollOffset = 0;
+        var visibleCount = Math.Min(pageSize, items.Count);
+
+        while (true)
+        {
+            // Clear and render
+            AnsiConsole.Cursor.SetPosition(0, Console.CursorTop);
+
+            // Render visible items
+            for (var i = 0; i < visibleCount; i++)
+            {
+                var idx = scrollOffset + i;
+                if (idx >= items.Count) break;
+
+                if (idx == selected)
+                    AnsiConsole.MarkupLine($"  [blue]>[/] [bold]{Markup.Escape(items[idx])}[/]");
+                else
+                    AnsiConsole.MarkupLine($"    {Markup.Escape(items[idx])}");
+            }
+
+            if (items.Count > visibleCount)
+                AnsiConsole.MarkupLine($"  [dim]({selected + 1}/{items.Count})[/]");
+
+            AnsiConsole.MarkupLine("[dim]  ↑↓ navigate  Enter select  Esc/B back[/]");
+
+            var key = Console.ReadKey(true);
+            switch (key.Key)
+            {
+                case ConsoleKey.UpArrow:
+                    if (selected > 0)
+                    {
+                        selected--;
+                        if (selected < scrollOffset)
+                            scrollOffset = selected;
+                    }
+                    break;
+                case ConsoleKey.DownArrow:
+                    if (selected < items.Count - 1)
+                    {
+                        selected++;
+                        if (selected >= scrollOffset + visibleCount)
+                            scrollOffset = selected - visibleCount + 1;
+                    }
+                    break;
+                case ConsoleKey.Enter:
+                    return selected;
+                case ConsoleKey.Escape:
+                case ConsoleKey.B:
+                    return -1;
+            }
+
+            // Move cursor back up to re-render
+            var linesToClear = visibleCount + (items.Count > visibleCount ? 2 : 1);
+            for (var i = 0; i < linesToClear; i++)
+            {
+                AnsiConsole.Cursor.SetPosition(0, Console.CursorTop - 1);
+                AnsiConsole.Write(new string(' ', Console.WindowWidth));
+                AnsiConsole.Cursor.SetPosition(0, Console.CursorTop);
+            }
+        }
+    }
 
     private static string FormatResult(string? result) => result switch
     {

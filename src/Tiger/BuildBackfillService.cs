@@ -10,11 +10,6 @@ namespace Tiger;
 /// </summary>
 public sealed class BuildBackfillService
 {
-    /// <summary>
-    /// How far back to look when there is no prior poll history at all.
-    /// </summary>
-    private static readonly TimeSpan s_initialLookback = TimeSpan.FromDays(7);
-
     private readonly TigerConfig _config;
     private readonly TigerDatabase _db;
     private readonly BuildIngestionService _ingestion;
@@ -67,7 +62,7 @@ public sealed class BuildBackfillService
     private async Task<int> BackfillSourceAsync(AzdoSource source, CancellationToken ct)
     {
         var lastPollTime = GetLastPollTime(source.Organization, source.Project);
-        var since = lastPollTime ?? DateTime.UtcNow - s_initialLookback;
+        var since = lastPollTime ?? DateTime.UtcNow - TimeSpan.FromDays(_config.BackfillDays);
 
         _log.Info("Backfill",
             $"{source.Organization}/{source.Project} — fetching builds since {since:yyyy-MM-dd HH:mm} UTC");
