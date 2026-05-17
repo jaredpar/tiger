@@ -449,92 +449,105 @@ public sealed class BuildBrowser
             headerTable.AddRow("[bold]Finished[/]", finishTime);
         headerTable.AddRow("[bold]URL[/]", $"[link={url}]{url}[/]");
 
-        // Pass/fail counts from DB
-        using var countCmd = _db.Connection.CreateCommand();
-        countCmd.CommandText = """
-            SELECT
-                COALESCE(SUM(total_tests), 0),
-                COALESCE(SUM(passed_tests), 0),
-                COALESCE(SUM(failed_tests), 0),
-                COALESCE(SUM(skipped_tests), 0)
-            FROM test_runs
-            WHERE organization = @org AND project = @proj AND build_id = @buildId
-            """;
-        countCmd.Parameters.AddWithValue("@org", page.Org);
-        countCmd.Parameters.AddWithValue("@proj", page.Project);
-        countCmd.Parameters.AddWithValue("@buildId", page.BuildId);
-        using var countReader = countCmd.ExecuteReader();
-        if (countReader.Read())
+        // Ingestion status line: Timeline, Tests, Helix with status icons
+        var taskStatuses = GetIngestionTaskStatuses(page.Org, page.Project, page.BuildId);
+        var taskStatusMap = taskStatuses.ToDictionary(t => t.TaskType, t => t);
+        string TaskIcon(string taskType)
         {
-            var total = countReader.GetInt64(0);
-            var passed = countReader.GetInt64(1);
-            var failed = countReader.GetInt64(2);
-            var skipped = countReader.GetInt64(3);
-            headerTable.AddRow("[bold]Tests[/]",
-                $"[green]{passed} passed[/] / [red]{failed} failed[/] / [dim]{skipped} skipped[/] ({total} total)");
+            if (!taskStatusMap.TryGetValue(taskType, out var t))
+                return "[yellow]⏳[/]";
+            return t.Status switch
+            {
+                "complete" => "[green]✓[/]",
+                "running" => "[blue]⏳[/]",
+                "failed" => $"[yellow]✗ retry {t.Attempts}/5[/]",
+                "abandoned" => "[red]☠ abandoned[/]",
+                _ => "[yellow]⏳[/]",
+            };
         }
-        countReader.Close();
+        headerTable.AddRow("[bold]Data[/]",
+            $"Timeline: {TaskIcon("timeline")}  Tests: {TaskIcon("tests")}  Helix: {TaskIcon("helix")}");
 
         AnsiConsole.Write(headerTable);
         AnsiConsole.WriteLine();
 
-        // Show per-task ingestion status
-        var taskStatuses = GetIngestionTaskStatuses(page.Org, page.Project, page.BuildId);
-        if (taskStatuses.Count > 0)
+        var timelineStatus = taskStatusMap.GetValueOrDefault("timeline").Status;
+        var testsStatus = taskStatusMap.GetValueOrDefault("tests").Status;
+
+        // Failed jobs section (from DB timeline issues, when timeline is ingested)
+        if (timelineStatus == "complete")
         {
-            var allComplete = taskStatuses.All(t => t.Status == "complete");
-            if (!allComplete)
+            using var jobsCmd = _db.Connection.CreateCommand();
+            jobsCmd.CommandText = """
+                SELECT DISTINCT parent_name
+                FROM build_timeline_issues
+                WHERE organization = @org AND project = @proj AND build_id = @buildId
+                  AND parent_name IS NOT NULL AND issue_type = 'error'
+                ORDER BY parent_name
+                """;
+            jobsCmd.Parameters.AddWithValue("@org", page.Org);
+            jobsCmd.Parameters.AddWithValue("@proj", page.Project);
+            jobsCmd.Parameters.AddWithValue("@buildId", page.BuildId);
+
+            using var jobsReader = jobsCmd.ExecuteReader();
+            var failedJobNames = new List<string>();
+            while (jobsReader.Read())
+                failedJobNames.Add(jobsReader.GetString(0));
+            jobsReader.Close();
+
+            AnsiConsole.MarkupLine("[bold underline]Failed Jobs[/]");
+            if (failedJobNames.Count > 0)
             {
-                var parts = taskStatuses.Select(t =>
-                {
-                    var icon = t.Status switch
-                    {
-                        "complete" => "[green]✓[/]",
-                        "running" => "[blue]⏳[/]",
-                        "failed" => $"[yellow]✗ retry {t.Attempts}/{5}[/]",
-                        "abandoned" => "[red]✗ abandoned[/]",
-                        _ => "[yellow]⏳[/]",
-                    };
-                    return $"{t.TaskType}: {icon}";
-                });
-                AnsiConsole.MarkupLine($"[bold]Ingestion:[/] {string.Join("  ", parts)}");
-                AnsiConsole.WriteLine();
+                foreach (var jobName in failedJobNames.Take(15))
+                    AnsiConsole.MarkupLine($"  [red]✗[/] {Markup.Escape(jobName)}");
             }
+            else
+            {
+                AnsiConsole.MarkupLine("  [green]No failed jobs[/]");
+            }
+            AnsiConsole.WriteLine();
         }
 
-        // Failed tests section (from DB)
+        // Failed tests section
         AnsiConsole.MarkupLine("[bold underline]Failed Tests[/]");
-        using var testsCmd = _db.Connection.CreateCommand();
-        testsCmd.CommandText = """
-            SELECT tr.test_case_title, tr.error_message
-            FROM test_results tr
-            JOIN test_runs r ON tr.organization = r.organization AND tr.project = r.project AND tr.run_id = r.run_id
-            WHERE r.organization = @org AND r.project = @proj AND r.build_id = @buildId
-                  AND tr.outcome = 'Failed'
-            ORDER BY tr.test_case_title
-            LIMIT 20
-            """;
-        testsCmd.Parameters.AddWithValue("@org", page.Org);
-        testsCmd.Parameters.AddWithValue("@proj", page.Project);
-        testsCmd.Parameters.AddWithValue("@buildId", page.BuildId);
-
-        using var testsReader = testsCmd.ExecuteReader();
-        var hasFailedTests = false;
-        while (testsReader.Read())
+        if (testsStatus != "complete")
         {
-            hasFailedTests = true;
-            var title = testsReader.GetString(0);
-            var error = testsReader.IsDBNull(1) ? "" : testsReader.GetString(1);
-            if (title.Length > 70) title = title[..67] + "...";
-            if (error.Length > 60) error = error[..57] + "...";
-            error = error.ReplaceLineEndings(" ");
-            AnsiConsole.MarkupLine($"  [red]✗[/] {Markup.Escape(title)}");
-            if (!string.IsNullOrWhiteSpace(error))
-                AnsiConsole.MarkupLine($"    [dim]{Markup.Escape(error)}[/]");
+            AnsiConsole.MarkupLine("  [yellow]⏳ Tests not available yet[/]");
         }
-        if (!hasFailedTests)
-            AnsiConsole.MarkupLine("  [green]All tests passed[/]");
-        testsReader.Close();
+        else
+        {
+            using var testsCmd = _db.Connection.CreateCommand();
+            testsCmd.CommandText = """
+                SELECT tr.test_case_title, tr.error_message
+                FROM test_results tr
+                JOIN test_runs r ON tr.organization = r.organization AND tr.project = r.project AND tr.run_id = r.run_id
+                WHERE r.organization = @org AND r.project = @proj AND r.build_id = @buildId
+                      AND tr.outcome = 'Failed'
+                ORDER BY tr.test_case_title
+                LIMIT 20
+                """;
+            testsCmd.Parameters.AddWithValue("@org", page.Org);
+            testsCmd.Parameters.AddWithValue("@proj", page.Project);
+            testsCmd.Parameters.AddWithValue("@buildId", page.BuildId);
+
+            using var testsReader = testsCmd.ExecuteReader();
+            var hasFailedTests = false;
+            while (testsReader.Read())
+            {
+                hasFailedTests = true;
+                var title = testsReader.GetString(0);
+                var error = testsReader.IsDBNull(1) ? "" : testsReader.GetString(1);
+                if (title.Length > 70) title = title[..67] + "...";
+                if (error.Length > 60) error = error[..57] + "...";
+                error = error.ReplaceLineEndings(" ");
+                AnsiConsole.MarkupLine($"  [red]✗[/] {Markup.Escape(title)}");
+                if (!string.IsNullOrWhiteSpace(error))
+                    AnsiConsole.MarkupLine($"    [dim]{Markup.Escape(error)}[/]");
+            }
+            if (!hasFailedTests)
+                AnsiConsole.MarkupLine("  [green]All tests passed[/]");
+            testsReader.Close();
+        }
 
         AnsiConsole.WriteLine();
 
