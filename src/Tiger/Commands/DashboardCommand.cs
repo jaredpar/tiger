@@ -10,7 +10,7 @@ namespace Tiger.Commands;
 public sealed class DashboardCommand : AsyncCommand
 {
     private const string MenuStatus = "Status (live service log)";
-    private const string MenuBuilds = "Recent builds";
+    private const string MenuBuilds = "Builds";
     private const string MenuFailures = "Test failures";
     private const string MenuConfig = "Configuration";
     private const string MenuQuit = "Quit";
@@ -30,7 +30,7 @@ public sealed class DashboardCommand : AsyncCommand
         Task? backfillTask = null;
         if (config.Sources.Count > 0)
         {
-            var ingestion = new BuildIngestionService(db);
+            var ingestion = new BuildIngestionService(db, serviceLog);
 
             // Backfill runs in the background
             var backfill = new BuildBackfillService(config, db, ingestion, clientFactory, serviceLog);

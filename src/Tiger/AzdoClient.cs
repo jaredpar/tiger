@@ -64,7 +64,7 @@ public sealed class AzdoClient : IBuildDataSource
         DefinitionName = b.Definition?.Name ?? "unknown",
         DefinitionId = b.Definition?.Id ?? 0,
         SourceVersion = b.SourceVersion,
-        RepositoryName = b.Repository?.Name,
+        RepositoryName = b.Repository?.Id ?? b.Repository?.Name,
         PrNumber = ExtractPrNumber(b.SourceBranch),
         FinishTime = b.FinishTime,
     };
@@ -400,6 +400,9 @@ public sealed class AzdoClient : IBuildDataSource
 
     private class AzdoBuildRepository
     {
+        [JsonPropertyName("id")]
+        public string? Id { get; init; }
+
         [JsonPropertyName("name")]
         public string? Name { get; init; }
     }

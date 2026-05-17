@@ -10,6 +10,7 @@ public sealed class BuildBrowser
 {
     private readonly TigerDatabase _db;
     private readonly List<Page> _history = [];
+    private readonly BuildFilter _filter = new();
     private int _position = -1;
 
     public BuildBrowser(TigerDatabase db)
@@ -76,58 +77,195 @@ public sealed class BuildBrowser
 
     private NavAction RenderBuildList()
     {
-        AnsiConsole.MarkupLine("[bold underline]Recent Builds[/]");
-        AnsiConsole.MarkupLine("[dim]Select a build to view details, or Escape to go back[/]");
-        AnsiConsole.WriteLine();
-
-        var builds = new List<BuildRow>();
-        using (var cmd = _db.Connection.CreateCommand())
+        while (true)
         {
-            cmd.CommandText = """
-                SELECT organization, project, build_id, build_number, definition_name,
-                       result, source_branch, pr_number, finish_time
-                FROM builds
-                ORDER BY finish_time DESC, ingested_at DESC
-                LIMIT 30
-                """;
-            using var reader = cmd.ExecuteReader();
-            while (reader.Read())
+            AnsiConsole.Clear();
+            AnsiConsole.MarkupLine("[bold underline]Builds[/]");
+            if (_filter.IsActive)
+                AnsiConsole.MarkupLine($"[dim]Filter: {Markup.Escape(_filter.ToString())}[/]");
+            AnsiConsole.MarkupLine(_filter.IsActive
+                ? "[dim]F filter  C clear  H help  Esc back[/]"
+                : "[dim]F filter  H help  Esc back[/]");
+            AnsiConsole.WriteLine();
+
+            var builds = QueryBuilds();
+
+            if (builds.Count == 0)
             {
-                builds.Add(new BuildRow(
-                    reader.GetString(0),
-                    reader.GetString(1),
-                    reader.GetInt32(2),
-                    reader.GetString(3),
-                    reader.GetString(4),
-                    reader.IsDBNull(5) ? null : reader.GetString(5),
-                    reader.GetString(6),
-                    reader.IsDBNull(7) ? null : reader.GetInt32(7),
-                    reader.IsDBNull(8) ? null : reader.GetString(8)));
+                AnsiConsole.MarkupLine(_filter.IsActive
+                    ? "[yellow]No builds match the current filter.[/]"
+                    : "[yellow]No builds ingested yet.[/]");
+                AnsiConsole.MarkupLine("[dim]Press F to change filter, Esc to go back...[/]");
+
+                var emptyKey = Console.ReadKey(true);
+                if (emptyKey.Key == ConsoleKey.F)
+                {
+                    ShowFilterMenu();
+                    continue;
+                }
+                if (emptyKey.Key == ConsoleKey.H)
+                {
+                    ShowFilterHelp();
+                    continue;
+                }
+                if (emptyKey.Key == ConsoleKey.C)
+                {
+                    _filter.Clear();
+                    continue;
+                }
+                return NavAction.Back.Instance;
             }
+
+            AnsiConsole.MarkupLine($"[dim]{builds.Count} builds[/]");
+            AnsiConsole.WriteLine();
+
+            var choices = builds.Select(b =>
+            {
+                var result = FormatResultPlain(b.Result);
+                var pr = b.PrNumber is not null ? $" PR#{b.PrNumber}" : "";
+                return $"#{b.BuildId} {b.DefinitionName} {b.BuildNumber}{pr} {result}";
+            }).ToList();
+
+            var selected = SelectWithEscape("Select a build:", choices,
+                extraKeys: new Dictionary<ConsoleKey, int> {
+                    { ConsoleKey.F, -2 },
+                    { ConsoleKey.H, -3 },
+                    { ConsoleKey.C, -4 },
+                });
+
+            if (selected == -2) // F pressed
+            {
+                ShowFilterMenu();
+                continue;
+            }
+            if (selected == -3) // H pressed
+            {
+                ShowFilterHelp();
+                continue;
+            }
+            if (selected == -4) // C pressed
+            {
+                _filter.Clear();
+                continue;
+            }
+            if (selected < 0)
+                return NavAction.Back.Instance;
+
+            var b2 = builds[selected];
+            return new NavAction.Push(new BuildDetailPage(b2.Org, b2.Project, b2.BuildId));
+        }
+    }
+
+    private List<BuildRow> QueryBuilds()
+    {
+        var builds = new List<BuildRow>();
+        using var cmd = _db.Connection.CreateCommand();
+
+        var where = new List<string>();
+        if (_filter.RepoPattern is not null)
+        {
+            where.Add("repository_name LIKE @repo");
+            cmd.Parameters.AddWithValue("@repo", BuildFilter.ToLikePattern(_filter.RepoPattern));
+        }
+        if (_filter.DefinitionPattern is not null)
+        {
+            where.Add("definition_name LIKE @def");
+            cmd.Parameters.AddWithValue("@def", BuildFilter.ToLikePattern(_filter.DefinitionPattern));
+        }
+        if (_filter.NumberPattern is not null)
+        {
+            where.Add("build_number LIKE @num");
+            cmd.Parameters.AddWithValue("@num", BuildFilter.ToLikePattern(_filter.NumberPattern));
         }
 
-        if (builds.Count == 0)
+        var whereClause = where.Count > 0 ? "WHERE " + string.Join(" AND ", where) : "";
+
+        cmd.CommandText = $"""
+            SELECT organization, project, build_id, build_number, definition_name,
+                   result, source_branch, pr_number, finish_time
+            FROM builds
+            {whereClause}
+            ORDER BY finish_time DESC, ingested_at DESC
+            LIMIT 50
+            """;
+
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
         {
-            AnsiConsole.MarkupLine("[yellow]No builds ingested yet.[/]");
-            AnsiConsole.MarkupLine("[dim]Press any key to go back...[/]");
-            Console.ReadKey(true);
-            return NavAction.Exit;
+            builds.Add(new BuildRow(
+                reader.GetString(0),
+                reader.GetString(1),
+                reader.GetInt32(2),
+                reader.GetString(3),
+                reader.GetString(4),
+                reader.IsDBNull(5) ? null : reader.GetString(5),
+                reader.GetString(6),
+                reader.IsDBNull(7) ? null : reader.GetInt32(7),
+                reader.IsDBNull(8) ? null : reader.GetString(8)));
         }
+        return builds;
+    }
 
-        var choices = builds.Select(b =>
+    private void ShowFilterMenu()
+    {
+        AnsiConsole.Clear();
+        AnsiConsole.MarkupLine("[bold underline]Set Filter[/]");
+        AnsiConsole.MarkupLine($"[dim]Current: {Markup.Escape(_filter.ToString())}[/]");
+        AnsiConsole.WriteLine();
+        AnsiConsole.MarkupLine("  [blue]R[/] Filter by repository");
+        AnsiConsole.MarkupLine("  [blue]D[/] Filter by definition");
+        AnsiConsole.MarkupLine("  [blue]N[/] Filter by build number");
+        AnsiConsole.MarkupLine("  [blue]C[/] Clear all filters");
+        AnsiConsole.MarkupLine("  [blue]Esc[/] Cancel");
+
+        var key = Console.ReadKey(true);
+        switch (key.Key)
         {
-            var result = FormatResultPlain(b.Result);
-            var pr = b.PrNumber is not null ? $" PR#{b.PrNumber}" : "";
-            return $"#{b.BuildId} {b.DefinitionName} {b.BuildNumber}{pr} {result}";
-        }).ToList();
+            case ConsoleKey.R:
+                _filter.RepoPattern = PromptPattern("Repository pattern (e.g. roslyn, dotnet/*):");
+                break;
+            case ConsoleKey.D:
+                _filter.DefinitionPattern = PromptPattern("Definition pattern (e.g. ci, roslyn-CI*):");
+                break;
+            case ConsoleKey.N:
+                _filter.NumberPattern = PromptPattern("Build number pattern (e.g. 14*, 20250517*):");
+                break;
+            case ConsoleKey.C:
+                _filter.Clear();
+                break;
+        }
+    }
 
-        var selected = SelectWithEscape("[bold]Select a build:[/]", choices);
+    private static string? PromptPattern(string prompt)
+    {
+        AnsiConsole.WriteLine();
+        AnsiConsole.MarkupLine($"[bold]{Markup.Escape(prompt)}[/]");
+        AnsiConsole.Markup("[blue]> [/]");
+        var input = Console.ReadLine()?.Trim();
+        return string.IsNullOrEmpty(input) ? null : input;
+    }
 
-        if (selected < 0)
-            return NavAction.Back.Instance;
-
-        var b2 = builds[selected];
-        return new NavAction.Push(new BuildDetailPage(b2.Org, b2.Project, b2.BuildId));
+    private static void ShowFilterHelp()
+    {
+        AnsiConsole.Clear();
+        AnsiConsole.MarkupLine("[bold underline]Filter Help[/]");
+        AnsiConsole.WriteLine();
+        AnsiConsole.MarkupLine("[bold]Matching:[/]");
+        AnsiConsole.MarkupLine("  Plain text does a [blue]contains[/] match:");
+        AnsiConsole.MarkupLine("    [dim]roslyn → matches 'dotnet/roslyn', 'roslyn-CI', etc.[/]");
+        AnsiConsole.MarkupLine("  Use [blue]*[/] as a wildcard:");
+        AnsiConsole.MarkupLine("    [dim]dotnet/* → matches 'dotnet/roslyn', 'dotnet/runtime', etc.[/]");
+        AnsiConsole.MarkupLine("    [dim]14* → matches build numbers starting with '14'[/]");
+        AnsiConsole.MarkupLine("    [dim]*-CI → matches definition names ending with '-CI'[/]");
+        AnsiConsole.WriteLine();
+        AnsiConsole.MarkupLine("[bold]Filter types:[/]");
+        AnsiConsole.MarkupLine("  [blue]R[/]  Repository name (e.g. roslyn, dotnet/runtime)");
+        AnsiConsole.MarkupLine("  [blue]D[/]  Definition/pipeline name (e.g. ci, roslyn-CI)");
+        AnsiConsole.MarkupLine("  [blue]N[/]  Build number (e.g. 14*, 20250517*)");
+        AnsiConsole.WriteLine();
+        AnsiConsole.MarkupLine("[bold]Multiple filters combine with AND.[/]");
+        AnsiConsole.MarkupLine("[dim]Press any key to continue...[/]");
+        Console.ReadKey(true);
     }
 
     // ── Build Detail ────────────────────────────────────────────────
@@ -478,8 +616,10 @@ public sealed class BuildBrowser
     /// <summary>
     /// Custom selection list that supports Escape/B to go back.
     /// Returns the selected index, or -1 if the user pressed Escape/B.
+    /// Extra keys can be mapped to return specific negative values.
     /// </summary>
-    private static int SelectWithEscape(string title, List<string> items, int pageSize = 20)
+    private static int SelectWithEscape(string title, List<string> items, int pageSize = 20,
+        Dictionary<ConsoleKey, int>? extraKeys = null)
     {
         if (items.Count == 0) return -1;
 
@@ -531,8 +671,15 @@ public sealed class BuildBrowser
                 case ConsoleKey.Enter:
                     return selected;
                 case ConsoleKey.Escape:
-                case ConsoleKey.B:
                     return -1;
+                case ConsoleKey.B:
+                    if (extraKeys is null || !extraKeys.ContainsKey(ConsoleKey.B))
+                        return -1;
+                    goto default;
+                default:
+                    if (extraKeys is not null && extraKeys.TryGetValue(key.Key, out var result2))
+                        return result2;
+                    break;
             }
 
             // Move cursor back up to re-render
@@ -571,6 +718,49 @@ public sealed class BuildBrowser
     private record BuildDetailPage(string Org, string Project, int BuildId) : Page;
     private record TestListPage(string Org, string Project, int BuildId) : Page;
     private record TestDetailPage(string Org, string Project, string TestName) : Page;
+
+    /// <summary>
+    /// Persistent build filter. Survives navigation within the browser session.
+    /// </summary>
+    private sealed class BuildFilter
+    {
+        public string? RepoPattern { get; set; }
+        public string? DefinitionPattern { get; set; }
+        public string? NumberPattern { get; set; }
+
+        public bool IsActive => RepoPattern is not null || DefinitionPattern is not null || NumberPattern is not null;
+
+        public void Clear()
+        {
+            RepoPattern = null;
+            DefinitionPattern = null;
+            NumberPattern = null;
+        }
+
+        public override string ToString()
+        {
+            var parts = new List<string>();
+            if (RepoPattern is not null) parts.Add($"repo:{RepoPattern}");
+            if (DefinitionPattern is not null) parts.Add($"def:{DefinitionPattern}");
+            if (NumberPattern is not null) parts.Add($"num:{NumberPattern}");
+            return parts.Count > 0 ? string.Join(" ", parts) : "(none)";
+        }
+
+        /// <summary>
+        /// Converts a user glob pattern (with *) to a SQL LIKE pattern.
+        /// If no wildcard present, wraps in %...% for contains matching.
+        /// </summary>
+        public static string ToLikePattern(string input)
+        {
+            // Escape SQL LIKE special chars (% and _) in user input, then convert * to %
+            var escaped = input.Replace("%", "[%]").Replace("_", "[_]");
+            var pattern = escaped.Replace("*", "%");
+            // If no wildcard was present, do contains match
+            if (!pattern.Contains('%'))
+                pattern = $"%{pattern}%";
+            return pattern;
+        }
+    }
 
     private abstract record NavAction
     {

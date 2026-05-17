@@ -1,6 +1,4 @@
 using Microsoft.Data.Sqlite;
-using Microsoft.Extensions.Logging;
-
 namespace Tiger;
 
 /// <summary>
@@ -10,12 +8,12 @@ namespace Tiger;
 public sealed class BuildIngestionService
 {
     private readonly TigerDatabase _db;
-    private readonly ILogger<BuildIngestionService>? _logger;
+    private readonly ServiceLog? _log;
 
-    public BuildIngestionService(TigerDatabase db, ILogger<BuildIngestionService>? logger = null)
+    public BuildIngestionService(TigerDatabase db, ServiceLog? log = null)
     {
         _db = db;
-        _logger = logger;
+        _log = log;
     }
 
     /// <summary>
@@ -32,14 +30,18 @@ public sealed class BuildIngestionService
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                _logger?.LogError(ex, "Failed to ingest build {BuildId} for {Org}/{Proj}",
-                    build.Id, organization, project);
+                _log?.Error("Ingestion",
+                    $"Failed build #{build.Id} {build.DefinitionName} {build.BuildNumber}: {ex.Message}");
             }
         }
     }
 
     private async Task IngestBuildAsync(AzdoClient client, string organization, string project, AzdoBuild build)
     {
+        var result = build.Result ?? "unknown";
+        _log?.Info("Ingestion",
+            $"#{build.Id} {build.DefinitionName} {build.BuildNumber} [{result}] {build.RepositoryName ?? ""}");
+
         InsertBuild(organization, project, build);
 
         // Fetch test summary (runs) and insert them
@@ -62,9 +64,9 @@ public sealed class BuildIngestionService
                 summary?.FailedCount ?? group.Count(),
                 summary?.SkippedCount ?? 0);
 
-            foreach (var result in group)
+            foreach (var r in group)
             {
-                InsertTestResult(organization, project, group.Key, result);
+                InsertTestResult(organization, project, group.Key, r);
             }
         }
 
@@ -78,15 +80,18 @@ public sealed class BuildIngestionService
             }
         }
 
-        _logger?.LogDebug("Ingested build {BuildId} ({DefName}) with {FailCount} test failures",
-            build.Id, build.DefinitionName, failures.Count);
+        if (failures.Count > 0)
+        {
+            _log?.Warning("Ingestion",
+                $"  #{build.Id} — {failures.Count} test failure(s) across {runGroups.Count()} run(s)");
+        }
     }
 
     internal void InsertBuild(string organization, string project, AzdoBuild build)
     {
         using var cmd = _db.Connection.CreateCommand();
         cmd.CommandText = """
-            INSERT OR IGNORE INTO builds
+            INSERT OR REPLACE INTO builds
                 (organization, project, build_id, build_number, definition_name, definition_id,
                  status, result, source_branch, source_version, repository_name, pr_number, finish_time)
             VALUES
