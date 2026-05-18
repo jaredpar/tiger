@@ -62,6 +62,9 @@ app.Configure(config =>
 
     config.AddCommand<StatusCommand>("status")
         .WithDescription("Show poller status, build counts, and recent activity");
+
+    config.AddCommand<HealthCommand>("health")
+        .WithDescription("Interactive agent session for CI health reporting");
 });
 
 return await app.RunAsync(args);

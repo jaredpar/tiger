@@ -12,6 +12,7 @@ public sealed class DashboardCommand : AsyncCommand
     private const string MenuStatus = "Status (live service log)";
     private const string MenuBuilds = "Builds";
     private const string MenuTests = "Tests";
+    private const string MenuHealth = "Health (agent chat)";
     private const string MenuConfig = "Configuration";
     private const string MenuQuit = "Quit";
 
@@ -97,7 +98,7 @@ public sealed class DashboardCommand : AsyncCommand
             var choice = AnsiConsole.Prompt(
                 new SelectionPrompt<string>()
                     .Title("[bold]What would you like to do?[/]")
-                    .AddChoices(MenuBuilds, MenuTests, MenuConfig, MenuStatus, MenuQuit));
+                    .AddChoices(MenuBuilds, MenuTests, MenuHealth, MenuConfig, MenuStatus, MenuQuit));
 
             switch (choice)
             {
@@ -111,6 +112,10 @@ public sealed class DashboardCommand : AsyncCommand
                 case MenuTests:
                     var testBrowser = new TestBrowser(db, tigerContext.ConfigDirectory);
                     testBrowser.Browse();
+                    break;
+                case MenuHealth:
+                    var healthCmd = new HealthCommand();
+                    await healthCmd.RunAsync(ct);
                     break;
                 case MenuConfig:
                     ShowConfig(tigerContext);

@@ -41,7 +41,18 @@ Items are ordered by dependency — work top-to-bottom.
 - [x] **poller-lifecycle** — Poller starts automatically when tiger runs. Add `tiger status`
   command showing poller health, last poll time, build count.
 
-## Phase 3: Flaky Test Detection
+## Phase 3: Agent-Powered Health Reporting
+
+- [ ] **health-command** — `tiger health` opens an interactive agent chat session using the
+  copilot-sdk. The user provides a prompt describing which builds/tests they're interested
+  in (e.g. "show me the health of roslyn CI this week"). The agent queries the SQLite DB
+  via sqlite3 using the tiger-ci-data skill and generates a health report. Chat continues
+  until the user types `quit`.
+
+- [ ] **health-skills** — Ensure all tiger skills are available to the agent session so it
+  can query builds, tests, timeline issues, and helix data.
+
+## Phase 4: Flaky Test Detection
 
 - [ ] **flaky-detection** — Query SQLite for tests that flip pass↔fail on the same branch
   within a configurable window. Mark them in `flaky_tests` table.
@@ -54,7 +65,7 @@ Items are ordered by dependency — work top-to-bottom.
 
 - [ ] **flaky-fix-prs** — (Stretch) Open PRs to skip/quarantine flaky tests.
 
-## Phase 4: Reporting
+## Phase 5: Reporting
 
 - [ ] **report-top-failures** — `tiger report failures` — top N failing tests across
   recent builds, grouped by test name.
@@ -64,7 +75,7 @@ Items are ordered by dependency — work top-to-bottom.
 
 - [ ] **report-trends** — `tiger report trends` — failure rate over time (daily/weekly).
 
-## Phase 5: MCP/HTTP Server & Copilot Console
+## Phase 6: MCP/HTTP Server & Copilot Console
 
 - [ ] **mcp-http-server** — Serve MCP tools over HTTP (Kestrel). Starts with the main
   process. `tiger mcp serve` prints the port/URL for manual connection.
