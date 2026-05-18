@@ -65,7 +65,7 @@ public sealed class BuildBackfillService
         var since = lastPollTime ?? DateTime.UtcNow - TimeSpan.FromDays(_config.BackfillDays);
 
         _log.Info("Backfill",
-            $"{source.Organization}/{source.Project} — fetching builds since {since:yyyy-MM-dd HH:mm} UTC");
+            $"{source.Organization}/{source.Project} — fetching builds since {TigerUtils.FormatLocalTime(since)}");
 
         var client = _clientFactory(source.Organization, source.Project);
 
@@ -133,7 +133,7 @@ public sealed class BuildBackfillService
         cmd.Parameters.AddWithValue("@org", organization);
         cmd.Parameters.AddWithValue("@proj", project);
         var result = cmd.ExecuteScalar();
-        if (result is string s && DateTime.TryParse(s, out var dt))
+        if (result is string s && DateTime.TryParse(s, null, System.Globalization.DateTimeStyles.AssumeUniversal | System.Globalization.DateTimeStyles.AdjustToUniversal, out var dt))
             return dt;
         return null;
     }

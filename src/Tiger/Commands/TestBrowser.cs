@@ -508,13 +508,7 @@ public sealed class TestBrowser
 
     // ── Types ────────────────────────────────────────────────────────
 
-    private static string FormatTime(string? isoTime)
-    {
-        if (isoTime is null) return "-";
-        if (DateTime.TryParse(isoTime, null, System.Globalization.DateTimeStyles.RoundtripKind, out var dt))
-            return dt.ToLocalTime().ToString("yyyy-MM-dd h:mm tt");
-        return isoTime;
-    }
+    private static string FormatTime(string? isoTime) => TigerUtils.FormatLocalTime(isoTime);
 
     private record TestRow(string TestName, int FailCount, string Org, string Project);
 

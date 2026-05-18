@@ -96,4 +96,25 @@ public static class TigerUtils
         var token = File.ReadAllText(helixTokenPath).Trim();
         return string.IsNullOrEmpty(token) ? null : token;
     }
+
+    /// <summary>
+    /// Formats a DateTime as local time in a consistent display format.
+    /// </summary>
+    public static string FormatLocalTime(DateTime dt)
+    {
+        var local = dt.Kind == DateTimeKind.Utc ? dt.ToLocalTime() : dt;
+        return local.ToString("yyyy-MM-dd h:mm tt");
+    }
+
+    /// <summary>
+    /// Parses an ISO 8601 time string and formats it as local time.
+    /// Returns "-" if the string is null or cannot be parsed.
+    /// </summary>
+    public static string FormatLocalTime(string? isoTime)
+    {
+        if (isoTime is null) return "-";
+        if (DateTime.TryParse(isoTime, null, System.Globalization.DateTimeStyles.RoundtripKind, out var dt))
+            return FormatLocalTime(dt);
+        return isoTime;
+    }
 }

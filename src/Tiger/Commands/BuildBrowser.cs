@@ -1205,15 +1205,7 @@ public sealed class BuildBrowser
     }
 
     /// <summary>
-    /// Formats an ISO time string to local YYYY-MM-DD HH:mm.
-    /// </summary>
-    private static string FormatTime(string? isoTime)
-    {
-        if (isoTime is null) return "-";
-        if (DateTime.TryParse(isoTime, null, System.Globalization.DateTimeStyles.RoundtripKind, out var dt))
-            return dt.ToLocalTime().ToString("yyyy-MM-dd h:mm tt");
-        return isoTime;
-    }
+    private static string FormatTime(string? isoTime) => TigerUtils.FormatLocalTime(isoTime);
 
     private static string FormatResult(string? result) => result switch
     {
