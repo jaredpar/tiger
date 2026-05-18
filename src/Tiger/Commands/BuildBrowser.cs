@@ -139,13 +139,13 @@ public sealed class BuildBrowser
                 var resultIcon = b.Result switch
                 {
                     "succeeded" => "[green]✓[/]",
-                    "failed" => "[red]✗[/]",
-                    "partiallySucceeded" => "[yellow]⚠[/]",
-                    "canceled" => "[dim]⊘[/]",
-                    _ => "[dim]—[/]",
+                    "failed" => "[red]X[/]",
+                    "partiallySucceeded" => "[yellow]![/]",
+                    "canceled" => "[dim]-[/]",
+                    _ => "[dim]-[/]",
                 };
                 var pr = b.PrNumber is not null ? $" PR#{b.PrNumber}" : "";
-                var pending = b.IngestionStatus != "complete" ? " ⏳" : "";
+                var pending = b.IngestionStatus != "complete" ? " ..." : "";
                 var time = FormatTime(b.FinishTime);
                 return $"{resultIcon} {b.BuildId} {Markup.Escape(b.DefinitionName)} {time}{pr}{pending}";
             }).ToList();
@@ -476,14 +476,14 @@ public sealed class BuildBrowser
         string TaskIcon(string taskType)
         {
             if (!taskStatusMap.TryGetValue(taskType, out var t))
-                return "[yellow]⏳[/]";
+                return "[yellow]...[/]";
             return t.Status switch
             {
                 "complete" => "[green]✓[/]",
-                "running" => "[blue]⏳[/]",
-                "failed" => $"[yellow]✗ retry {t.Attempts}/5[/]",
-                "abandoned" => "[red]☠ abandoned[/]",
-                _ => "[yellow]⏳[/]",
+                "running" => "[blue]...[/]",
+                "failed" => $"[yellow]X retry {t.Attempts}/5[/]",
+                "abandoned" => "[red]abandoned[/]",
+                _ => "[yellow]...[/]",
             };
         }
         headerTable.AddRow("[bold]Data[/]",
@@ -520,7 +520,7 @@ public sealed class BuildBrowser
             if (failedJobNames.Count > 0)
             {
                 foreach (var jobName in failedJobNames.Take(15))
-                    AnsiConsole.MarkupLine($"  [red]✗[/] {Markup.Escape(jobName)}");
+                    AnsiConsole.MarkupLine($"  [red]X[/] {Markup.Escape(jobName)}");
             }
             else
             {
@@ -533,7 +533,7 @@ public sealed class BuildBrowser
         AnsiConsole.MarkupLine("[bold underline]Failed Tests[/]");
         if (testsStatus != "complete")
         {
-            AnsiConsole.MarkupLine("  [yellow]⏳ Tests not available yet[/]");
+            AnsiConsole.MarkupLine("  [yellow]Tests not available yet[/]");
         }
         else
         {
@@ -561,7 +561,7 @@ public sealed class BuildBrowser
                 if (title.Length > 70) title = title[..67] + "...";
                 if (error.Length > 60) error = error[..57] + "...";
                 error = error.ReplaceLineEndings(" ");
-                AnsiConsole.MarkupLine($"  [red]✗[/] {Markup.Escape(title)}");
+                AnsiConsole.MarkupLine($"  [red]X[/] {Markup.Escape(title)}");
                 if (!string.IsNullOrWhiteSpace(error))
                     AnsiConsole.MarkupLine($"    [dim]{Markup.Escape(error)}[/]");
             }
@@ -808,9 +808,9 @@ public sealed class BuildBrowser
             var resultIcon = b.Result switch
             {
                 "succeeded" => "[green]✓[/]",
-                "failed" => "[red]✗[/]",
-                "partiallySucceeded" => "[yellow]⚠[/]",
-                _ => "[dim]—[/]",
+                "failed" => "[red]X[/]",
+                "partiallySucceeded" => "[yellow]![/]",
+                _ => "[dim]-[/]",
             };
             var pr = b.PrNumber is not null ? $" PR#{b.PrNumber}" : "";
             var time = FormatTime(b.FinishTime);
@@ -1096,7 +1096,7 @@ public sealed class BuildBrowser
     /// </summary>
     private static string FormatTime(string? isoTime)
     {
-        if (isoTime is null) return "—";
+        if (isoTime is null) return "-";
         if (DateTime.TryParse(isoTime, null, System.Globalization.DateTimeStyles.RoundtripKind, out var dt))
             return dt.ToLocalTime().ToString("yyyy-MM-dd h:mm tt");
         return isoTime;
@@ -1105,19 +1105,19 @@ public sealed class BuildBrowser
     private static string FormatResult(string? result) => result switch
     {
         "succeeded" => "[green]✓ succeeded[/]",
-        "failed" => "[red]✗ failed[/]",
-        "partiallySucceeded" => "[yellow]⚠ partial[/]",
+        "failed" => "[red]X failed[/]",
+        "partiallySucceeded" => "[yellow]! partial[/]",
         "canceled" => "[dim]canceled[/]",
-        null => "[dim]—[/]",
+        null => "[dim]-[/]",
         _ => result,
     };
 
     private static string FormatResultPlain(string? result) => result switch
     {
         "succeeded" => "✓",
-        "failed" => "✗",
-        "partiallySucceeded" => "⚠",
-        _ => result ?? "—",
+        "failed" => "X",
+        "partiallySucceeded" => "!",
+        _ => result ?? "-",
     };
 
     // ── Page and Navigation Types ───────────────────────────────────

@@ -57,7 +57,7 @@ public sealed class TestBrowser
             var choices = tests.Select(t =>
             {
                 var title = t.TestName.Length > 70 ? t.TestName[..67] + "..." : t.TestName;
-                return $"[red]✗[/] {Markup.Escape(title)}  [dim]({t.FailCount} build(s))[/]";
+                return $"[red]X[/] {Markup.Escape(title)}  [dim]({t.FailCount} build(s))[/]";
             }).ToList();
 
             var selected = SelectWithEscape("Select a test:", choices,
@@ -238,9 +238,9 @@ public sealed class TestBrowser
             var icon = b.Result switch
             {
                 "succeeded" => "[green]✓[/]",
-                "failed" => "[red]✗[/]",
-                "partiallySucceeded" => "[yellow]⚠[/]",
-                _ => "[dim]—[/]",
+                "failed" => "[red]X[/]",
+                "partiallySucceeded" => "[yellow]![/]",
+                _ => "[dim]-[/]",
             };
             var pr = b.Pr is not null ? $" PR#{b.Pr}" : "";
             var time = FormatTime(b.Time);
@@ -510,7 +510,7 @@ public sealed class TestBrowser
 
     private static string FormatTime(string? isoTime)
     {
-        if (isoTime is null) return "—";
+        if (isoTime is null) return "-";
         if (DateTime.TryParse(isoTime, null, System.Globalization.DateTimeStyles.RoundtripKind, out var dt))
             return dt.ToLocalTime().ToString("yyyy-MM-dd h:mm tt");
         return isoTime;
