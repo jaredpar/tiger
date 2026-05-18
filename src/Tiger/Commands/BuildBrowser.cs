@@ -845,28 +845,42 @@ public sealed class BuildBrowser
         var selected = 0;
         var scrollOffset = 0;
         var visibleCount = Math.Min(pageSize, items.Count);
+        var startTop = Console.CursorTop;
 
         while (true)
         {
-            // Clear and render
-            AnsiConsole.Cursor.SetPosition(0, Console.CursorTop);
+            // Move cursor to start position and clear the render area
+            Console.SetCursorPosition(0, startTop);
 
             // Render visible items
+            var linesRendered = 0;
             for (var i = 0; i < visibleCount; i++)
             {
                 var idx = scrollOffset + i;
                 if (idx >= items.Count) break;
 
+                // Clear line then write
+                Console.Write(new string(' ', Console.WindowWidth));
+                Console.SetCursorPosition(0, Console.CursorTop);
                 if (idx == selected)
                     AnsiConsole.MarkupLine($"  [blue]>[/] [bold]{Markup.Escape(items[idx])}[/]");
                 else
                     AnsiConsole.MarkupLine($"    {Markup.Escape(items[idx])}");
+                linesRendered++;
             }
 
             if (items.Count > visibleCount)
+            {
+                Console.Write(new string(' ', Console.WindowWidth));
+                Console.SetCursorPosition(0, Console.CursorTop);
                 AnsiConsole.MarkupLine($"  [dim]({selected + 1}/{items.Count})[/]");
+                linesRendered++;
+            }
 
+            Console.Write(new string(' ', Console.WindowWidth));
+            Console.SetCursorPosition(0, Console.CursorTop);
             AnsiConsole.MarkupLine("[dim]  ↑↓ navigate  Enter select  Esc/B back[/]");
+            linesRendered++;
 
             var key = Console.ReadKey(true);
             switch (key.Key)
@@ -899,15 +913,6 @@ public sealed class BuildBrowser
                     if (extraKeys is not null && extraKeys.TryGetValue(key.Key, out var result2))
                         return result2;
                     break;
-            }
-
-            // Move cursor back up to re-render
-            var linesToClear = visibleCount + (items.Count > visibleCount ? 2 : 1);
-            for (var i = 0; i < linesToClear; i++)
-            {
-                AnsiConsole.Cursor.SetPosition(0, Console.CursorTop - 1);
-                AnsiConsole.Write(new string(' ', Console.WindowWidth));
-                AnsiConsole.Cursor.SetPosition(0, Console.CursorTop);
             }
         }
     }
