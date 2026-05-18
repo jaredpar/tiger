@@ -22,6 +22,9 @@ public sealed class DashboardCommand : AsyncCommand
         var config = tigerContext.Config;
         var serviceLog = new ServiceLog();
 
+        // Ensure skills are registered for Copilot CLI
+        SkillsRegistration.EnsureSkillsRegistered();
+
         Func<string, string, AzdoClient> clientFactory = (org, proj) =>
             AzdoClient.Create(tigerContext.AzureCredential, org, proj);
 
