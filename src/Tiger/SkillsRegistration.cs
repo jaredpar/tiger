@@ -15,7 +15,7 @@ public static class SkillsRegistration
 
     /// <summary>
     /// Ensures the skills directory next to the running application is listed
-    /// in ~/.copilot/settings.json under "skillsDirectories".
+    /// in ~/.copilot/settings.json under "skillDirectories".
     /// </summary>
     public static void EnsureSkillsRegistered()
     {
@@ -41,7 +41,7 @@ public static class SkillsRegistration
 
             var obj = root.AsObject();
 
-            if (obj.TryGetPropertyValue("skillsDirectories", out var existing) && existing is JsonArray array)
+            if (obj.TryGetPropertyValue("skillDirectories", out var existing) && existing is JsonArray array)
             {
                 // Check if already present
                 var alreadyPresent = array.Any(item =>
@@ -59,7 +59,7 @@ public static class SkillsRegistration
             }
             else
             {
-                obj["skillsDirectories"] = new JsonArray(skillsDir);
+                obj["skillDirectories"] = new JsonArray(skillsDir);
             }
 
             var options = new JsonSerializerOptions { WriteIndented = true };
