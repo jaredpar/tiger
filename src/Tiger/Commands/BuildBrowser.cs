@@ -14,6 +14,8 @@ public sealed class BuildBrowser
     private readonly List<Page> _history = [];
     private readonly BuildFilter _filter;
     private int _position = -1;
+    private int _selectedBuildIndex;
+    private List<BuildRow> _lastBuilds = [];
 
     public BuildBrowser(TigerDatabase db, Func<string, string, AzdoClient> clientFactory, string configDirectory)
     {
@@ -46,6 +48,9 @@ public sealed class BuildBrowser
             {
                 case NavAction.Push push:
                     Push(push.Page);
+                    break;
+                case NavAction.Replace replace:
+                    _history[_position] = replace.Page;
                     break;
                 case NavAction.Back:
                     if (_position > 0)
@@ -150,6 +155,8 @@ public sealed class BuildBrowser
                 return $"{resultIcon} {b.BuildId} {Markup.Escape(b.DefinitionName)} {time}{pr}{pending}";
             }).ToList();
 
+            _lastBuilds = builds;
+
             var selected = SelectWithEscape("Select a build:", choices,
                 extraKeys: new Dictionary<ConsoleKey, int> {
                     { ConsoleKey.E, -5 },
@@ -157,7 +164,8 @@ public sealed class BuildBrowser
                     { ConsoleKey.H, -3 },
                     { ConsoleKey.C, -4 },
                 },
-                useMarkup: true);
+                useMarkup: true,
+                startIndex: _selectedBuildIndex);
 
             if (selected == -5) // E pressed
             {
@@ -183,6 +191,7 @@ public sealed class BuildBrowser
             if (selected < 0)
                 return NavAction.Back.Instance;
 
+            _selectedBuildIndex = selected;
             var b2 = builds[selected];
             return new NavAction.Push(new BuildDetailPage(b2.Org, b2.Project, b2.BuildId));
         }
@@ -392,9 +401,10 @@ public sealed class BuildBrowser
     private static string? PromptResultFilter()
     {
         AnsiConsole.WriteLine();
-        var choices = new[] { "failed", "succeeded", "partiallySucceeded" };
+        var choices = new[] { "all", "failed", "succeeded", "partiallySucceeded" };
         var selected = SelectWithEscape("Select outcome:", choices.ToList(), pageSize: 5);
-        return selected >= 0 ? choices[selected] : null;
+        if (selected < 0) return null; // cancelled
+        return choices[selected] == "all" ? null : choices[selected];
     }
 
     /// <summary>
@@ -598,9 +608,14 @@ public sealed class BuildBrowser
 
         // Navigation keys
         var canForward = _position < _history.Count - 1;
+        var buildIndex = _lastBuilds.FindIndex(b => b.BuildId == page.BuildId && b.Org == page.Org && b.Project == page.Project);
+        var canNext = buildIndex >= 0 && buildIndex < _lastBuilds.Count - 1;
+        var canPrev = buildIndex > 0;
         AnsiConsole.MarkupLine("[bold]Navigation:[/]");
         AnsiConsole.MarkupLine("  [blue]T[/] Tests   [blue]J[/] Jobs   [blue]H[/] Helix   [blue]B[/] Back" +
-            (canForward ? "   [blue]F[/] Forward" : ""));
+            (canForward ? "   [blue]F[/] Forward" : "") +
+            (canNext ? "   [blue]N[/] Next" : "") +
+            (canPrev ? "   [blue]P[/] Prev" : ""));
 
         return ReadNavKey(page);
     }
@@ -955,6 +970,24 @@ public sealed class BuildBrowser
                 case ConsoleKey.H:
                     ShowHelixInfo(page);
                     return new NavAction.Push(page); // re-render after showing helix
+                case ConsoleKey.N:
+                    var nextIdx = _lastBuilds.FindIndex(b => b.BuildId == page.BuildId && b.Org == page.Org && b.Project == page.Project);
+                    if (nextIdx >= 0 && nextIdx < _lastBuilds.Count - 1)
+                    {
+                        var next = _lastBuilds[nextIdx + 1];
+                        _selectedBuildIndex = nextIdx + 1;
+                        return new NavAction.Replace(new BuildDetailPage(next.Org, next.Project, next.BuildId));
+                    }
+                    break;
+                case ConsoleKey.P:
+                    var prevIdx = _lastBuilds.FindIndex(b => b.BuildId == page.BuildId && b.Org == page.Org && b.Project == page.Project);
+                    if (prevIdx > 0)
+                    {
+                        var prev = _lastBuilds[prevIdx - 1];
+                        _selectedBuildIndex = prevIdx - 1;
+                        return new NavAction.Replace(new BuildDetailPage(prev.Org, prev.Project, prev.BuildId));
+                    }
+                    break;
                 case ConsoleKey.B:
                 case ConsoleKey.Escape:
                     return NavAction.Back.Instance;
@@ -1015,12 +1048,12 @@ public sealed class BuildBrowser
     /// Extra keys can be mapped to return specific negative values.
     /// </summary>
     private static int SelectWithEscape(string title, List<string> items, int pageSize = 20,
-        Dictionary<ConsoleKey, int>? extraKeys = null, bool useMarkup = false)
+        Dictionary<ConsoleKey, int>? extraKeys = null, bool useMarkup = false, int startIndex = 0)
     {
         if (items.Count == 0) return -1;
 
-        var selected = 0;
-        var scrollOffset = 0;
+        var selected = Math.Clamp(startIndex, 0, items.Count - 1);
+        var scrollOffset = Math.Max(0, selected - pageSize + 1);
         var visibleCount = Math.Min(pageSize, items.Count);
         var startTop = Console.CursorTop;
 
@@ -1270,6 +1303,7 @@ public sealed class BuildBrowser
     private abstract record NavAction
     {
         public record Push(Page Page) : NavAction;
+        public record Replace(Page Page) : NavAction;
         public sealed record Back : NavAction
         {
             public static readonly Back Instance = new();
