@@ -146,7 +146,8 @@ public sealed class BuildBrowser
                 };
                 var pr = b.PrNumber is not null ? $" PR#{b.PrNumber}" : "";
                 var pending = b.IngestionStatus != "complete" ? " ⏳" : "";
-                return $"{resultIcon} #{b.BuildId} {Markup.Escape(b.DefinitionName)} {Markup.Escape(b.BuildNumber)}{pr}{pending}";
+                var time = FormatTime(b.FinishTime);
+                return $"{resultIcon} {b.BuildId} {Markup.Escape(b.DefinitionName)} {time}{pr}{pending}";
             }).ToList();
 
             var selected = SelectWithEscape("Select a build:", choices,
@@ -227,7 +228,8 @@ public sealed class BuildBrowser
                        SELECT 1 FROM build_ingestion_tasks t
                        WHERE t.organization = b.organization AND t.project = b.project
                          AND t.build_id = b.build_id AND t.status != 'complete'
-                   ) THEN 'pending' ELSE 'complete' END as ingestion_status
+                   ) THEN 'pending' ELSE 'complete' END as ingestion_status,
+                   b.definition_id, b.repository_name
             FROM builds b
             {whereClause}
             ORDER BY b.finish_time DESC, b.ingested_at DESC
@@ -247,7 +249,9 @@ public sealed class BuildBrowser
                 reader.GetString(6),
                 reader.IsDBNull(7) ? null : reader.GetInt32(7),
                 reader.IsDBNull(8) ? null : reader.GetString(8),
-                reader.GetString(9)));
+                reader.GetString(9),
+                reader.GetInt32(10),
+                reader.IsDBNull(11) ? null : reader.GetString(11)));
         }
         return builds;
     }
@@ -417,7 +421,7 @@ public sealed class BuildBrowser
         // Header info from DB
         using var buildCmd = _db.Connection.CreateCommand();
         buildCmd.CommandText = """
-            SELECT build_number, definition_name, result, source_branch, pr_number, finish_time
+            SELECT build_number, definition_name, result, source_branch, pr_number, finish_time, repository_name
             FROM builds
             WHERE organization = @org AND project = @proj AND build_id = @buildId
             """;
@@ -439,6 +443,7 @@ public sealed class BuildBrowser
         var branch = reader.GetString(3);
         var prNumber = reader.IsDBNull(4) ? (int?)null : reader.GetInt32(4);
         var finishTime = reader.IsDBNull(5) ? null : reader.GetString(5);
+        var repoName = reader.IsDBNull(6) ? null : reader.GetString(6);
         reader.Close();
 
         var url = $"https://dev.azure.com/{Uri.EscapeDataString(page.Org)}/{Uri.EscapeDataString(page.Project)}/_build/results?buildId={page.BuildId}";
@@ -452,10 +457,17 @@ public sealed class BuildBrowser
         headerTable.AddRow("[bold]Build[/]", $"#{page.BuildId} — {defName} {buildNumber}");
         headerTable.AddRow("[bold]Result[/]", FormatResult(result));
         headerTable.AddRow("[bold]Branch[/]", branch);
-        if (prNumber is not null)
+        if (prNumber is not null && repoName is not null)
+        {
+            var prUrl = $"https://github.com/{repoName}/pull/{prNumber}";
+            headerTable.AddRow("[bold]PR[/]", $"[link={prUrl}]{prUrl}[/]");
+        }
+        else if (prNumber is not null)
+        {
             headerTable.AddRow("[bold]PR[/]", $"#{prNumber}");
+        }
         if (finishTime is not null)
-            headerTable.AddRow("[bold]Finished[/]", finishTime);
+            headerTable.AddRow("[bold]Finished[/]", FormatTime(finishTime));
         headerTable.AddRow("[bold]URL[/]", $"[link={url}]{url}[/]");
 
         // Ingestion status line: Timeline, Tests, Helix with status icons
@@ -753,7 +765,8 @@ public sealed class BuildBrowser
         using var cmd = _db.Connection.CreateCommand();
         cmd.CommandText = """
             SELECT DISTINCT b.organization, b.project, b.build_id, b.build_number,
-                   b.definition_name, b.result, b.source_branch, b.pr_number, b.finish_time
+                   b.definition_name, b.result, b.source_branch, b.pr_number, b.finish_time,
+                   b.definition_id, b.repository_name
             FROM test_results tr
             JOIN test_runs r ON tr.organization = r.organization AND tr.project = r.project AND tr.run_id = r.run_id
             JOIN builds b ON r.organization = b.organization AND r.project = b.project AND r.build_id = b.build_id
@@ -775,7 +788,10 @@ public sealed class BuildBrowser
                 reader.IsDBNull(5) ? null : reader.GetString(5),
                 reader.GetString(6),
                 reader.IsDBNull(7) ? null : reader.GetInt32(7),
-                reader.IsDBNull(8) ? null : reader.GetString(8)));
+                reader.IsDBNull(8) ? null : reader.GetString(8),
+                "complete",
+                reader.GetInt32(9),
+                reader.IsDBNull(10) ? null : reader.GetString(10)));
         }
         reader.Close();
 
@@ -797,8 +813,8 @@ public sealed class BuildBrowser
                 _ => "[dim]—[/]",
             };
             var pr = b.PrNumber is not null ? $" PR#{b.PrNumber}" : "";
-            var time = b.FinishTime ?? "";
-            return $"{resultIcon} #{b.BuildId} {Markup.Escape(b.DefinitionName)} {Markup.Escape(b.BuildNumber)}{pr} {time}";
+            var time = FormatTime(b.FinishTime);
+            return $"{resultIcon} {b.BuildId} {Markup.Escape(b.DefinitionName)} {time}{pr}";
         }).ToList();
 
         var selected = SelectWithEscape("Select a build:", choices, useMarkup: true);
@@ -1001,7 +1017,7 @@ public sealed class BuildBrowser
                 Console.SetCursorPosition(0, Console.CursorTop);
                 var text = useMarkup ? items[idx] : Markup.Escape(items[idx]);
                 if (idx == selected)
-                    AnsiConsole.MarkupLine($"  [blue]>[/] [bold]{text}[/]");
+                    AnsiConsole.MarkupLine(useMarkup ? $"  [blue]>[/] {text}" : $"  [blue]>[/] [bold]{text}[/]");
                 else
                     AnsiConsole.MarkupLine($"    {text}");
                 linesRendered++;
@@ -1073,6 +1089,17 @@ public sealed class BuildBrowser
         while (reader.Read())
             tasks.Add((reader.GetString(0), reader.GetString(1), reader.GetInt32(2)));
         return tasks;
+    }
+
+    /// <summary>
+    /// Formats an ISO time string to local YYYY-MM-DD HH:mm.
+    /// </summary>
+    private static string FormatTime(string? isoTime)
+    {
+        if (isoTime is null) return "—";
+        if (DateTime.TryParse(isoTime, null, System.Globalization.DateTimeStyles.RoundtripKind, out var dt))
+            return dt.ToLocalTime().ToString("yyyy-MM-dd h:mm tt");
+        return isoTime;
     }
 
     private static string FormatResult(string? result) => result switch
@@ -1228,5 +1255,6 @@ public sealed class BuildBrowser
     private record BuildRow(
         string Org, string Project, int BuildId, string BuildNumber,
         string DefinitionName, string? Result, string Branch,
-        int? PrNumber, string? FinishTime, string IngestionStatus = "pending");
+        int? PrNumber, string? FinishTime, string IngestionStatus = "pending",
+        int DefinitionId = 0, string? RepositoryName = null);
 }

@@ -197,7 +197,7 @@ public sealed class TestBrowser
         using var cmd = _db.Connection.CreateCommand();
         cmd.CommandText = """
             SELECT DISTINCT b.build_id, b.build_number, b.definition_name, b.result,
-                   b.source_branch, b.pr_number, b.finish_time
+                   b.source_branch, b.pr_number, b.finish_time, b.definition_id, b.repository_name
             FROM test_results tr
             JOIN test_runs r ON tr.organization = r.organization AND tr.project = r.project AND tr.run_id = r.run_id
             JOIN builds b ON r.organization = b.organization AND r.project = b.project AND r.build_id = b.build_id
@@ -210,7 +210,7 @@ public sealed class TestBrowser
         cmd.Parameters.AddWithValue("@proj", test.Project);
         cmd.Parameters.AddWithValue("@testName", test.TestName);
 
-        var builds = new List<(int Id, string Number, string Def, string? Result, string Branch, int? Pr, string? Time)>();
+        var builds = new List<(int Id, string Number, string Def, string? Result, string Branch, int? Pr, string? Time, int DefId, string? Repo)>();
         using var reader = cmd.ExecuteReader();
         while (reader.Read())
         {
@@ -219,7 +219,9 @@ public sealed class TestBrowser
                 reader.IsDBNull(3) ? null : reader.GetString(3),
                 reader.GetString(4),
                 reader.IsDBNull(5) ? null : reader.GetInt32(5),
-                reader.IsDBNull(6) ? null : reader.GetString(6)));
+                reader.IsDBNull(6) ? null : reader.GetString(6),
+                reader.GetInt32(7),
+                reader.IsDBNull(8) ? null : reader.GetString(8)));
         }
         reader.Close();
 
@@ -241,8 +243,8 @@ public sealed class TestBrowser
                 _ => "[dim]—[/]",
             };
             var pr = b.Pr is not null ? $" PR#{b.Pr}" : "";
-            var time = b.Time ?? "";
-            return $"{icon} #{b.Id} {Markup.Escape(b.Def)} {Markup.Escape(b.Number)}{pr} {time}";
+            var time = FormatTime(b.Time);
+            return $"{icon} {b.Id} {Markup.Escape(b.Def)} {time}{pr}";
         }).ToList();
 
         var selected = SelectWithEscape("Select a build:", choices, useMarkup: true);
@@ -458,7 +460,7 @@ public sealed class TestBrowser
                 Console.SetCursorPosition(0, Console.CursorTop);
                 var text = useMarkup ? items[idx] : Markup.Escape(items[idx]);
                 if (idx == selected)
-                    AnsiConsole.MarkupLine($"  [blue]>[/] [bold]{text}[/]");
+                    AnsiConsole.MarkupLine(useMarkup ? $"  [blue]>[/] {text}" : $"  [blue]>[/] [bold]{text}[/]");
                 else
                     AnsiConsole.MarkupLine($"    {text}");
             }
@@ -505,6 +507,14 @@ public sealed class TestBrowser
     }
 
     // ── Types ────────────────────────────────────────────────────────
+
+    private static string FormatTime(string? isoTime)
+    {
+        if (isoTime is null) return "—";
+        if (DateTime.TryParse(isoTime, null, System.Globalization.DateTimeStyles.RoundtripKind, out var dt))
+            return dt.ToLocalTime().ToString("yyyy-MM-dd h:mm tt");
+        return isoTime;
+    }
 
     private record TestRow(string TestName, int FailCount, string Org, string Project);
 
