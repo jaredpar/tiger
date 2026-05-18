@@ -452,6 +452,8 @@ public sealed class BuildBrowser
 
     private NavAction RenderBuildDetail(BuildDetailPage page)
     {
+        Console.SetCursorPosition(0, 0);
+
         // Header info from DB
         using var buildCmd = _db.Connection.CreateCommand();
         buildCmd.CommandText = """
@@ -605,7 +607,9 @@ public sealed class BuildBrowser
                 foreach (var group in failedTests.GroupBy(t => t.RunName))
                 {
                     AnsiConsole.MarkupLine($"  [bold yellow]{Markup.Escape(group.Key)}[/]");
-                    foreach (var test in group)
+                    var shown = 0;
+                    var total = group.Count();
+                    foreach (var test in group.Take(5))
                     {
                         var title = test.Title.Length > 68 ? test.Title[..65] + "..." : test.Title;
                         var error = test.Error;
@@ -614,7 +618,10 @@ public sealed class BuildBrowser
                         AnsiConsole.MarkupLine($"    [red]X[/] {Markup.Escape(title)}");
                         if (!string.IsNullOrWhiteSpace(error))
                             AnsiConsole.MarkupLine($"      [dim]{Markup.Escape(error)}[/]");
+                        shown++;
                     }
+                    if (total > shown)
+                        AnsiConsole.MarkupLine($"    [dim]... {total - shown} more failure(s), press T to see all[/]");
                 }
             }
         }
