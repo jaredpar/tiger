@@ -218,6 +218,13 @@ public sealed class BuildBrowser
             where.Add(isExact ? "CAST(b.build_id AS TEXT) = @bid" : "CAST(b.build_id AS TEXT) LIKE @bid");
             cmd.Parameters.AddWithValue("@bid", pattern);
         }
+        if (_filter.KindPattern is not null)
+        {
+            if (_filter.KindPattern.Equals("pr", StringComparison.OrdinalIgnoreCase))
+                where.Add("b.pr_number IS NOT NULL");
+            else if (_filter.KindPattern.Equals("ci", StringComparison.OrdinalIgnoreCase))
+                where.Add("b.pr_number IS NULL");
+        }
 
         var whereClause = where.Count > 0 ? "WHERE " + string.Join(" AND ", where) : "";
 
@@ -311,6 +318,7 @@ public sealed class BuildBrowser
         AnsiConsole.MarkupLine("  [blue]D[/] Filter by definition");
         AnsiConsole.MarkupLine("  [blue]I[/] Filter by build ID");
         AnsiConsole.MarkupLine("  [blue]O[/] Filter by outcome (failed, succeeded, partiallySucceeded)");
+        AnsiConsole.MarkupLine("  [blue]K[/] Filter by kind (pr, ci)");
         AnsiConsole.MarkupLine("  [blue]C[/] Clear all filters");
         AnsiConsole.MarkupLine("  [blue]Esc[/] Cancel");
 
@@ -328,6 +336,9 @@ public sealed class BuildBrowser
                 break;
             case ConsoleKey.O:
                 _filter.ResultPattern = PromptResultFilter();
+                break;
+            case ConsoleKey.K:
+                _filter.KindPattern = PromptKindFilter();
                 break;
             case ConsoleKey.C:
                 _filter.Clear();
@@ -386,6 +397,18 @@ public sealed class BuildBrowser
         return selected >= 0 ? choices[selected] : null;
     }
 
+    /// <summary>
+    /// Selection menu for kind filter. Returns null if cancelled.
+    /// </summary>
+    private static string? PromptKindFilter()
+    {
+        AnsiConsole.WriteLine();
+        var choices = new[] { "all", "pr", "ci" };
+        var selected = SelectWithEscape("Select build kind:", choices.ToList(), pageSize: 5);
+        if (selected < 0) return null; // cancelled
+        return choices[selected] == "all" ? null : choices[selected];
+    }
+
     private static void ShowFilterHelp()
     {
         AnsiConsole.Clear();
@@ -408,6 +431,7 @@ public sealed class BuildBrowser
         AnsiConsole.MarkupLine("  [blue]def:[/]     Definition/pipeline name");
         AnsiConsole.MarkupLine("  [blue]id:[/]      Build ID (e.g. 1423*, 142333)");
         AnsiConsole.MarkupLine("  [blue]result:[/]  Outcome (failed, succeeded, partiallySucceeded)");
+        AnsiConsole.MarkupLine("  [blue]kind:[/]    Build kind (pr, ci)");
         AnsiConsole.WriteLine();
         AnsiConsole.MarkupLine("[bold]Multiple filters combine with AND.[/]");
         AnsiConsole.MarkupLine("[dim]Press any key to continue...[/]");
@@ -1147,9 +1171,10 @@ public sealed class BuildBrowser
         public string? DefinitionPattern { get; set; }
         public string? ResultPattern { get; set; }
         public string? IdPattern { get; set; }
+        public string? KindPattern { get; set; }
 
         public bool IsActive => RepoPattern is not null || DefinitionPattern is not null
-            || ResultPattern is not null || IdPattern is not null;
+            || ResultPattern is not null || IdPattern is not null || KindPattern is not null;
 
         public void Clear()
         {
@@ -1157,6 +1182,7 @@ public sealed class BuildBrowser
             DefinitionPattern = null;
             ResultPattern = null;
             IdPattern = null;
+            KindPattern = null;
         }
 
         public static BuildFilter Load(string configDirectory)
@@ -1201,6 +1227,8 @@ public sealed class BuildBrowser
                     ResultPattern = part[7..];
                 else if (part.StartsWith("id:", StringComparison.OrdinalIgnoreCase))
                     IdPattern = part[3..];
+                else if (part.StartsWith("kind:", StringComparison.OrdinalIgnoreCase))
+                    KindPattern = part[5..];
             }
         }
 
@@ -1210,6 +1238,7 @@ public sealed class BuildBrowser
             if (RepoPattern is not null) parts.Add($"repo:{RepoPattern}");
             if (DefinitionPattern is not null) parts.Add($"def:{DefinitionPattern}");
             if (ResultPattern is not null) parts.Add($"result:{ResultPattern}");
+            if (KindPattern is not null) parts.Add($"kind:{KindPattern}");
             if (IdPattern is not null) parts.Add($"id:{IdPattern}");
             return parts.Count > 0 ? string.Join(" ", parts) : "(none)";
         }
