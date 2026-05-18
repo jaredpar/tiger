@@ -77,6 +77,7 @@ public sealed class BuildBrowser
         BuildDetailPage p => RenderBuildDetail(p),
         TestListPage p => RenderTestList(p),
         TestDetailPage p => RenderTestDetail(p),
+        TestBuildsPage p => RenderTestBuilds(p),
         JobListPage p => RenderJobList(p),
         _ => NavAction.Exit,
     };
@@ -619,14 +620,121 @@ public sealed class BuildBrowser
             new TestDetailPage(page.Org, page.Project, tests[selected].Title));
     }
 
-    // ── Test Detail (across builds) ─────────────────────────────────
+    // ── Test Detail (info + error) ─────────────────────────────────
 
     private NavAction RenderTestDetail(TestDetailPage page)
     {
-        var shortTitle = page.TestName.Length > 60 ? page.TestName[..57] + "..." : page.TestName;
-        AnsiConsole.MarkupLine($"[bold underline]Test Failure History[/]");
-        AnsiConsole.MarkupLine($"[bold]{Markup.Escape(shortTitle)}[/]");
+        AnsiConsole.MarkupLine("[bold underline]Test Failure Detail[/]");
+        AnsiConsole.MarkupLine($"[bold]{Markup.Escape(page.TestName)}[/]");
         AnsiConsole.MarkupLine($"[dim]{Markup.Escape(page.Org)}/{Markup.Escape(page.Project)}[/]");
+        AnsiConsole.WriteLine();
+
+        // Get the most recent failure for this test to show error/stack/helix
+        using var cmd = _db.Connection.CreateCommand();
+        cmd.CommandText = """
+            SELECT tr.error_message, tr.stack_trace, tr.helix_job_name, tr.helix_work_item_name,
+                   r.build_id, r.run_name
+            FROM test_results tr
+            JOIN test_runs r ON tr.organization = r.organization AND tr.project = r.project AND tr.run_id = r.run_id
+            WHERE tr.organization = @org AND tr.project = @proj
+                  AND tr.test_case_title = @testName AND tr.outcome = 'Failed'
+            ORDER BY r.build_id DESC
+            LIMIT 1
+            """;
+        cmd.Parameters.AddWithValue("@org", page.Org);
+        cmd.Parameters.AddWithValue("@proj", page.Project);
+        cmd.Parameters.AddWithValue("@testName", page.TestName);
+
+        using var reader = cmd.ExecuteReader();
+        if (reader.Read())
+        {
+            var errorMessage = reader.IsDBNull(0) ? null : reader.GetString(0);
+            var stackTrace = reader.IsDBNull(1) ? null : reader.GetString(1);
+            var helixJob = reader.IsDBNull(2) ? null : reader.GetString(2);
+            var helixWorkItem = reader.IsDBNull(3) ? null : reader.GetString(3);
+            var buildId = reader.GetInt32(4);
+            var runName = reader.GetString(5);
+
+            AnsiConsole.MarkupLine($"[bold]Last failed in:[/] Build #{buildId}, {Markup.Escape(runName)}");
+            AnsiConsole.WriteLine();
+
+            if (errorMessage is not null)
+            {
+                AnsiConsole.MarkupLine("[bold]Error:[/]");
+                // Show up to 5 lines of the error
+                var errorLines = errorMessage.ReplaceLineEndings("\n").Split('\n');
+                foreach (var line in errorLines.Take(5))
+                    AnsiConsole.MarkupLine($"  [red]{Markup.Escape(line)}[/]");
+                if (errorLines.Length > 5)
+                    AnsiConsole.MarkupLine($"  [dim]... ({errorLines.Length - 5} more lines)[/]");
+                AnsiConsole.WriteLine();
+            }
+
+            if (stackTrace is not null)
+            {
+                AnsiConsole.MarkupLine("[bold]Stack Trace:[/]");
+                var stackLines = stackTrace.ReplaceLineEndings("\n").Split('\n');
+                foreach (var line in stackLines.Take(10))
+                    AnsiConsole.MarkupLine($"  [dim]{Markup.Escape(line)}[/]");
+                if (stackLines.Length > 10)
+                    AnsiConsole.MarkupLine($"  [dim]... ({stackLines.Length - 10} more lines)[/]");
+                AnsiConsole.WriteLine();
+            }
+
+            if (helixJob is not null)
+            {
+                AnsiConsole.MarkupLine($"[bold]Helix Job:[/] {Markup.Escape(helixJob)}");
+                if (helixWorkItem is not null)
+                {
+                    AnsiConsole.MarkupLine($"[bold]Helix Work Item:[/] {Markup.Escape(helixWorkItem)}");
+                    var consoleUrl = $"https://helix.dot.net/api/2019-06-17/jobs/{Uri.EscapeDataString(helixJob)}/workitems/{Uri.EscapeDataString(helixWorkItem)}/console";
+                    AnsiConsole.MarkupLine($"[bold]Console Log:[/] [link={consoleUrl}]{consoleUrl}[/]");
+                }
+                AnsiConsole.WriteLine();
+            }
+        }
+        reader.Close();
+
+        // Count total builds with this failure
+        using var countCmd = _db.Connection.CreateCommand();
+        countCmd.CommandText = """
+            SELECT COUNT(DISTINCT r.build_id)
+            FROM test_results tr
+            JOIN test_runs r ON tr.organization = r.organization AND tr.project = r.project AND tr.run_id = r.run_id
+            WHERE tr.organization = @org AND tr.project = @proj
+                  AND tr.test_case_title = @testName AND tr.outcome = 'Failed'
+            """;
+        countCmd.Parameters.AddWithValue("@org", page.Org);
+        countCmd.Parameters.AddWithValue("@proj", page.Project);
+        countCmd.Parameters.AddWithValue("@testName", page.TestName);
+        var buildCount = Convert.ToInt32(countCmd.ExecuteScalar());
+
+        AnsiConsole.MarkupLine($"[bold]Failed in {buildCount} build(s)[/] in search range");
+        AnsiConsole.WriteLine();
+
+        AnsiConsole.MarkupLine("[bold]Navigation:[/]");
+        AnsiConsole.MarkupLine("  [blue]B[/] View builds with this failure   [blue]Esc[/] Back");
+
+        while (true)
+        {
+            var key = Console.ReadKey(true);
+            switch (key.Key)
+            {
+                case ConsoleKey.B:
+                    return new NavAction.Push(new TestBuildsPage(page.Org, page.Project, page.TestName));
+                case ConsoleKey.Escape:
+                    return NavAction.Back.Instance;
+            }
+        }
+    }
+
+    // ── Test Builds (builds with this failure) ──────────────────────
+
+    private NavAction RenderTestBuilds(TestBuildsPage page)
+    {
+        var shortTitle = page.TestName.Length > 60 ? page.TestName[..57] + "..." : page.TestName;
+        AnsiConsole.MarkupLine($"[bold underline]Builds with failure[/]");
+        AnsiConsole.MarkupLine($"[bold]{Markup.Escape(shortTitle)}[/]");
         AnsiConsole.WriteLine();
 
         var builds = new List<BuildRow>();
@@ -667,18 +775,21 @@ public sealed class BuildBrowser
             return NavAction.Back.Instance;
         }
 
-        AnsiConsole.MarkupLine($"[bold]Failed in {builds.Count} build(s):[/]");
-        AnsiConsole.WriteLine();
-
         var choices = builds.Select(b =>
         {
-            var result = FormatResultPlain(b.Result);
+            var resultIcon = b.Result switch
+            {
+                "succeeded" => "[green]✓[/]",
+                "failed" => "[red]✗[/]",
+                "partiallySucceeded" => "[yellow]⚠[/]",
+                _ => "[dim]—[/]",
+            };
             var pr = b.PrNumber is not null ? $" PR#{b.PrNumber}" : "";
             var time = b.FinishTime ?? "";
-            return $"#{b.BuildId} {b.DefinitionName} {b.BuildNumber}{pr} [{result}] {time}";
+            return $"{resultIcon} #{b.BuildId} {Markup.Escape(b.DefinitionName)} {Markup.Escape(b.BuildNumber)}{pr} {time}";
         }).ToList();
 
-        var selected = SelectWithEscape("Select a build to view details:", choices);
+        var selected = SelectWithEscape("Select a build:", choices, useMarkup: true);
 
         if (selected < 0)
             return NavAction.Back.Instance;
@@ -691,9 +802,6 @@ public sealed class BuildBrowser
 
     private NavAction RenderJobList(JobListPage page)
     {
-        AnsiConsole.MarkupLine($"[bold underline]Failed Jobs — Build #{page.BuildId}[/]");
-        AnsiConsole.WriteLine();
-
         // Read timeline issues from DB
         using var cmd = _db.Connection.CreateCommand();
         cmd.CommandText = """
@@ -706,7 +814,6 @@ public sealed class BuildBrowser
         cmd.Parameters.AddWithValue("@proj", page.Project);
         cmd.Parameters.AddWithValue("@buildId", page.BuildId);
 
-        // Group by job (parent_name for task issues, record_name for job-level issues)
         var jobIssues = new Dictionary<string, List<(string Type, string Message)>>();
         using var reader = cmd.ExecuteReader();
         while (reader.Read())
@@ -717,7 +824,6 @@ public sealed class BuildBrowser
             var issueType = reader.GetString(4);
             var message = reader.GetString(5);
 
-            // Use parent_name as the job key for Task records, record_name for Job records
             var jobName = recordType == "Job" ? recordName : (parentName ?? recordName);
 
             if (!jobIssues.TryGetValue(jobName, out var list))
@@ -737,35 +843,46 @@ public sealed class BuildBrowser
             return NavAction.Back.Instance;
         }
 
-        foreach (var (jobName, issues) in jobIssues)
-        {
-            var errorCount = issues.Count(i => i.Type == "error");
-            var warnCount = issues.Count(i => i.Type == "warning");
-            var summary = new List<string>();
-            if (errorCount > 0) summary.Add($"[red]{errorCount} error(s)[/]");
-            if (warnCount > 0) summary.Add($"[yellow]{warnCount} warning(s)[/]");
-            AnsiConsole.MarkupLine($"[bold]{Markup.Escape(jobName)}[/]  {string.Join(" ", summary)}");
+        var truncate = true;
 
-            foreach (var (type, message) in issues.Take(10))
-            {
-                var icon = type == "error" ? "[red]error[/]" : "[yellow]warn[/]";
-                var msg = message.ReplaceLineEndings(" ");
-                if (msg.Length > 120) msg = msg[..117] + "...";
-                AnsiConsole.MarkupLine($"  {icon}: {Markup.Escape(msg)}");
-            }
-
-            if (issues.Count > 10)
-                AnsiConsole.MarkupLine($"  [dim]... and {issues.Count - 10} more[/]");
-
-            AnsiConsole.WriteLine();
-        }
-
-        AnsiConsole.MarkupLine("[dim]Press Esc/B to go back...[/]");
         while (true)
         {
+            AnsiConsole.Clear();
+            AnsiConsole.MarkupLine($"[bold underline]Failed Jobs — Build #{page.BuildId}[/]");
+            AnsiConsole.MarkupLine(truncate
+                ? "[dim]T full messages  Esc/B back[/]"
+                : "[dim]T truncate  Esc/B back[/]");
+            AnsiConsole.WriteLine();
+
+            foreach (var (jobName, issues) in jobIssues)
+            {
+                var errorCount = issues.Count(i => i.Type == "error");
+                var warnCount = issues.Count(i => i.Type == "warning");
+                var summary = new List<string>();
+                if (errorCount > 0) summary.Add($"[red]{errorCount} error(s)[/]");
+                if (warnCount > 0) summary.Add($"[yellow]{warnCount} warning(s)[/]");
+                AnsiConsole.MarkupLine($"[bold]{Markup.Escape(jobName)}[/]  {string.Join(" ", summary)}");
+
+                foreach (var (type, message) in issues.Take(10))
+                {
+                    var icon = type == "error" ? "[red]error[/]" : "[yellow]warn[/]";
+                    var msg = message.ReplaceLineEndings(" ");
+                    if (truncate && msg.Length > 120)
+                        msg = msg[..117] + "...";
+                    AnsiConsole.MarkupLine($"  {icon}: {Markup.Escape(msg)}");
+                }
+
+                if (issues.Count > 10)
+                    AnsiConsole.MarkupLine($"  [dim]... and {issues.Count - 10} more[/]");
+
+                AnsiConsole.WriteLine();
+            }
+
             var key = Console.ReadKey(true);
             if (key.Key is ConsoleKey.Escape or ConsoleKey.B)
                 return NavAction.Back.Instance;
+            if (key.Key == ConsoleKey.T)
+                truncate = !truncate;
         }
     }
 
@@ -971,6 +1088,7 @@ public sealed class BuildBrowser
     private record BuildDetailPage(string Org, string Project, int BuildId) : Page;
     private record TestListPage(string Org, string Project, int BuildId) : Page;
     private record TestDetailPage(string Org, string Project, string TestName) : Page;
+    private record TestBuildsPage(string Org, string Project, string TestName) : Page;
     private record JobListPage(string Org, string Project, int BuildId) : Page;
 
     /// <summary>
