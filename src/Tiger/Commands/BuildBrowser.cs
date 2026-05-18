@@ -135,10 +135,17 @@ public sealed class BuildBrowser
 
             var choices = builds.Select(b =>
             {
-                var result = FormatResultPlain(b.Result);
+                var resultIcon = b.Result switch
+                {
+                    "succeeded" => "[green]✓[/]",
+                    "failed" => "[red]✗[/]",
+                    "partiallySucceeded" => "[yellow]⚠[/]",
+                    "canceled" => "[dim]⊘[/]",
+                    _ => "[dim]—[/]",
+                };
                 var pr = b.PrNumber is not null ? $" PR#{b.PrNumber}" : "";
                 var pending = b.IngestionStatus != "complete" ? " ⏳" : "";
-                return $"#{b.BuildId} {b.DefinitionName} {b.BuildNumber}{pr} {result}{pending}";
+                return $"{resultIcon} #{b.BuildId} {Markup.Escape(b.DefinitionName)} {Markup.Escape(b.BuildNumber)}{pr}{pending}";
             }).ToList();
 
             var selected = SelectWithEscape("Select a build:", choices,
@@ -147,7 +154,8 @@ public sealed class BuildBrowser
                     { ConsoleKey.F, -2 },
                     { ConsoleKey.H, -3 },
                     { ConsoleKey.C, -4 },
-                });
+                },
+                useMarkup: true);
 
             if (selected == -5) // E pressed
             {
@@ -838,7 +846,7 @@ public sealed class BuildBrowser
     /// Extra keys can be mapped to return specific negative values.
     /// </summary>
     private static int SelectWithEscape(string title, List<string> items, int pageSize = 20,
-        Dictionary<ConsoleKey, int>? extraKeys = null)
+        Dictionary<ConsoleKey, int>? extraKeys = null, bool useMarkup = false)
     {
         if (items.Count == 0) return -1;
 
@@ -862,10 +870,11 @@ public sealed class BuildBrowser
                 // Clear line then write
                 Console.Write(new string(' ', Console.WindowWidth));
                 Console.SetCursorPosition(0, Console.CursorTop);
+                var text = useMarkup ? items[idx] : Markup.Escape(items[idx]);
                 if (idx == selected)
-                    AnsiConsole.MarkupLine($"  [blue]>[/] [bold]{Markup.Escape(items[idx])}[/]");
+                    AnsiConsole.MarkupLine($"  [blue]>[/] [bold]{text}[/]");
                 else
-                    AnsiConsole.MarkupLine($"    {Markup.Escape(items[idx])}");
+                    AnsiConsole.MarkupLine($"    {text}");
                 linesRendered++;
             }
 
