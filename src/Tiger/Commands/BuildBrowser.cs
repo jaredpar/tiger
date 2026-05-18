@@ -573,35 +573,50 @@ public sealed class BuildBrowser
         {
             using var testsCmd = _db.Connection.CreateCommand();
             testsCmd.CommandText = """
-                SELECT tr.test_case_title, tr.error_message
+                SELECT r.run_name, tr.test_case_title, tr.error_message
                 FROM test_results tr
                 JOIN test_runs r ON tr.organization = r.organization AND tr.project = r.project AND tr.run_id = r.run_id
                 WHERE r.organization = @org AND r.project = @proj AND r.build_id = @buildId
                       AND tr.outcome = 'Failed'
-                ORDER BY tr.test_case_title
-                LIMIT 20
+                ORDER BY r.run_name, tr.test_case_title
+                LIMIT 50
                 """;
             testsCmd.Parameters.AddWithValue("@org", page.Org);
             testsCmd.Parameters.AddWithValue("@proj", page.Project);
             testsCmd.Parameters.AddWithValue("@buildId", page.BuildId);
 
             using var testsReader = testsCmd.ExecuteReader();
-            var hasFailedTests = false;
+            var failedTests = new List<(string RunName, string Title, string Error)>();
             while (testsReader.Read())
             {
-                hasFailedTests = true;
-                var title = testsReader.GetString(0);
-                var error = testsReader.IsDBNull(1) ? "" : testsReader.GetString(1);
-                if (title.Length > 70) title = title[..67] + "...";
-                if (error.Length > 60) error = error[..57] + "...";
-                error = error.ReplaceLineEndings(" ");
-                AnsiConsole.MarkupLine($"  [red]X[/] {Markup.Escape(title)}");
-                if (!string.IsNullOrWhiteSpace(error))
-                    AnsiConsole.MarkupLine($"    [dim]{Markup.Escape(error)}[/]");
+                var runName = testsReader.GetString(0);
+                var title = testsReader.GetString(1);
+                var error = testsReader.IsDBNull(2) ? "" : testsReader.GetString(2);
+                failedTests.Add((runName, title, error));
             }
-            if (!hasFailedTests)
-                AnsiConsole.MarkupLine("  [green]All tests passed[/]");
             testsReader.Close();
+
+            if (failedTests.Count == 0)
+            {
+                AnsiConsole.MarkupLine("  [green]All tests passed[/]");
+            }
+            else
+            {
+                foreach (var group in failedTests.GroupBy(t => t.RunName))
+                {
+                    AnsiConsole.MarkupLine($"  [bold yellow]{Markup.Escape(group.Key)}[/]");
+                    foreach (var test in group)
+                    {
+                        var title = test.Title.Length > 68 ? test.Title[..65] + "..." : test.Title;
+                        var error = test.Error;
+                        if (error.Length > 60) error = error[..57] + "...";
+                        error = error.ReplaceLineEndings(" ");
+                        AnsiConsole.MarkupLine($"    [red]X[/] {Markup.Escape(title)}");
+                        if (!string.IsNullOrWhiteSpace(error))
+                            AnsiConsole.MarkupLine($"      [dim]{Markup.Escape(error)}[/]");
+                    }
+                }
+            }
         }
 
         AnsiConsole.WriteLine();
@@ -628,16 +643,15 @@ public sealed class BuildBrowser
         AnsiConsole.MarkupLine("[dim]Select a test to see its failure history, or Escape to go back[/]");
         AnsiConsole.WriteLine();
 
-        var tests = new List<(string Title, int Count)>();
+        var tests = new List<(string RunName, string Title)>();
         using var cmd = _db.Connection.CreateCommand();
         cmd.CommandText = """
-            SELECT tr.test_case_title, COUNT(*) as cnt
+            SELECT r.run_name, tr.test_case_title
             FROM test_results tr
             JOIN test_runs r ON tr.organization = r.organization AND tr.project = r.project AND tr.run_id = r.run_id
             WHERE r.organization = @org AND r.project = @proj AND r.build_id = @buildId
                   AND tr.outcome = 'Failed'
-            GROUP BY tr.test_case_title
-            ORDER BY tr.test_case_title
+            ORDER BY r.run_name, tr.test_case_title
             """;
         cmd.Parameters.AddWithValue("@org", page.Org);
         cmd.Parameters.AddWithValue("@proj", page.Project);
@@ -645,7 +659,7 @@ public sealed class BuildBrowser
 
         using var reader = cmd.ExecuteReader();
         while (reader.Read())
-            tests.Add((reader.GetString(0), reader.GetInt32(1)));
+            tests.Add((reader.GetString(0), reader.GetString(1)));
         reader.Close();
 
         if (tests.Count == 0)
@@ -656,19 +670,33 @@ public sealed class BuildBrowser
             return NavAction.Back.Instance;
         }
 
-        var choices = tests.Select(t =>
+        // Build grouped display: run name headers are non-selectable, tests are selectable
+        var choices = new List<string>();
+        var selectableIndices = new List<int>(); // maps choice index → tests list index
+        var grouped = tests.Select((t, i) => (t, i)).GroupBy(x => x.t.RunName);
+        foreach (var group in grouped)
         {
-            var title = t.Title.Length > 80 ? t.Title[..77] + "..." : t.Title;
-            return title;
-        }).ToList();
+            choices.Add($"[bold yellow]{Markup.Escape(group.Key)}[/]");
+            selectableIndices.Add(-1); // header, not selectable
 
-        var selected = SelectWithEscape($"{tests.Count} failed test(s):", choices);
+            foreach (var (test, idx) in group)
+            {
+                var title = test.Title.Length > 76 ? test.Title[..73] + "..." : test.Title;
+                choices.Add($"  [red]X[/] {Markup.Escape(title)}");
+                selectableIndices.Add(idx);
+            }
+        }
+
+        var totalFailed = tests.Select(t => t.Title).Distinct().Count();
+        var selected = SelectWithEscape($"{totalFailed} failed test(s) across {grouped.Count()} run(s):",
+            choices, useMarkup: true, skipIndices: selectableIndices.Select((v, i) => (v, i)).Where(x => x.v == -1).Select(x => x.i).ToHashSet());
 
         if (selected < 0)
             return NavAction.Back.Instance;
 
+        var testTitle = tests[selectableIndices[selected]].Title;
         return new NavAction.Push(
-            new TestDetailPage(page.Org, page.Project, tests[selected].Title));
+            new TestDetailPage(page.Org, page.Project, testTitle));
     }
 
     // ── Test Detail (info + error) ─────────────────────────────────
@@ -1048,11 +1076,24 @@ public sealed class BuildBrowser
     /// Extra keys can be mapped to return specific negative values.
     /// </summary>
     private static int SelectWithEscape(string title, List<string> items, int pageSize = 20,
-        Dictionary<ConsoleKey, int>? extraKeys = null, bool useMarkup = false, int startIndex = 0)
+        Dictionary<ConsoleKey, int>? extraKeys = null, bool useMarkup = false, int startIndex = 0,
+        HashSet<int>? skipIndices = null)
     {
         if (items.Count == 0) return -1;
 
         var selected = Math.Clamp(startIndex, 0, items.Count - 1);
+        // If starting on a skipped index, move to next selectable
+        if (skipIndices is not null)
+        {
+            while (selected < items.Count && skipIndices.Contains(selected))
+                selected++;
+            if (selected >= items.Count)
+            {
+                selected = Math.Clamp(startIndex, 0, items.Count - 1);
+                while (selected > 0 && skipIndices.Contains(selected))
+                    selected--;
+            }
+        }
         var scrollOffset = Math.Max(0, selected - pageSize + 1);
         var visibleCount = Math.Min(pageSize, items.Count);
         var startTop = Console.CursorTop;
@@ -1100,6 +1141,10 @@ public sealed class BuildBrowser
                     if (selected > 0)
                     {
                         selected--;
+                        while (selected > 0 && skipIndices is not null && skipIndices.Contains(selected))
+                            selected--;
+                        if (skipIndices is not null && skipIndices.Contains(selected))
+                            selected++; // can't go past first selectable
                         if (selected < scrollOffset)
                             scrollOffset = selected;
                     }
@@ -1108,6 +1153,10 @@ public sealed class BuildBrowser
                     if (selected < items.Count - 1)
                     {
                         selected++;
+                        while (selected < items.Count - 1 && skipIndices is not null && skipIndices.Contains(selected))
+                            selected++;
+                        if (skipIndices is not null && skipIndices.Contains(selected))
+                            selected--; // can't go past last selectable
                         if (selected >= scrollOffset + visibleCount)
                             scrollOffset = selected - visibleCount + 1;
                     }
