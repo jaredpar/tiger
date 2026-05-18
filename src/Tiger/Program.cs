@@ -1,5 +1,9 @@
+using Spectre.Console;
 using Spectre.Console.Cli;
 using Tiger.Commands;
+
+// Warn about missing external tools
+CheckRequiredTools();
 
 // Running `tiger` with no arguments starts the interactive dashboard
 var app = new CommandApp<DashboardCommand>();
@@ -69,3 +73,49 @@ app.Configure(config =>
 
 return await app.RunAsync(args);
 
+static void CheckRequiredTools()
+{
+    var missing = new List<string>();
+    foreach (var tool in new[] { "sqlite3", "gh" })
+    {
+        if (!IsOnPath(tool))
+        {
+            missing.Add(tool);
+        }
+    }
+
+    if (missing.Count > 0)
+    {
+        AnsiConsole.MarkupLine($"[yellow]Warning:[/] Required tools not found on PATH: [bold]{string.Join(", ", missing)}[/]");
+        AnsiConsole.MarkupLine("[yellow]Some features may not work correctly.[/]");
+    }
+}
+
+static bool IsOnPath(string tool)
+{
+    var pathVar = Environment.GetEnvironmentVariable("PATH") ?? "";
+    var separator = OperatingSystem.IsWindows() ? ';' : ':';
+    var extensions = OperatingSystem.IsWindows()
+        ? new[] { ".exe", ".cmd", ".bat" }
+        : Array.Empty<string>();
+
+    foreach (var dir in pathVar.Split(separator, StringSplitOptions.RemoveEmptyEntries))
+    {
+        // Check without extension (works on Unix, and for extensionless files on Windows)
+        if (File.Exists(Path.Combine(dir, tool)))
+        {
+            return true;
+        }
+
+        // On Windows, check common executable extensions
+        foreach (var ext in extensions)
+        {
+            if (File.Exists(Path.Combine(dir, tool + ext)))
+            {
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
