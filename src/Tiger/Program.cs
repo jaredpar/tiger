@@ -1,9 +1,14 @@
 using Spectre.Console;
 using Spectre.Console.Cli;
+using Tiger;
 using Tiger.Commands;
 
 // Warn about missing external tools
 CheckRequiredTools();
+
+// Check for outdated database schema
+if (!CheckDatabaseSchema())
+    return 0;
 
 // Running `tiger` with no arguments starts the interactive dashboard
 var app = new CommandApp<DashboardCommand>();
@@ -118,4 +123,38 @@ static bool IsOnPath(string tool)
     }
 
     return false;
+}
+
+/// <summary>
+/// Checks if the database schema is outdated and prompts to delete if so.
+/// Returns true to continue startup, false to abort.
+/// </summary>
+static bool CheckDatabaseSchema()
+{
+    var configDir = TigerUtils.GetConfigDirectory();
+    var dbPath = Path.Combine(configDir, "tiger.db");
+
+    if (!TigerDatabase.IsOutdated(dbPath))
+        return true;
+
+    var existingVersion = TigerDatabase.GetExistingSchemaVersion(dbPath);
+    AnsiConsole.MarkupLine($"[yellow]Warning:[/] Database schema is outdated (v{existingVersion} → v{TigerDatabase.CurrentSchemaVersion}).");
+    AnsiConsole.MarkupLine("[yellow]The database must be deleted and rebuilt from scratch.[/]");
+
+    if (!AnsiConsole.Confirm("Delete database and repopulate?", defaultValue: true))
+    {
+        AnsiConsole.MarkupLine("[dim]Aborted. Exiting.[/]");
+        return false;
+    }
+
+    // Delete the DB file (and WAL/SHM files if present)
+    foreach (var suffix in new[] { "", "-wal", "-shm" })
+    {
+        var file = dbPath + suffix;
+        if (File.Exists(file))
+            File.Delete(file);
+    }
+
+    AnsiConsole.MarkupLine("[green]Database deleted. It will be recreated on next use.[/]");
+    return true;
 }

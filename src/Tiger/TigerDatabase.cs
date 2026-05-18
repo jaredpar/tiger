@@ -46,6 +46,37 @@ public sealed class TigerDatabase : IDisposable
         return db;
     }
 
+    /// <summary>
+    /// Checks the schema version of an existing database file.
+    /// Returns null if the file doesn't exist, or the version number if it does.
+    /// </summary>
+    public static int? GetExistingSchemaVersion(string databasePath)
+    {
+        if (!File.Exists(databasePath))
+            return null;
+
+        var connectionString = new SqliteConnectionStringBuilder
+        {
+            DataSource = databasePath,
+            Mode = SqliteOpenMode.ReadOnly,
+        }.ToString();
+
+        using var connection = new SqliteConnection(connectionString);
+        connection.Open();
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = "PRAGMA user_version;";
+        return Convert.ToInt32(cmd.ExecuteScalar());
+    }
+
+    /// <summary>
+    /// Returns true if the database file exists and has an outdated schema.
+    /// </summary>
+    public static bool IsOutdated(string databasePath)
+    {
+        var version = GetExistingSchemaVersion(databasePath);
+        return version is not null && version != CurrentSchemaVersion;
+    }
+
     private void EnsureSchema()
     {
         var version = GetSchemaVersion();
