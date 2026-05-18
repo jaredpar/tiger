@@ -658,40 +658,52 @@ public sealed class BuildBrowser
             AnsiConsole.MarkupLine($"[bold]Last failed in:[/] Build #{buildId}, {Markup.Escape(runName)}");
             AnsiConsole.WriteLine();
 
-            if (errorMessage is not null)
+            AnsiConsole.MarkupLine("[bold]Error:[/]");
+            if (!string.IsNullOrWhiteSpace(errorMessage))
             {
-                AnsiConsole.MarkupLine("[bold]Error:[/]");
-                // Show up to 5 lines of the error
                 var errorLines = errorMessage.ReplaceLineEndings("\n").Split('\n');
                 foreach (var line in errorLines.Take(5))
                     AnsiConsole.MarkupLine($"  [red]{Markup.Escape(line)}[/]");
                 if (errorLines.Length > 5)
                     AnsiConsole.MarkupLine($"  [dim]... ({errorLines.Length - 5} more lines)[/]");
-                AnsiConsole.WriteLine();
             }
-
-            if (stackTrace is not null)
+            else
             {
-                AnsiConsole.MarkupLine("[bold]Stack Trace:[/]");
+                AnsiConsole.MarkupLine("  [dim]No error message available[/]");
+            }
+            AnsiConsole.WriteLine();
+
+            AnsiConsole.MarkupLine("[bold]Stack Trace:[/]");
+            if (!string.IsNullOrWhiteSpace(stackTrace))
+            {
                 var stackLines = stackTrace.ReplaceLineEndings("\n").Split('\n');
                 foreach (var line in stackLines.Take(10))
                     AnsiConsole.MarkupLine($"  [dim]{Markup.Escape(line)}[/]");
                 if (stackLines.Length > 10)
                     AnsiConsole.MarkupLine($"  [dim]... ({stackLines.Length - 10} more lines)[/]");
-                AnsiConsole.WriteLine();
             }
+            else
+            {
+                AnsiConsole.MarkupLine("  [dim]No stack trace available[/]");
+            }
+            AnsiConsole.WriteLine();
 
+            AnsiConsole.MarkupLine("[bold]Helix:[/]");
             if (helixJob is not null)
             {
-                AnsiConsole.MarkupLine($"[bold]Helix Job:[/] {Markup.Escape(helixJob)}");
+                AnsiConsole.MarkupLine($"  [bold]Job:[/] {Markup.Escape(helixJob)}");
                 if (helixWorkItem is not null)
                 {
-                    AnsiConsole.MarkupLine($"[bold]Helix Work Item:[/] {Markup.Escape(helixWorkItem)}");
+                    AnsiConsole.MarkupLine($"  [bold]Work Item:[/] {Markup.Escape(helixWorkItem)}");
                     var consoleUrl = $"https://helix.dot.net/api/2019-06-17/jobs/{Uri.EscapeDataString(helixJob)}/workitems/{Uri.EscapeDataString(helixWorkItem)}/console";
-                    AnsiConsole.MarkupLine($"[bold]Console Log:[/] [link={consoleUrl}]{consoleUrl}[/]");
+                    AnsiConsole.MarkupLine($"  [bold]Console Log:[/] [link={consoleUrl}]{consoleUrl}[/]");
                 }
-                AnsiConsole.WriteLine();
             }
+            else
+            {
+                AnsiConsole.MarkupLine("  [dim]No Helix information available[/]");
+            }
+            AnsiConsole.WriteLine();
         }
         reader.Close();
 

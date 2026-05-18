@@ -11,7 +11,7 @@ public sealed class DashboardCommand : AsyncCommand
 {
     private const string MenuStatus = "Status (live service log)";
     private const string MenuBuilds = "Builds";
-    private const string MenuFailures = "Test failures";
+    private const string MenuTests = "Tests";
     private const string MenuConfig = "Configuration";
     private const string MenuQuit = "Quit";
 
@@ -94,7 +94,7 @@ public sealed class DashboardCommand : AsyncCommand
             var choice = AnsiConsole.Prompt(
                 new SelectionPrompt<string>()
                     .Title("[bold]What would you like to do?[/]")
-                    .AddChoices(MenuBuilds, MenuFailures, MenuConfig, MenuStatus, MenuQuit));
+                    .AddChoices(MenuBuilds, MenuTests, MenuConfig, MenuStatus, MenuQuit));
 
             switch (choice)
             {
@@ -105,8 +105,9 @@ public sealed class DashboardCommand : AsyncCommand
                     var browser = new BuildBrowser(db, clientFactory, tigerContext.ConfigDirectory);
                     browser.Browse();
                     break;
-                case MenuFailures:
-                    ShowTestFailures(db);
+                case MenuTests:
+                    var testBrowser = new TestBrowser(db, tigerContext.ConfigDirectory);
+                    testBrowser.Browse();
                     break;
                 case MenuConfig:
                     ShowConfig(tigerContext);
@@ -197,46 +198,6 @@ public sealed class DashboardCommand : AsyncCommand
             var service = Markup.Escape(entry.Service);
             var message = Markup.Escape(entry.Message);
             AnsiConsole.MarkupLine($"[dim]{time}[/] [{levelColor}]{service}[/] {message}");
-        }
-    }
-
-    private static void ShowTestFailures(TigerDatabase db)
-    {
-        using var cmd = db.Connection.CreateCommand();
-        cmd.CommandText = """
-            SELECT tr.test_case_title, COUNT(*) as fail_count,
-                   GROUP_CONCAT(DISTINCT r.organization || '/' || r.project) as sources
-            FROM test_results tr
-            JOIN test_runs r ON tr.organization = r.organization AND tr.project = r.project AND tr.run_id = r.run_id
-            WHERE tr.outcome = 'Failed'
-            GROUP BY tr.test_case_title
-            ORDER BY fail_count DESC
-            LIMIT 20
-            """;
-
-        var table = new Table()
-            .AddColumn("Test")
-            .AddColumn("Failures")
-            .AddColumn("Sources");
-
-        using var reader = cmd.ExecuteReader();
-        var hasRows = false;
-        while (reader.Read())
-        {
-            hasRows = true;
-            var title = reader.GetString(0);
-            if (title.Length > 80)
-                title = title[..77] + "...";
-            table.AddRow(title, reader.GetInt64(1).ToString(), reader.GetString(2));
-        }
-
-        if (!hasRows)
-        {
-            AnsiConsole.MarkupLine("[yellow]No test failures recorded yet.[/]");
-        }
-        else
-        {
-            AnsiConsole.Write(table);
         }
     }
 
