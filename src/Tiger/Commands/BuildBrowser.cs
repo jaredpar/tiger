@@ -492,15 +492,42 @@ public sealed class BuildBrowser
 
         headerTable.AddRow("[bold]Build[/]", $"#{page.BuildId} — {defName} {buildNumber}");
         headerTable.AddRow("[bold]Result[/]", FormatResult(result));
-        headerTable.AddRow("[bold]Branch[/]", branch);
         if (prNumber is not null && repoName is not null)
         {
             var prUrl = $"https://github.com/{repoName}/pull/{prNumber}";
-            headerTable.AddRow("[bold]PR[/]", $"[link={prUrl}]{prUrl}[/]");
+
+            // Try to get cached PR info
+            using var prCmd = _db.Connection.CreateCommand();
+            prCmd.CommandText = "SELECT title, author FROM pull_requests WHERE repository = @repo AND pr_number = @pr";
+            prCmd.Parameters.AddWithValue("@repo", repoName);
+            prCmd.Parameters.AddWithValue("@pr", prNumber);
+            using var prReader = prCmd.ExecuteReader();
+            if (prReader.Read() && !prReader.IsDBNull(0))
+            {
+                var prTitle = prReader.GetString(0);
+                var prAuthor = prReader.IsDBNull(1) ? "" : prReader.GetString(1);
+                prReader.Close();
+
+                // Truncate title to fit: "PR Info" col + "#123 author " leaves room for title
+                var prefix = $"#{prNumber} {prAuthor} ";
+                var maxTitleLen = Math.Max(10, Console.WindowWidth - prefix.Length - 20);
+                var truncatedTitle = prTitle.Length > maxTitleLen ? prTitle[..maxTitleLen] + "..." : prTitle;
+                headerTable.AddRow("[bold]PR Info[/]", $"#{prNumber} [blue]{Markup.Escape(prAuthor)}[/] {Markup.Escape(truncatedTitle)}");
+            }
+            else
+            {
+                prReader.Close();
+                headerTable.AddRow("[bold]PR Info[/]", $"#{prNumber}");
+            }
+            headerTable.AddRow("[bold]PR Url[/]", $"[link={prUrl}]{prUrl}[/]");
         }
         else if (prNumber is not null)
         {
-            headerTable.AddRow("[bold]PR[/]", $"#{prNumber}");
+            headerTable.AddRow("[bold]PR Info[/]", $"#{prNumber}");
+        }
+        else
+        {
+            headerTable.AddRow("[bold]Branch[/]", branch);
         }
         if (finishTime is not null)
             headerTable.AddRow("[bold]Finished[/]", FormatTime(finishTime));

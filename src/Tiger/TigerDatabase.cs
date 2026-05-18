@@ -8,7 +8,7 @@ namespace Tiger;
 /// </summary>
 public sealed class TigerDatabase : IDisposable
 {
-    public const int CurrentSchemaVersion = 1;
+    public const int CurrentSchemaVersion = 2;
 
     public string DatabasePath { get; }
     public SqliteConnection Connection { get; }
@@ -65,7 +65,10 @@ public sealed class TigerDatabase : IDisposable
         connection.Open();
         using var cmd = connection.CreateCommand();
         cmd.CommandText = "PRAGMA user_version;";
-        return Convert.ToInt32(cmd.ExecuteScalar());
+        var result = Convert.ToInt32(cmd.ExecuteScalar());
+        connection.Close();
+        SqliteConnection.ClearPool(connection);
+        return result;
     }
 
     /// <summary>
@@ -79,12 +82,8 @@ public sealed class TigerDatabase : IDisposable
 
     private void EnsureSchema()
     {
-        var version = GetSchemaVersion();
-        if (version < 1)
-        {
-            ApplyV1();
-            SetSchemaVersion(1);
-        }
+        CreateSchema();
+        SetSchemaVersion(CurrentSchemaVersion);
     }
 
     private int GetSchemaVersion()
@@ -101,7 +100,7 @@ public sealed class TigerDatabase : IDisposable
         cmd.ExecuteNonQuery();
     }
 
-    private void ApplyV1()
+    private void CreateSchema()
     {
         using var cmd = Connection.CreateCommand();
         cmd.CommandText = """
@@ -226,6 +225,18 @@ public sealed class TigerDatabase : IDisposable
 
             CREATE INDEX IF NOT EXISTS ix_ingestion_tasks_status
                 ON build_ingestion_tasks (status, next_retry_time);
+
+            CREATE TABLE IF NOT EXISTS pull_requests (
+                repository TEXT NOT NULL,
+                pr_number INTEGER NOT NULL,
+                title TEXT,
+                author TEXT,
+                fetched_at TEXT NOT NULL DEFAULT (datetime('now')),
+                PRIMARY KEY (repository, pr_number)
+            );
+
+            CREATE INDEX IF NOT EXISTS ix_pull_requests_repo
+                ON pull_requests (repository);
             """;
         cmd.ExecuteNonQuery();
     }

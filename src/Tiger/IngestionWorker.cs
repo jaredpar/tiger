@@ -170,6 +170,9 @@ public sealed class IngestionWorker : IDisposable
                 // Helix ingestion placeholder — mark complete for now
                 _log?.Info("Worker", $"Helix ingestion for build #{task.BuildId} — not yet implemented");
                 break;
+            case "pr_info":
+                await ProcessPrInfoAsync(task, ct);
+                break;
             default:
                 _log?.Warning("Worker", $"Unknown task type: {task.TaskType}");
                 break;
@@ -219,6 +222,88 @@ public sealed class IngestionWorker : IDisposable
 
         var issueCount = timeline.Records.Sum(r => r.Issues.Count(i => i.Type is "error" or "warning"));
         _log?.Info("Worker", $"  Build #{task.BuildId} — timeline complete ({issueCount} issues)");
+    }
+
+    private async Task ProcessPrInfoAsync(IngestionTask task, CancellationToken ct)
+    {
+        // Look up the build's PR number and repo
+        using var cmd = _db.Connection.CreateCommand();
+        cmd.CommandText = "SELECT pr_number, repository_name FROM builds WHERE organization = @org AND project = @proj AND build_id = @buildId";
+        cmd.Parameters.AddWithValue("@org", task.Organization);
+        cmd.Parameters.AddWithValue("@proj", task.Project);
+        cmd.Parameters.AddWithValue("@buildId", task.BuildId);
+
+        using var reader = cmd.ExecuteReader();
+        if (!reader.Read() || reader.IsDBNull(0) || reader.IsDBNull(1))
+        {
+            _log?.Info("Worker", $"  Build #{task.BuildId} — no PR info to fetch");
+            return;
+        }
+
+        var prNumber = reader.GetInt32(0);
+        var repository = reader.GetString(1);
+        reader.Close();
+
+        // Check if we already have this PR cached
+        using var checkCmd = _db.Connection.CreateCommand();
+        checkCmd.CommandText = "SELECT 1 FROM pull_requests WHERE repository = @repo AND pr_number = @pr";
+        checkCmd.Parameters.AddWithValue("@repo", repository);
+        checkCmd.Parameters.AddWithValue("@pr", prNumber);
+        if (checkCmd.ExecuteScalar() is not null)
+        {
+            _log?.Info("Worker", $"  Build #{task.BuildId} — PR #{prNumber} already cached");
+            return;
+        }
+
+        // Fetch PR info via gh CLI
+        try
+        {
+            var psi = new System.Diagnostics.ProcessStartInfo("gh", $"pr view {prNumber} --repo {repository} --json title,author")
+            {
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+            };
+
+            using var process = System.Diagnostics.Process.Start(psi);
+            if (process is null)
+            {
+                _log?.Warning("Worker", $"  Build #{task.BuildId} — failed to start gh process");
+                return;
+            }
+
+            var output = await process.StandardOutput.ReadToEndAsync(ct);
+            await process.WaitForExitAsync(ct);
+
+            if (process.ExitCode != 0)
+            {
+                _log?.Warning("Worker", $"  Build #{task.BuildId} — gh pr view failed (exit {process.ExitCode})");
+                return;
+            }
+
+            var prData = System.Text.Json.JsonDocument.Parse(output);
+            var title = prData.RootElement.TryGetProperty("title", out var t) ? t.GetString() : null;
+            var author = prData.RootElement.TryGetProperty("author", out var a) && a.TryGetProperty("login", out var login)
+                ? login.GetString() : null;
+
+            using var insertCmd = _db.Connection.CreateCommand();
+            insertCmd.CommandText = """
+                INSERT OR IGNORE INTO pull_requests (repository, pr_number, title, author)
+                VALUES (@repo, @pr, @title, @author)
+                """;
+            insertCmd.Parameters.AddWithValue("@repo", repository);
+            insertCmd.Parameters.AddWithValue("@pr", prNumber);
+            insertCmd.Parameters.AddWithValue("@title", (object?)title ?? DBNull.Value);
+            insertCmd.Parameters.AddWithValue("@author", (object?)author ?? DBNull.Value);
+            insertCmd.ExecuteNonQuery();
+
+            _log?.Info("Worker", $"  Build #{task.BuildId} — PR #{prNumber} info cached ({author})");
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _log?.Warning("Worker", $"  Build #{task.BuildId} — PR info fetch failed: {ex.Message}");
+        }
     }
 
     // ── DB helpers ──────────────────────────────────────────────────

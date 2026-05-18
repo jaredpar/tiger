@@ -28,7 +28,7 @@ public sealed class BuildIngestionService
                 $"#{build.Id} {build.DefinitionName} {build.BuildNumber} [{result}] {build.RepositoryName ?? ""}");
 
             InsertBuild(organization, project, build);
-            CreateIngestionTasks(organization, project, build.Id);
+            CreateIngestionTasks(organization, project, build);
         }
         return Task.CompletedTask;
     }
@@ -60,9 +60,18 @@ public sealed class BuildIngestionService
         cmd.ExecuteNonQuery();
     }
 
-    internal void CreateIngestionTasks(string organization, string project, int buildId)
+    internal void CreateIngestionTasks(string organization, string project, AzdoBuild build)
     {
-        foreach (var taskType in new[] { "tests", "timeline", "helix" })
+        var taskTypes = new List<string> { "tests", "timeline", "helix" };
+
+        // Only create pr_info task if this is a PR build and we don't already have the PR cached
+        if (build.PrNumber is not null && build.RepositoryName is not null)
+        {
+            if (!HasPullRequest(build.RepositoryName, build.PrNumber.Value))
+                taskTypes.Add("pr_info");
+        }
+
+        foreach (var taskType in taskTypes)
         {
             using var cmd = _db.Connection.CreateCommand();
             cmd.CommandText = """
@@ -73,10 +82,19 @@ public sealed class BuildIngestionService
                 """;
             cmd.Parameters.AddWithValue("@org", organization);
             cmd.Parameters.AddWithValue("@proj", project);
-            cmd.Parameters.AddWithValue("@buildId", buildId);
+            cmd.Parameters.AddWithValue("@buildId", build.Id);
             cmd.Parameters.AddWithValue("@type", taskType);
             cmd.ExecuteNonQuery();
         }
+    }
+
+    private bool HasPullRequest(string repository, int prNumber)
+    {
+        using var cmd = _db.Connection.CreateCommand();
+        cmd.CommandText = "SELECT 1 FROM pull_requests WHERE repository = @repo AND pr_number = @pr LIMIT 1";
+        cmd.Parameters.AddWithValue("@repo", repository);
+        cmd.Parameters.AddWithValue("@pr", prNumber);
+        return cmd.ExecuteScalar() is not null;
     }
 
     internal void InsertTestRun(string organization, string project, int buildId, int runId,
