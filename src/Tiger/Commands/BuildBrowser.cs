@@ -37,6 +37,16 @@ public sealed class BuildBrowser
         RunLoop();
     }
 
+    /// <summary>
+    /// Entry point for drilling into a specific build from another browser.
+    /// Returns when the user backs out.
+    /// </summary>
+    public void BrowseBuild(string org, string project, int buildId)
+    {
+        Push(new BuildDetailPage(org, project, buildId));
+        RunLoop();
+    }
+
     private void RunLoop()
     {
         while (_position >= 0)
@@ -151,13 +161,13 @@ public sealed class BuildBrowser
                 };
                 var pr = b.PrNumber is not null ? $" PR#{b.PrNumber}" : "";
                 var pending = b.IngestionStatus != "complete" ? " ..." : "";
-                var time = FormatTime(b.FinishTime);
+                var time = BrowserUI.FormatTime(b.FinishTime);
                 return $"{resultIcon} {b.BuildId} {Markup.Escape(b.DefinitionName)} {time}{pr}{pending}";
             }).ToList();
 
             _lastBuilds = builds;
 
-            var selected = SelectWithEscape("Select a build:", choices,
+            var selected = BrowserUI.SelectWithEscape("Select a build:", choices,
                 extraKeys: new Dictionary<ConsoleKey, int> {
                     { ConsoleKey.E, -5 },
                     { ConsoleKey.F, -2 },
@@ -205,25 +215,25 @@ public sealed class BuildBrowser
         var where = new List<string>();
         if (_filter.RepoPattern is not null)
         {
-            var (pattern, isExact) = BuildFilter.ToSqlPattern(_filter.RepoPattern);
+            var (pattern, isExact) = BrowserUI.ToSqlPattern(_filter.RepoPattern);
             where.Add(isExact ? "b.repository_name = @repo" : "b.repository_name LIKE @repo");
             cmd.Parameters.AddWithValue("@repo", pattern);
         }
         if (_filter.DefinitionPattern is not null)
         {
-            var (pattern, isExact) = BuildFilter.ToSqlPattern(_filter.DefinitionPattern);
+            var (pattern, isExact) = BrowserUI.ToSqlPattern(_filter.DefinitionPattern);
             where.Add(isExact ? "b.definition_name = @def" : "b.definition_name LIKE @def");
             cmd.Parameters.AddWithValue("@def", pattern);
         }
         if (_filter.ResultPattern is not null)
         {
-            var (pattern, isExact) = BuildFilter.ToSqlPattern(_filter.ResultPattern);
+            var (pattern, isExact) = BrowserUI.ToSqlPattern(_filter.ResultPattern);
             where.Add(isExact ? "b.result = @result" : "b.result LIKE @result");
             cmd.Parameters.AddWithValue("@result", pattern);
         }
         if (_filter.IdPattern is not null)
         {
-            var (pattern, isExact) = BuildFilter.ToSqlPattern(_filter.IdPattern);
+            var (pattern, isExact) = BrowserUI.ToSqlPattern(_filter.IdPattern);
             where.Add(isExact ? "CAST(b.build_id AS TEXT) = @bid" : "CAST(b.build_id AS TEXT) LIKE @bid");
             cmd.Parameters.AddWithValue("@bid", pattern);
         }
@@ -335,13 +345,13 @@ public sealed class BuildBrowser
         switch (key.Key)
         {
             case ConsoleKey.R:
-                _filter.RepoPattern = PromptPattern("Repository pattern (e.g. roslyn, dotnet/*):");
+                _filter.RepoPattern = BrowserUI.PromptPattern("Repository pattern (e.g. roslyn, dotnet/*):");
                 break;
             case ConsoleKey.D:
-                _filter.DefinitionPattern = PromptPattern("Definition pattern (e.g. ci, roslyn-CI*):");
+                _filter.DefinitionPattern = BrowserUI.PromptPattern("Definition pattern (e.g. ci, roslyn-CI*):");
                 break;
             case ConsoleKey.I:
-                _filter.IdPattern = PromptPattern("Build ID pattern (e.g. 1423*, 142333):");
+                _filter.IdPattern = BrowserUI.PromptPattern("Build ID pattern (e.g. 1423*, 142333):");
                 break;
             case ConsoleKey.O:
                 _filter.ResultPattern = PromptResultFilter();
@@ -357,52 +367,13 @@ public sealed class BuildBrowser
     }
 
     /// <summary>
-    /// Prompts for a text pattern. Supports Escape to cancel (returns null).
-    /// </summary>
-    private static string? PromptPattern(string prompt)
-    {
-        AnsiConsole.WriteLine();
-        AnsiConsole.MarkupLine($"[bold]{Markup.Escape(prompt)}[/]");
-        AnsiConsole.MarkupLine("[dim]Press Esc to cancel[/]");
-        AnsiConsole.Markup("[blue]> [/]");
-
-        var buffer = new System.Text.StringBuilder();
-        while (true)
-        {
-            var key = Console.ReadKey(true);
-            if (key.Key == ConsoleKey.Escape)
-                return null;
-            if (key.Key == ConsoleKey.Enter)
-            {
-                AnsiConsole.WriteLine();
-                var result = buffer.ToString().Trim();
-                return string.IsNullOrEmpty(result) ? null : result;
-            }
-            if (key.Key == ConsoleKey.Backspace)
-            {
-                if (buffer.Length > 0)
-                {
-                    buffer.Remove(buffer.Length - 1, 1);
-                    Console.Write("\b \b");
-                }
-                continue;
-            }
-            if (key.KeyChar >= 32) // printable
-            {
-                buffer.Append(key.KeyChar);
-                Console.Write(key.KeyChar);
-            }
-        }
-    }
-
-    /// <summary>
     /// Selection menu for outcome filter. Returns null if cancelled.
     /// </summary>
     private static string? PromptResultFilter()
     {
         AnsiConsole.WriteLine();
         var choices = new[] { "all", "failed", "succeeded", "partiallySucceeded" };
-        var selected = SelectWithEscape("Select outcome:", choices.ToList(), pageSize: 5);
+        var selected = BrowserUI.SelectWithEscape("Select outcome:", choices.ToList(), pageSize: 5);
         if (selected < 0) return null; // cancelled
         return choices[selected] == "all" ? null : choices[selected];
     }
@@ -414,7 +385,7 @@ public sealed class BuildBrowser
     {
         AnsiConsole.WriteLine();
         var choices = new[] { "all", "pr", "ci" };
-        var selected = SelectWithEscape("Select build kind:", choices.ToList(), pageSize: 5);
+        var selected = BrowserUI.SelectWithEscape("Select build kind:", choices.ToList(), pageSize: 5);
         if (selected < 0) return null; // cancelled
         return choices[selected] == "all" ? null : choices[selected];
     }
@@ -491,7 +462,7 @@ public sealed class BuildBrowser
         headerTable.HideHeaders();
 
         headerTable.AddRow("[bold]Build[/]", $"#{page.BuildId} — {defName} {buildNumber}");
-        headerTable.AddRow("[bold]Result[/]", FormatResult(result));
+        headerTable.AddRow("[bold]Result[/]", BrowserUI.FormatResult(result));
         if (prNumber is not null && repoName is not null)
         {
             var prUrl = $"https://github.com/{repoName}/pull/{prNumber}";
@@ -530,7 +501,7 @@ public sealed class BuildBrowser
             headerTable.AddRow("[bold]Branch[/]", branch);
         }
         if (finishTime is not null)
-            headerTable.AddRow("[bold]Finished[/]", FormatTime(finishTime));
+            headerTable.AddRow("[bold]Finished[/]", BrowserUI.FormatTime(finishTime));
         headerTable.AddRow("[bold]URL[/]", $"[link={url}]{url}[/]");
 
         // Ingestion status line: Timeline, Tests, Helix with status icons
@@ -743,7 +714,7 @@ public sealed class BuildBrowser
         }
 
         var totalFailed = tests.Select(t => t.Title).Distinct().Count();
-        var selected = SelectWithEscape($"{totalFailed} failed test(s) across {grouped.Count()} run(s):",
+        var selected = BrowserUI.SelectWithEscape($"{totalFailed} failed test(s) across {grouped.Count()} run(s):",
             choices, useMarkup: true, skipIndices: selectableIndices.Select((v, i) => (v, i)).Where(x => x.v == -1).Select(x => x.i).ToHashSet());
 
         if (selected < 0)
@@ -969,11 +940,11 @@ public sealed class BuildBrowser
                 _ => "[dim]-[/]",
             };
             var pr = b.PrNumber is not null ? $" PR#{b.PrNumber}" : "";
-            var time = FormatTime(b.FinishTime);
+            var time = BrowserUI.FormatTime(b.FinishTime);
             return $"{resultIcon} {b.BuildId} {Markup.Escape(b.DefinitionName)} {time}{pr}";
         }).ToList();
 
-        var selected = SelectWithEscape("Select a build:", choices, useMarkup: true);
+        var selected = BrowserUI.SelectWithEscape("Select a build:", choices, useMarkup: true);
 
         if (selected < 0)
             return NavAction.Back.Instance;
@@ -1173,113 +1144,6 @@ public sealed class BuildBrowser
 
     // ── Helpers ──────────────────────────────────────────────────────
 
-    /// <summary>
-    /// Custom selection list that supports Escape/B to go back.
-    /// Returns the selected index, or -1 if the user pressed Escape/B.
-    /// Extra keys can be mapped to return specific negative values.
-    /// </summary>
-    private static int SelectWithEscape(string title, List<string> items, int pageSize = 20,
-        Dictionary<ConsoleKey, int>? extraKeys = null, bool useMarkup = false, int startIndex = 0,
-        HashSet<int>? skipIndices = null)
-    {
-        if (items.Count == 0) return -1;
-
-        var selected = Math.Clamp(startIndex, 0, items.Count - 1);
-        // If starting on a skipped index, move to next selectable
-        if (skipIndices is not null)
-        {
-            while (selected < items.Count && skipIndices.Contains(selected))
-                selected++;
-            if (selected >= items.Count)
-            {
-                selected = Math.Clamp(startIndex, 0, items.Count - 1);
-                while (selected > 0 && skipIndices.Contains(selected))
-                    selected--;
-            }
-        }
-        var scrollOffset = Math.Max(0, selected - pageSize + 1);
-        var visibleCount = Math.Min(pageSize, items.Count);
-        var startTop = Console.CursorTop;
-
-        while (true)
-        {
-            // Move cursor to start position and clear the render area
-            Console.SetCursorPosition(0, startTop);
-
-            // Render visible items
-            var linesRendered = 0;
-            for (var i = 0; i < visibleCount; i++)
-            {
-                var idx = scrollOffset + i;
-                if (idx >= items.Count) break;
-
-                // Clear line then write
-                Console.Write(new string(' ', Console.WindowWidth));
-                Console.SetCursorPosition(0, Console.CursorTop);
-                var text = useMarkup ? items[idx] : Markup.Escape(items[idx]);
-                if (idx == selected)
-                    AnsiConsole.MarkupLine(useMarkup ? $"  [blue]>[/] {text}" : $"  [blue]>[/] [bold]{text}[/]");
-                else
-                    AnsiConsole.MarkupLine($"    {text}");
-                linesRendered++;
-            }
-
-            if (items.Count > visibleCount)
-            {
-                Console.Write(new string(' ', Console.WindowWidth));
-                Console.SetCursorPosition(0, Console.CursorTop);
-                AnsiConsole.MarkupLine($"  [dim]({selected + 1}/{items.Count})[/]");
-                linesRendered++;
-            }
-
-            Console.Write(new string(' ', Console.WindowWidth));
-            Console.SetCursorPosition(0, Console.CursorTop);
-            AnsiConsole.MarkupLine("[dim]  ↑↓ navigate  Enter select  Esc/B back[/]");
-            linesRendered++;
-
-            var key = Console.ReadKey(true);
-            switch (key.Key)
-            {
-                case ConsoleKey.UpArrow:
-                    if (selected > 0)
-                    {
-                        selected--;
-                        while (selected > 0 && skipIndices is not null && skipIndices.Contains(selected))
-                            selected--;
-                        if (skipIndices is not null && skipIndices.Contains(selected))
-                            selected++; // can't go past first selectable
-                        if (selected < scrollOffset)
-                            scrollOffset = selected;
-                    }
-                    break;
-                case ConsoleKey.DownArrow:
-                    if (selected < items.Count - 1)
-                    {
-                        selected++;
-                        while (selected < items.Count - 1 && skipIndices is not null && skipIndices.Contains(selected))
-                            selected++;
-                        if (skipIndices is not null && skipIndices.Contains(selected))
-                            selected--; // can't go past last selectable
-                        if (selected >= scrollOffset + visibleCount)
-                            scrollOffset = selected - visibleCount + 1;
-                    }
-                    break;
-                case ConsoleKey.Enter:
-                    return selected;
-                case ConsoleKey.Escape:
-                    return -1;
-                case ConsoleKey.B:
-                    if (extraKeys is null || !extraKeys.ContainsKey(ConsoleKey.B))
-                        return -1;
-                    goto default;
-                default:
-                    if (extraKeys is not null && extraKeys.TryGetValue(key.Key, out var result2))
-                        return result2;
-                    break;
-            }
-        }
-    }
-
     private List<(string TaskType, string Status, int Attempts)> GetIngestionTaskStatuses(
         string org, string project, int buildId)
     {
@@ -1299,27 +1163,6 @@ public sealed class BuildBrowser
             tasks.Add((reader.GetString(0), reader.GetString(1), reader.GetInt32(2)));
         return tasks;
     }
-
-    /// <summary>
-    private static string FormatTime(string? isoTime) => TigerUtils.FormatLocalTime(isoTime);
-
-    private static string FormatResult(string? result) => result switch
-    {
-        "succeeded" => "[green]✓ succeeded[/]",
-        "failed" => "[red]X failed[/]",
-        "partiallySucceeded" => "[yellow]! partial[/]",
-        "canceled" => "[dim]canceled[/]",
-        null => "[dim]-[/]",
-        _ => result,
-    };
-
-    private static string FormatResultPlain(string? result) => result switch
-    {
-        "succeeded" => "✓",
-        "failed" => "X",
-        "partiallySucceeded" => "!",
-        _ => result ?? "-",
-    };
 
     // ── Page and Navigation Types ───────────────────────────────────
 
@@ -1418,29 +1261,6 @@ public sealed class BuildBrowser
             if (KindPattern is not null) parts.Add($"kind:{KindPattern}");
             if (IdPattern is not null) parts.Add($"id:{IdPattern}");
             return parts.Count > 0 ? string.Join(" ", parts) : "(none)";
-        }
-
-        /// <summary>
-        /// Converts a user pattern to a SQL LIKE pattern or exact match.
-        /// Default: contains match (ros → %ros%).
-        /// Trailing ! means exact match (roslyn! → roslyn).
-        /// * is a wildcard (dotnet/* → dotnet/%).
-        /// </summary>
-        public static (string Pattern, bool IsExact) ToSqlPattern(string input)
-        {
-            // Exact match: trailing !
-            if (input.EndsWith('!'))
-            {
-                return (input[..^1], true);
-            }
-
-            // Convert user * to SQL %, leave % and _ as literals by not escaping
-            // (users won't type raw SQL wildcards)
-            var pattern = input.Replace("*", "%");
-            // If no wildcard was present, do contains match
-            if (!pattern.Contains('%'))
-                pattern = $"%{pattern}%";
-            return (pattern, false);
         }
     }
 

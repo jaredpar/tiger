@@ -116,7 +116,7 @@ public sealed class DashboardCommand : AsyncCommand
                     browser.Browse();
                     break;
                 case MenuTests:
-                    var testBrowser = new TestBrowser(db, tigerContext.ConfigDirectory);
+                    var testBrowser = new TestBrowser(db, clientFactory, tigerContext.ConfigDirectory);
                     testBrowser.Browse();
                     break;
                 case MenuHealth:
