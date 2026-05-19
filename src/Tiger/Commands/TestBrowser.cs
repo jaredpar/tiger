@@ -86,10 +86,6 @@ public sealed class TestBrowser
         while (true)
         {
             AnsiConsole.Clear();
-            AnsiConsole.MarkupLine("[bold underline]Test Failure Detail[/]");
-            AnsiConsole.MarkupLine($"[bold]{Markup.Escape(test.TestName)}[/]");
-            AnsiConsole.MarkupLine($"[dim]{Markup.Escape(test.Org)}/{Markup.Escape(test.Project)}[/]");
-            AnsiConsole.WriteLine();
 
             using var cmd = _db.Connection.CreateCommand();
             cmd.CommandText = """
@@ -116,8 +112,16 @@ public sealed class TestBrowser
                 var buildId = reader.GetInt32(4);
                 var runName = reader.GetString(5);
 
-                AnsiConsole.MarkupLine($"[bold]Last failed in:[/] Build #{buildId}, {Markup.Escape(runName)}");
-                AnsiConsole.MarkupLine($"[bold]Failed in:[/] {test.FailCount} build(s)");
+                // Header box
+                var buildUrl = $"https://dev.azure.com/{Uri.EscapeDataString(test.Org)}/{Uri.EscapeDataString(test.Project)}/_build/results?buildId={buildId}";
+                var headerTable = new Table().Border(TableBorder.Rounded);
+                headerTable.AddColumn(new TableColumn("").NoWrap());
+                headerTable.AddColumn(new TableColumn(""));
+                headerTable.HideHeaders();
+                headerTable.AddRow("[bold]Test Name[/]", Markup.Escape(test.TestName));
+                headerTable.AddRow("[bold]Last Failed Build[/]", $"[link={buildUrl}]{Markup.Escape(buildUrl)}[/]");
+                headerTable.AddRow("[bold]Failed In[/]", $"{test.FailCount} build(s)");
+                AnsiConsole.Write(headerTable);
                 AnsiConsole.WriteLine();
 
                 AnsiConsole.MarkupLine("[bold]Error:[/]");

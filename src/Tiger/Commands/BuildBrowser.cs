@@ -758,11 +758,6 @@ public sealed class BuildBrowser
 
     private NavAction RenderTestDetail(TestDetailPage page)
     {
-        AnsiConsole.MarkupLine("[bold underline]Test Failure Detail[/]");
-        AnsiConsole.MarkupLine($"[bold]{Markup.Escape(page.TestName)}[/]");
-        AnsiConsole.MarkupLine($"[dim]{Markup.Escape(page.Org)}/{Markup.Escape(page.Project)}[/]");
-        AnsiConsole.WriteLine();
-
         // Get the most recent failure for this test to show error/stack/helix
         using var cmd = _db.Connection.CreateCommand();
         cmd.CommandText = """
@@ -779,19 +774,52 @@ public sealed class BuildBrowser
         cmd.Parameters.AddWithValue("@proj", page.Project);
         cmd.Parameters.AddWithValue("@testName", page.TestName);
 
+        string? errorMessage = null, stackTrace = null, helixJob = null, helixWorkItem = null, runName = null;
+        int? buildId = null;
+
         using var reader = cmd.ExecuteReader();
         if (reader.Read())
         {
-            var errorMessage = reader.IsDBNull(0) ? null : reader.GetString(0);
-            var stackTrace = reader.IsDBNull(1) ? null : reader.GetString(1);
-            var helixJob = reader.IsDBNull(2) ? null : reader.GetString(2);
-            var helixWorkItem = reader.IsDBNull(3) ? null : reader.GetString(3);
-            var buildId = reader.GetInt32(4);
-            var runName = reader.GetString(5);
+            errorMessage = reader.IsDBNull(0) ? null : reader.GetString(0);
+            stackTrace = reader.IsDBNull(1) ? null : reader.GetString(1);
+            helixJob = reader.IsDBNull(2) ? null : reader.GetString(2);
+            helixWorkItem = reader.IsDBNull(3) ? null : reader.GetString(3);
+            buildId = reader.GetInt32(4);
+            runName = reader.GetString(5);
+        }
+        reader.Close();
 
-            AnsiConsole.MarkupLine($"[bold]Last failed in:[/] Build #{buildId}, {Markup.Escape(runName)}");
-            AnsiConsole.WriteLine();
+        // Count total builds with this failure
+        using var countCmd = _db.Connection.CreateCommand();
+        countCmd.CommandText = """
+            SELECT COUNT(DISTINCT r.build_id)
+            FROM test_results tr
+            JOIN test_runs r ON tr.organization = r.organization AND tr.project = r.project AND tr.run_id = r.run_id
+            WHERE tr.organization = @org AND tr.project = @proj
+                  AND tr.test_case_title = @testName AND tr.outcome = 'Failed'
+            """;
+        countCmd.Parameters.AddWithValue("@org", page.Org);
+        countCmd.Parameters.AddWithValue("@proj", page.Project);
+        countCmd.Parameters.AddWithValue("@testName", page.TestName);
+        var buildCount = Convert.ToInt32(countCmd.ExecuteScalar());
 
+        // Header box
+        var headerTable = new Table().Border(TableBorder.Rounded);
+        headerTable.AddColumn(new TableColumn("").NoWrap());
+        headerTable.AddColumn(new TableColumn(""));
+        headerTable.HideHeaders();
+        headerTable.AddRow("[bold]Test Name[/]", Markup.Escape(page.TestName));
+        if (buildId is not null)
+        {
+            var buildUrl = $"https://dev.azure.com/{Uri.EscapeDataString(page.Org)}/{Uri.EscapeDataString(page.Project)}/_build/results?buildId={buildId}";
+            headerTable.AddRow("[bold]Last Failed Build[/]", $"[link={buildUrl}]{Markup.Escape(buildUrl)}[/]");
+        }
+        headerTable.AddRow("[bold]Failed In[/]", $"{buildCount} build(s)");
+        AnsiConsole.Write(headerTable);
+        AnsiConsole.WriteLine();
+
+        if (buildId is not null)
+        {
             AnsiConsole.MarkupLine("[bold]Error:[/]");
             if (!string.IsNullOrWhiteSpace(errorMessage))
             {
@@ -863,24 +891,6 @@ public sealed class BuildBrowser
             }
             AnsiConsole.WriteLine();
         }
-        reader.Close();
-
-        // Count total builds with this failure
-        using var countCmd = _db.Connection.CreateCommand();
-        countCmd.CommandText = """
-            SELECT COUNT(DISTINCT r.build_id)
-            FROM test_results tr
-            JOIN test_runs r ON tr.organization = r.organization AND tr.project = r.project AND tr.run_id = r.run_id
-            WHERE tr.organization = @org AND tr.project = @proj
-                  AND tr.test_case_title = @testName AND tr.outcome = 'Failed'
-            """;
-        countCmd.Parameters.AddWithValue("@org", page.Org);
-        countCmd.Parameters.AddWithValue("@proj", page.Project);
-        countCmd.Parameters.AddWithValue("@testName", page.TestName);
-        var buildCount = Convert.ToInt32(countCmd.ExecuteScalar());
-
-        AnsiConsole.MarkupLine($"[bold]Failed in {buildCount} build(s)[/] in search range");
-        AnsiConsole.WriteLine();
 
         AnsiConsole.MarkupLine("[bold]Navigation:[/]");
         AnsiConsole.MarkupLine("  [blue]B[/] View builds with this failure   [blue]Esc[/] Back");
