@@ -137,9 +137,26 @@ public sealed class HealthAgentService : IDisposable
     private string BuildPrompt(string repository, string definition, BuildHealthData data, string? previousState)
     {
         var sb = new System.Text.StringBuilder();
+        var tz = TimeZoneInfo.Local;
         sb.AppendLine($"# Health Evaluation: {repository} / {definition}");
         sb.AppendLine();
+        sb.AppendLine("## Pipeline Context");
+        sb.AppendLine($"- GitHub Repository: {repository}");
+        sb.AppendLine($"- AzDO Pipeline: {definition}");
+        if (data.Organization is not null)
+        {
+            sb.AppendLine($"- AzDO Organization: {data.Organization}");
+            sb.AppendLine($"- AzDO Project: {data.Project}");
+            if (data.DefinitionId is not null)
+            {
+                sb.AppendLine($"- Definition ID: {data.DefinitionId}");
+                sb.AppendLine($"- Pipeline URL: https://dev.azure.com/{data.Organization}/{data.Project}/_build?definitionId={data.DefinitionId}");
+            }
+        }
+        sb.AppendLine();
         sb.AppendLine($"Analyze the last {LookbackDays} days of CI builds for this repository and pipeline.");
+        sb.AppendLine($"All times are in local time ({tz.DisplayName}).");
+        sb.AppendLine($"Current time: {DateTime.Now:yyyy-MM-dd HH:mm}");
         sb.AppendLine();
 
         // Build summary
@@ -155,7 +172,8 @@ public sealed class HealthAgentService : IDisposable
             foreach (var f in data.RecentFailures)
             {
                 var branchType = f.SourceBranch.StartsWith("refs/pull/") ? "PR" : "CI";
-                sb.AppendLine($"- Build ({f.Organization}, {f.Project}, {f.BuildId}) — {f.Result} — {branchType} — {f.FinishTime}");
+                var localTime = ToLocalTimeString(f.FinishTime);
+                sb.AppendLine($"- Build ({f.Organization}, {f.Project}, {f.BuildId}) — {f.Result} — {branchType} — {localTime}");
             }
             sb.AppendLine();
         }
@@ -350,12 +368,43 @@ public sealed class HealthAgentService : IDisposable
         return (findings, state);
     }
 
+    // ── Helpers ───────────────────────────────────────────────────────
+
+    private static string ToLocalTimeString(string isoUtcTime)
+    {
+        if (DateTime.TryParse(isoUtcTime, null, System.Globalization.DateTimeStyles.RoundtripKind, out var dt))
+        {
+            var local = dt.Kind == DateTimeKind.Utc ? dt.ToLocalTime() : dt;
+            return local.ToString("yyyy-MM-dd HH:mm");
+        }
+        return isoUtcTime;
+    }
+
     // ── Data gathering ──────────────────────────────────────────────
 
     private BuildHealthData GatherBuildData(string repository, string definition)
     {
         var since = DateTime.UtcNow.AddDays(-LookbackDays).ToString("o");
         var data = new BuildHealthData();
+
+        // Pipeline identity (org, project, definition_id)
+        using (var cmd = _db.Connection.CreateCommand())
+        {
+            cmd.CommandText = """
+                SELECT organization, project, definition_id FROM builds
+                WHERE repository_name = @repo AND definition_name = @def
+                ORDER BY finish_time DESC LIMIT 1
+                """;
+            cmd.Parameters.AddWithValue("@repo", repository);
+            cmd.Parameters.AddWithValue("@def", definition);
+            using var reader = cmd.ExecuteReader();
+            if (reader.Read())
+            {
+                data.Organization = reader.GetString(0);
+                data.Project = reader.GetString(1);
+                data.DefinitionId = reader.IsDBNull(2) ? null : reader.GetInt32(2);
+            }
+        }
 
         // Build counts
         using (var cmd = _db.Connection.CreateCommand())
@@ -631,6 +680,9 @@ public sealed record HealthRunInfo(string Repository, string Definition, string 
 
 internal sealed class BuildHealthData
 {
+    public string? Organization { get; set; }
+    public string? Project { get; set; }
+    public int? DefinitionId { get; set; }
     public int TotalBuilds { get; set; }
     public int FailedBuilds { get; set; }
     public int SucceededBuilds { get; set; }
