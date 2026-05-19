@@ -35,6 +35,8 @@ public sealed class DashboardCommand : AsyncCommand
         if (config.Sources.Count > 0)
         {
             var ingestion = new BuildIngestionService(db, serviceLog);
+            var knownIssues = new KnownIssueService(config, db, serviceLog);
+            knownIssues.Start();
 
             // Backfill runs in the background
             var backfill = new BuildBackfillService(config, db, ingestion, clientFactory, serviceLog);

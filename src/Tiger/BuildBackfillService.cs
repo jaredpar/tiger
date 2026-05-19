@@ -41,7 +41,8 @@ public sealed class BuildBackfillService
 
         foreach (var source in _config.Sources)
         {
-            if (ct.IsCancellationRequested) break;
+            if (ct.IsCancellationRequested)
+                break;
 
             try
             {
