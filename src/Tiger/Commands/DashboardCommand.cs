@@ -12,7 +12,7 @@ public sealed class DashboardCommand : AsyncCommand
     private const string MenuStatus = "Status (live service log)";
     private const string MenuBuilds = "Builds";
     private const string MenuTests = "Tests";
-    private const string MenuHealth = "Health (agent chat)";
+    private const string MenuHealth = "Health";
     private const string MenuConfig = "Configuration";
     private const string MenuQuit = "Quit";
 
@@ -50,6 +50,10 @@ public sealed class DashboardCommand : AsyncCommand
             poller = new BuildPoller(config, db, clientFactory, serviceLog);
             poller.OnNewBuilds = ingestion.IngestBuildsAsync;
             poller.Start();
+
+            // Start the health agent
+            var healthAgent = new HealthAgentService(config, db, serviceLog);
+            healthAgent.Start();
         }
 
         try

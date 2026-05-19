@@ -1,13 +1,11 @@
-using GitHub.Copilot.SDK;
 using Spectre.Console;
 using Spectre.Console.Cli;
 
 namespace Tiger.Commands;
 
 /// <summary>
-/// Opens an interactive agent chat session for CI health reporting.
-/// The agent has access to the tiger CI database via skills and can
-/// query builds, tests, timeline issues, and helix data.
+/// Interactive viewer for health agent results.
+/// Shows repo+pipeline combos, drill into state-of-the-build, then into individual runs.
 /// </summary>
 public sealed class HealthCommand : AsyncCommand
 {
@@ -16,124 +14,229 @@ public sealed class HealthCommand : AsyncCommand
         await ExecuteAsync(null!, ct);
     }
 
-    protected override async Task<int> ExecuteAsync(Spectre.Console.Cli.CommandContext context, CancellationToken ct)
+    protected override Task<int> ExecuteAsync(Spectre.Console.Cli.CommandContext context, CancellationToken ct)
     {
-        AnsiConsole.MarkupLine("[bold]Tiger Health Report[/]");
-        AnsiConsole.MarkupLine("[dim]Interactive agent session — type your question, 'quit' to exit[/]");
-        AnsiConsole.WriteLine();
-
-        // Get the skills directory
-        var skillsDir = Path.Combine(AppContext.BaseDirectory, "skills");
         var configDir = TigerUtils.GetConfigDirectory();
         var dbPath = Path.Combine(configDir, "tiger.db");
 
-        // Build the system message with skill content
-        var systemMessage = BuildSystemMessage(skillsDir, dbPath);
-
-        await using var client = new CopilotClient();
-        await client.StartAsync();
-
-        await using var session = await client.CreateSessionAsync(new SessionConfig
+        if (!File.Exists(dbPath))
         {
-            Model = "claude-opus-4.6",
-            Streaming = true,
-            OnPermissionRequest = PermissionHandler.ApproveAll,
-            SystemMessage = new SystemMessageConfig { Content = systemMessage },
-        });
-
-        AnsiConsole.MarkupLine("[green]Agent ready.[/] Ask about CI health, build failures, test trends, etc.");
-        AnsiConsole.WriteLine();
-
-        while (!ct.IsCancellationRequested)
-        {
-            AnsiConsole.Markup("[blue]you>[/] ");
-            var input = Console.ReadLine()?.Trim();
-
-            if (string.IsNullOrEmpty(input))
-                continue;
-
-            if (input.Equals("quit", StringComparison.OrdinalIgnoreCase) ||
-                input.Equals("exit", StringComparison.OrdinalIgnoreCase))
-            {
-                AnsiConsole.MarkupLine("[dim]Ending session.[/]");
-                break;
-            }
-
-            var done = new TaskCompletionSource();
-
-            using var subscription = session.On(evt =>
-            {
-                switch (evt)
-                {
-                    case AssistantMessageDeltaEvent delta:
-                        Console.Write(delta.Data.DeltaContent);
-                        break;
-                    case SessionIdleEvent:
-                        Console.WriteLine();
-                        Console.WriteLine();
-                        done.TrySetResult();
-                        break;
-                    case SessionErrorEvent err:
-                        AnsiConsole.MarkupLine($"[red]Error: {Markup.Escape(err.Data.Message)}[/]");
-                        done.TrySetResult();
-                        break;
-                }
-            });
-
-            await session.SendAsync(new MessageOptions { Prompt = input });
-
-            // Wait for the response to complete
-            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            timeoutCts.CancelAfter(TimeSpan.FromMinutes(5));
-            try
-            {
-                await done.Task.WaitAsync(timeoutCts.Token);
-            }
-            catch (OperationCanceledException)
-            {
-                AnsiConsole.MarkupLine("[yellow]Response timed out or cancelled.[/]");
-            }
+            AnsiConsole.MarkupLine("[red]Database not found. Run tiger to start collecting data first.[/]");
+            return Task.FromResult(1);
         }
 
-        return 0;
+        using var db = TigerDatabase.Open(dbPath);
+        var config = TigerConfig.Load(configDir);
+        var agent = new HealthAgentService(config, db);
+
+        ShowCombosPage(agent);
+        return Task.FromResult(0);
     }
 
-    private static string BuildSystemMessage(string skillsDir, string dbPath)
+    /// <summary>
+    /// Top-level page: list of repo + pipeline combos that have health reports.
+    /// </summary>
+    private static void ShowCombosPage(HealthAgentService agent)
     {
-        var sb = new System.Text.StringBuilder();
-        sb.AppendLine($"""
-            You are a CI/CD health reporting assistant for the Tiger tool. 
-            You have access to a SQLite database at: {dbPath} that contains data on AzDO builds, tests, timelines, and helix work items. Use the tiger-data
-            skill to query this database to answer questions AzDO builds, tests failures, timeline and helix work item data. You can use this information to 
-            report on CI health, identify failure trends, and provide insights into build and test performance.
-
-            When queried about CI health consider the following:
-            - Recent build failure rates and trends
-            - Test failure trends and common failure points
-            - Timeline issues and their impact on build health
-            - Helix work item failures and their correlation with build/test issues
-
-            Generate a report that helps give the user insight into the current state of CI health, recent failures, and potential areas of concern
-            
-            """);
-
-        // Load all skill files
-        if (Directory.Exists(skillsDir))
+        while (true)
         {
-            foreach (var file in Directory.GetFiles(skillsDir, "*.md", SearchOption.AllDirectories))
+            AnsiConsole.Clear();
+            AnsiConsole.MarkupLine("[bold underline]Tiger Health Reports[/]");
+            AnsiConsole.WriteLine();
+
+            var runs = agent.GetRecentRuns();
+            if (runs.Count == 0)
             {
-                var content = File.ReadAllText(file);
-                sb.AppendLine(content);
-                sb.AppendLine();
+                AnsiConsole.MarkupLine("[yellow]No health reports available yet. The agent runs every 15 minutes.[/]");
+                AnsiConsole.MarkupLine("[dim]Press any key to exit...[/]");
+                Console.ReadKey(true);
+                return;
+            }
+
+            // Get distinct combos
+            var combos = runs
+                .Select(r => (r.Repository, r.Definition))
+                .Distinct()
+                .ToList();
+
+            var items = combos.Select(c => $"{c.Repository} / {c.Definition}").ToList();
+
+            var selected = SelectWithEscape("Select a pipeline to view health state:", items);
+            if (selected < 0)
+                return;
+
+            var (repo, def) = combos[selected];
+            ShowStatePage(agent, repo, def);
+        }
+    }
+
+    /// <summary>
+    /// Second level: shows the current state-of-the-build for a combo.
+    /// User can drill into individual agent runs from here.
+    /// </summary>
+    private static void ShowStatePage(HealthAgentService agent, string repository, string definition)
+    {
+        while (true)
+        {
+            AnsiConsole.Clear();
+            AnsiConsole.MarkupLine($"[bold underline]{Markup.Escape(repository)} / {Markup.Escape(definition)}[/]");
+            AnsiConsole.WriteLine();
+
+            var state = agent.GetCurrentState(repository, definition);
+            if (state is not null)
+            {
+                MarkdownRenderer.Render(state);
+            }
+            else
+            {
+                AnsiConsole.MarkupLine("[dim]No state summary available yet.[/]");
+            }
+
+            AnsiConsole.WriteLine();
+            AnsiConsole.MarkupLine("[dim]Press Enter to view agent runs, Esc/B to go back[/]");
+
+            var key = Console.ReadKey(true);
+            if (key.Key == ConsoleKey.Escape || key.Key == ConsoleKey.B)
+                return;
+            if (key.Key == ConsoleKey.Enter)
+            {
+                ShowRunsPage(agent, repository, definition);
             }
         }
+    }
 
-        sb.AppendLine("When answering questions:");
-        sb.AppendLine("- Query the SQLite database to get real data");
-        sb.AppendLine("- Provide specific numbers, build IDs, and test names");
-        sb.AppendLine("- Format output clearly with summaries and details");
-        sb.AppendLine("- Include links where applicable (AzDO build URLs, GitHub PR URLs)");
+    /// <summary>
+    /// Third level: list of individual agent runs for a combo, most recent first.
+    /// </summary>
+    private static void ShowRunsPage(HealthAgentService agent, string repository, string definition)
+    {
+        while (true)
+        {
+            AnsiConsole.Clear();
+            AnsiConsole.MarkupLine($"[bold underline]Agent Runs — {Markup.Escape(repository)} / {Markup.Escape(definition)}[/]");
+            AnsiConsole.WriteLine();
 
-        return sb.ToString();
+            var runs = agent.GetRecentRuns(repository, definition);
+            if (runs.Count == 0)
+            {
+                AnsiConsole.MarkupLine("[dim]No runs found.[/]");
+                AnsiConsole.MarkupLine("[dim]Press any key to go back...[/]");
+                Console.ReadKey(true);
+                return;
+            }
+
+            var items = runs.Select(r => r.Timestamp.Replace("_", " ")).ToList();
+
+            var selected = SelectWithEscape("Select a run to view full log:", items);
+            if (selected < 0)
+                return;
+
+            ShowRunDetail(runs[selected]);
+        }
+    }
+
+    /// <summary>
+    /// Fourth level: full log of a single agent run.
+    /// </summary>
+    private static void ShowRunDetail(HealthRunInfo run)
+    {
+        AnsiConsole.Clear();
+        AnsiConsole.MarkupLine($"[bold underline]Health Report — {Markup.Escape(run.Timestamp.Replace("_", " "))}[/]");
+        AnsiConsole.WriteLine();
+
+        if (File.Exists(run.LogPath))
+        {
+            var content = File.ReadAllText(run.LogPath);
+            MarkdownRenderer.Render(content);
+        }
+        else
+        {
+            AnsiConsole.MarkupLine("[red]Log file not found.[/]");
+        }
+
+        AnsiConsole.WriteLine();
+        AnsiConsole.MarkupLine("[dim]Press any key to go back...[/]");
+        Console.ReadKey(true);
+    }
+
+    // ── Selection helper ────────────────────────────────────────────
+
+    /// <summary>
+    /// Arrow-key selection list with Escape/B to go back.
+    /// Returns selected index or -1 if user backs out.
+    /// </summary>
+    private static int SelectWithEscape(string title, List<string> items, int pageSize = 20)
+    {
+        if (items.Count == 0)
+            return -1;
+
+        AnsiConsole.MarkupLine($"[dim]{Markup.Escape(title)}[/]");
+        AnsiConsole.WriteLine();
+
+        var selected = 0;
+        var scrollOffset = 0;
+        var visibleCount = Math.Min(pageSize, items.Count);
+        var startTop = Console.CursorTop;
+
+        while (true)
+        {
+            Console.SetCursorPosition(0, startTop);
+
+            for (var i = 0; i < visibleCount; i++)
+            {
+                var idx = scrollOffset + i;
+                if (idx >= items.Count)
+                    break;
+
+                Console.Write(new string(' ', Console.WindowWidth));
+                Console.SetCursorPosition(0, Console.CursorTop);
+                var text = Markup.Escape(items[idx]);
+                if (idx == selected)
+                {
+                    AnsiConsole.MarkupLine($"  [blue]>[/] [bold]{text}[/]");
+                }
+                else
+                {
+                    AnsiConsole.MarkupLine($"    {text}");
+                }
+            }
+
+            if (items.Count > visibleCount)
+            {
+                Console.Write(new string(' ', Console.WindowWidth));
+                Console.SetCursorPosition(0, Console.CursorTop);
+                AnsiConsole.MarkupLine($"  [dim]({selected + 1}/{items.Count})[/]");
+            }
+
+            Console.Write(new string(' ', Console.WindowWidth));
+            Console.SetCursorPosition(0, Console.CursorTop);
+            AnsiConsole.MarkupLine("[dim]  ↑↓ navigate  Enter select  Esc/B back[/]");
+
+            var key = Console.ReadKey(true);
+            switch (key.Key)
+            {
+                case ConsoleKey.UpArrow:
+                    if (selected > 0)
+                    {
+                        selected--;
+                        if (selected < scrollOffset)
+                            scrollOffset = selected;
+                    }
+                    break;
+                case ConsoleKey.DownArrow:
+                    if (selected < items.Count - 1)
+                    {
+                        selected++;
+                        if (selected >= scrollOffset + visibleCount)
+                            scrollOffset = selected - visibleCount + 1;
+                    }
+                    break;
+                case ConsoleKey.Enter:
+                    return selected;
+                case ConsoleKey.Escape:
+                case ConsoleKey.B:
+                    return -1;
+            }
+        }
     }
 }
