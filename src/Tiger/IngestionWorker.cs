@@ -167,8 +167,7 @@ public sealed class IngestionWorker : IDisposable
                 await ProcessTimelineAsync(client, task, ct);
                 break;
             case "helix":
-                // Helix ingestion placeholder — mark complete for now
-                _log?.Info("Worker", $"Helix ingestion for build #{task.BuildId} — not yet implemented");
+                await ProcessHelixAsync(task, ct);
                 break;
             case "pr_info":
                 await ProcessPrInfoAsync(task, ct);
@@ -222,6 +221,93 @@ public sealed class IngestionWorker : IDisposable
 
         var issueCount = timeline.Records.Sum(r => r.Issues.Count(i => i.Type is "error" or "warning"));
         _log?.Info("Worker", $"  Build #{task.BuildId} — timeline complete ({issueCount} issues)");
+    }
+
+    private async Task ProcessHelixAsync(IngestionTask task, CancellationToken ct)
+    {
+        _log?.Info("Worker", $"Fetching helix work items for build #{task.BuildId}...");
+
+        // Get distinct helix job/work-item pairs from failed test results for this build
+        var workItemKeys = new List<(string JobName, string WorkItemName)>();
+        lock (_dbLock)
+        {
+            using var cmd = _db.Connection.CreateCommand();
+            cmd.CommandText = """
+                SELECT DISTINCT tr.helix_job_name, tr.helix_work_item_name
+                FROM test_results tr
+                JOIN test_runs trn ON tr.organization = trn.organization
+                    AND tr.project = trn.project AND tr.run_id = trn.run_id
+                WHERE trn.organization = @org AND trn.project = @proj AND trn.build_id = @buildId
+                  AND tr.helix_job_name IS NOT NULL AND tr.helix_work_item_name IS NOT NULL
+                """;
+            cmd.Parameters.AddWithValue("@org", task.Organization);
+            cmd.Parameters.AddWithValue("@proj", task.Project);
+            cmd.Parameters.AddWithValue("@buildId", task.BuildId);
+
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+            {
+                workItemKeys.Add((reader.GetString(0), reader.GetString(1)));
+            }
+        }
+
+        if (workItemKeys.Count == 0)
+        {
+            _log?.Info("Worker", $"  Build #{task.BuildId} — no helix work items to fetch");
+            return;
+        }
+
+        var helixClient = HelixClient.Create();
+        var insertedCount = 0;
+
+        foreach (var (jobName, workItemName) in workItemKeys)
+        {
+            if (ct.IsCancellationRequested)
+                break;
+
+            // Skip if already fetched
+            bool exists;
+            lock (_dbLock)
+            {
+                using var checkCmd = _db.Connection.CreateCommand();
+                checkCmd.CommandText = "SELECT 1 FROM helix_work_items WHERE job_name = @job AND work_item_name = @wi";
+                checkCmd.Parameters.AddWithValue("@job", jobName);
+                checkCmd.Parameters.AddWithValue("@wi", workItemName);
+                exists = checkCmd.ExecuteScalar() is not null;
+            }
+
+            if (exists)
+                continue;
+
+            try
+            {
+                var workItem = await helixClient.GetWorkItemAsync(jobName, workItemName);
+
+                lock (_dbLock)
+                {
+                    using var insertCmd = _db.Connection.CreateCommand();
+                    insertCmd.CommandText = """
+                        INSERT OR IGNORE INTO helix_work_items
+                            (job_name, work_item_name, state, exit_code, console_output_uri)
+                        VALUES
+                            (@job, @wi, @state, @exitCode, @consoleUri)
+                        """;
+                    insertCmd.Parameters.AddWithValue("@job", workItem.Job);
+                    insertCmd.Parameters.AddWithValue("@wi", workItem.Name);
+                    insertCmd.Parameters.AddWithValue("@state", workItem.State);
+                    insertCmd.Parameters.AddWithValue("@exitCode", workItem.ExitCode.HasValue ? workItem.ExitCode.Value : DBNull.Value);
+                    insertCmd.Parameters.AddWithValue("@consoleUri", (object?)workItem.ConsoleOutputUri ?? DBNull.Value);
+                    insertCmd.ExecuteNonQuery();
+                }
+                insertedCount++;
+            }
+            catch (HttpRequestException ex)
+            {
+                _log?.Warning("Worker", $"  Failed to fetch helix work item {jobName}/{workItemName}: {ex.Message}");
+            }
+        }
+
+        _log?.Info("Worker", $"  Build #{task.BuildId} — helix complete ({insertedCount} work item(s) fetched)");
     }
 
     private async Task ProcessPrInfoAsync(IngestionTask task, CancellationToken ct)
@@ -314,9 +400,17 @@ public sealed class IngestionWorker : IDisposable
         using var cmd = _db.Connection.CreateCommand();
         cmd.CommandText = """
             SELECT organization, project, build_id, task_type, status, attempts
-            FROM build_ingestion_tasks
+            FROM build_ingestion_tasks t
             WHERE status IN ('pending', 'failed')
               AND (next_retry_time IS NULL OR next_retry_time <= datetime('now'))
+              AND (task_type != 'helix' OR EXISTS (
+                  SELECT 1 FROM build_ingestion_tasks dep
+                  WHERE dep.organization = t.organization
+                    AND dep.project = t.project
+                    AND dep.build_id = t.build_id
+                    AND dep.task_type = 'tests'
+                    AND dep.status = 'complete'
+              ))
             ORDER BY build_id DESC, task_type ASC
             LIMIT 20
             """;

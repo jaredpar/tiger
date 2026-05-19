@@ -91,12 +91,56 @@ Tracks async ingestion of detailed data per build.
 | organization | TEXT | AzDO organization |
 | project | TEXT | AzDO project |
 | build_id | INTEGER | FK to builds |
-| task_type | TEXT | "tests", "timeline", or "helix" |
+| task_type | TEXT | "tests", "timeline", "helix", or "pr_info" |
 | status | TEXT | "pending", "running", "complete", "failed", "abandoned" |
 | attempts | INTEGER | Number of attempts so far |
 | last_error | TEXT | Last error message if failed |
 
 Primary key: `(organization, project, build_id, task_type)`
+
+### pull_requests
+Cached PR metadata fetched from GitHub.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| repository | TEXT | GitHub repository (e.g. "dotnet/roslyn") |
+| pr_number | INTEGER | Pull request number |
+| title | TEXT | PR title |
+| author | TEXT | PR author login |
+| fetched_at | TEXT | When the PR info was cached |
+
+Primary key: `(repository, pr_number)`
+
+### known_issues
+Known build errors from GitHub issues labeled "Known Build Error". Refreshed every 15 minutes.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| repository | TEXT | GitHub repository |
+| issue_number | INTEGER | GitHub issue number |
+| title | TEXT | Issue title |
+| error_message | TEXT | String or JSON array for contains matching |
+| error_pattern | TEXT | Regex string or JSON array for pattern matching |
+| build_retry | INTEGER | 1 if build should be retried |
+| exclude_console_log | INTEGER | 1 to skip console log matching |
+| state | TEXT | "open" or "closed" |
+| closed_at | TEXT | When the issue was detected as closed |
+| fetched_at | TEXT | Last refresh time |
+
+Primary key: `(repository, issue_number)`
+
+### helix_work_items
+Cached Helix work item details for failed tests that ran on Helix.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| job_name | TEXT | Helix job ID |
+| work_item_name | TEXT | Helix work item name |
+| state | TEXT | Work item state (e.g. "Finished") |
+| exit_code | INTEGER | Process exit code (NULL if not finished) |
+| console_output_uri | TEXT | URI to console output log |
+
+Primary key: `(job_name, work_item_name)`
 
 ## Common Queries
 
@@ -184,8 +228,10 @@ ORDER BY task_type, status;
 
 ### Helix work items for a failed test
 ```sql
-SELECT tr.test_case_title, tr.helix_job_name, tr.helix_work_item_name
+SELECT tr.test_case_title, tr.helix_job_name, tr.helix_work_item_name, hw.state, hw.exit_code
 FROM test_results tr
+LEFT JOIN helix_work_items hw ON tr.helix_job_name = hw.job_name
+    AND tr.helix_work_item_name = hw.work_item_name
 WHERE tr.helix_job_name IS NOT NULL AND tr.outcome = 'Failed'
 ORDER BY tr.test_case_title
 LIMIT 20;
@@ -194,11 +240,47 @@ LIMIT 20;
 The Helix console log URL can be constructed as:
 `https://helix.dot.net/api/2019-06-17/jobs/{helix_job_name}/workitems/{helix_work_item_name}/console`
 
+### PR info for a build
+```sql
+SELECT b.build_id, b.definition_name, b.pr_number, pr.title, pr.author
+FROM builds b
+LEFT JOIN pull_requests pr ON b.repository_name = pr.repository AND b.pr_number = pr.pr_number
+WHERE b.pr_number IS NOT NULL
+ORDER BY b.finish_time DESC
+LIMIT 20;
+```
+
+### Known issues for a repository
+```sql
+SELECT issue_number, title, state, error_message, error_pattern
+FROM known_issues
+WHERE repository = 'dotnet/roslyn' AND state = 'open'
+ORDER BY issue_number;
+```
+
+### All builds for a specific PR
+```sql
+SELECT b.build_id, b.definition_name, b.result, b.finish_time
+FROM builds b
+WHERE b.repository_name = 'dotnet/roslyn' AND b.pr_number = 12345
+ORDER BY b.finish_time DESC;
+```
+
 ## Tips
 
-- All tables are keyed by `(organization, project)` for multi-org support
+- All build/test tables are keyed by `(organization, project)` for multi-org support
+- `pull_requests`, `known_issues`, and `helix_work_items` are keyed by repository or job (not org/project)
 - Times are stored as ISO 8601 strings in UTC
 - Only failed test results are stored (not passing tests)
 - The `build_ingestion_tasks` table shows whether test/timeline/helix data is available for a build
+- Helix ingestion only runs after test ingestion is complete
+- Known issues are refreshed every 15 minutes; closed issues are kept for 7 days before purging
 - Use `LIKE '%pattern%'` for fuzzy matching on test names, definition names, etc.
 - PR builds have `source_branch` like `refs/pull/123/merge` and `pr_number` set
+- Join `builds` to `pull_requests` on `repository_name = repository AND pr_number = pr_number` for PR details
+
+## User Display Rules
+
+- When displaying a build to the user include a link to the build
+- When displaying a Pr to the user include a link to the PR
+- Display times in the user's local timezone

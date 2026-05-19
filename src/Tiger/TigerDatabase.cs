@@ -8,7 +8,7 @@ namespace Tiger;
 /// </summary>
 public sealed class TigerDatabase : IDisposable
 {
-    public const int CurrentSchemaVersion = 3;
+    public const int CurrentSchemaVersion = 4;
 
     public string DatabasePath { get; }
     public SqliteConnection Connection { get; }
@@ -254,6 +254,15 @@ public sealed class TigerDatabase : IDisposable
 
             CREATE INDEX IF NOT EXISTS ix_known_issues_repo
                 ON known_issues (repository);
+
+            CREATE TABLE IF NOT EXISTS helix_work_items (
+                job_name TEXT NOT NULL,
+                work_item_name TEXT NOT NULL,
+                state TEXT NOT NULL,
+                exit_code INTEGER,
+                console_output_uri TEXT,
+                PRIMARY KEY (job_name, work_item_name)
+            );
             """;
         cmd.ExecuteNonQuery();
     }

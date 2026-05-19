@@ -653,9 +653,30 @@ public sealed class BuildBrowser
             }
         }
 
-        AnsiConsole.WriteLine();
+        // Helix work items count
+        using (var helixCmd = _db.Connection.CreateCommand())
+        {
+            helixCmd.CommandText = """
+                SELECT COUNT(DISTINCT hw.job_name || '/' || hw.work_item_name)
+                FROM test_results tr
+                JOIN test_runs trn ON tr.organization = trn.organization
+                    AND tr.project = trn.project AND tr.run_id = trn.run_id
+                JOIN helix_work_items hw ON tr.helix_job_name = hw.job_name
+                    AND tr.helix_work_item_name = hw.work_item_name
+                WHERE trn.organization = @org AND trn.project = @proj AND trn.build_id = @buildId
+                  AND tr.outcome = 'Failed'
+                """;
+            helixCmd.Parameters.AddWithValue("@org", page.Org);
+            helixCmd.Parameters.AddWithValue("@proj", page.Project);
+            helixCmd.Parameters.AddWithValue("@buildId", page.BuildId);
+            var helixCount = Convert.ToInt32(helixCmd.ExecuteScalar());
+            if (helixCount > 0)
+            {
+                AnsiConsole.MarkupLine($"  [bold]Helix Work Items:[/] {helixCount}");
+            }
+        }
 
-        // Navigation keys
+        AnsiConsole.WriteLine();
         var canForward = _position < _history.Count - 1;
         var buildIndex = _lastBuilds.FindIndex(b => b.BuildId == page.BuildId && b.Org == page.Org && b.Project == page.Project);
         var canNext = buildIndex >= 0 && buildIndex < _lastBuilds.Count - 1;
@@ -1067,9 +1088,11 @@ public sealed class BuildBrowser
 
         using var cmd = _db.Connection.CreateCommand();
         cmd.CommandText = """
-            SELECT tr.test_case_title, tr.helix_job_name, tr.helix_work_item_name
+            SELECT DISTINCT tr.helix_job_name, tr.helix_work_item_name, hw.state, hw.exit_code, hw.console_output_uri
             FROM test_results tr
             JOIN test_runs r ON tr.organization = r.organization AND tr.project = r.project AND tr.run_id = r.run_id
+            LEFT JOIN helix_work_items hw ON tr.helix_job_name = hw.job_name
+                AND tr.helix_work_item_name = hw.work_item_name
             WHERE r.organization = @org AND r.project = @proj AND r.build_id = @buildId
                   AND tr.outcome = 'Failed'
                   AND tr.helix_job_name IS NOT NULL
@@ -1085,19 +1108,31 @@ public sealed class BuildBrowser
         while (reader.Read())
         {
             hasHelix = true;
-            var title = reader.GetString(0);
-            var job = reader.IsDBNull(1) ? "-" : reader.GetString(1);
-            var wi = reader.IsDBNull(2) ? "-" : reader.GetString(2);
-            if (title.Length > 50) title = title[..47] + "...";
-            AnsiConsole.MarkupLine($"  [blue]Job:[/] {Markup.Escape(job)}");
-            AnsiConsole.MarkupLine($"  [blue]Work Item:[/] {Markup.Escape(wi)}");
-            AnsiConsole.MarkupLine($"  [blue]Test:[/] {Markup.Escape(title)}");
-            AnsiConsole.WriteLine();
+            var job = reader.GetString(0);
+            var wi = reader.GetString(1);
+            var state = reader.IsDBNull(2) ? null : reader.GetString(2);
+            var exitCode = reader.IsDBNull(3) ? (int?)null : reader.GetInt32(3);
+            var consoleUri = reader.IsDBNull(4) ? null : reader.GetString(4);
+
+            var stateInfo = state is not null ? $" [{(exitCode == 0 ? "green" : "red")}]{state} (exit {exitCode})[/]" : "";
+            AnsiConsole.MarkupLine($"  [blue]{Markup.Escape(job)}[/] / [bold]{Markup.Escape(wi)}[/]{stateInfo}");
+
+            if (consoleUri is not null)
+            {
+                AnsiConsole.MarkupLine($"    [link={consoleUri}]{consoleUri}[/]");
+            }
+            else
+            {
+                // Construct the URL from the job/work item names
+                var url = $"https://helix.dot.net/api/2019-06-17/jobs/{Uri.EscapeDataString(job)}/workitems/{Uri.EscapeDataString(wi)}/console";
+                AnsiConsole.MarkupLine($"    [link={url}]{url}[/]");
+            }
         }
 
         if (!hasHelix)
             AnsiConsole.MarkupLine("[yellow]No Helix work items found for failed tests in this build.[/]");
 
+        AnsiConsole.WriteLine();
         AnsiConsole.MarkupLine("[dim]Press any key to go back...[/]");
         Console.ReadKey(true);
     }
