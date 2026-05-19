@@ -106,6 +106,13 @@ public sealed class HealthAgentService : IDisposable
 
     private async Task EvaluateHealthAsync(string repository, string definition, CancellationToken ct)
     {
+        // Skip if no new builds since last health run
+        if (!HasNewBuildsSinceLastRun(repository, definition))
+        {
+            _log?.Info("HealthAgent", $"Skipping {repository} / {definition} — no new builds since last run.");
+            return;
+        }
+
         _log?.Info("HealthAgent", $"Evaluating {repository} / {definition}...");
 
         var buildData = GatherBuildData(repository, definition);
@@ -614,6 +621,38 @@ public sealed class HealthAgentService : IDisposable
         var safeRepo = repository.Replace("/", "_").Replace("\\", "_");
         var safeDef = definition.Replace("/", "_").Replace("\\", "_").Replace(" ", "_");
         return Path.Combine(_healthDir, safeRepo, safeDef);
+    }
+
+    private bool HasNewBuildsSinceLastRun(string repository, string definition)
+    {
+        var dir = GetComboDir(repository, definition);
+
+        // If we've never run before, always run
+        if (!Directory.Exists(dir))
+            return true;
+
+        var logFiles = Directory.GetFiles(dir, "*.md")
+            .Where(f => !Path.GetFileName(f).Equals("state.md", StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+
+        if (logFiles.Length == 0)
+            return true;
+
+        // Get the most recent log file's write time as our "last run" marker
+        var lastRunTime = logFiles.Max(f => File.GetLastWriteTimeUtc(f));
+
+        // Check if there's any build that finished after our last run
+        using var cmd = _db.Connection.CreateCommand();
+        cmd.CommandText = """
+            SELECT COUNT(*) FROM builds
+            WHERE repository_name = @repo AND definition_name = @def
+              AND finish_time > @since
+            """;
+        cmd.Parameters.AddWithValue("@repo", repository);
+        cmd.Parameters.AddWithValue("@def", definition);
+        cmd.Parameters.AddWithValue("@since", lastRunTime.ToString("o"));
+        var count = Convert.ToInt64(cmd.ExecuteScalar());
+        return count > 0;
     }
 
     private string SaveLog(string repository, string definition, string prompt, string transcript)
