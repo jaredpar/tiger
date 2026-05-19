@@ -30,7 +30,7 @@ Completed CI builds from Azure DevOps.
 | finish_time | TEXT | ISO 8601 finish time |
 | ingested_at | TEXT | When the build was added to the DB |
 
-Primary key: `(organization, project, build_id)`
+Primary key: `(organization, build_id)` — build IDs are unique within an organization
 
 ### test_runs
 Test run summaries per build. A build can have multiple test runs (one per job/leg).
@@ -96,7 +96,7 @@ Tracks async ingestion of detailed data per build.
 | attempts | INTEGER | Number of attempts so far |
 | last_error | TEXT | Last error message if failed |
 
-Primary key: `(organization, project, build_id, task_type)`
+Primary key: `(organization, build_id, task_type)`
 
 ### pull_requests
 Cached PR metadata fetched from GitHub.

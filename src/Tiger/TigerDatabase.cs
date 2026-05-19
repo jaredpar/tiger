@@ -8,7 +8,7 @@ namespace Tiger;
 /// </summary>
 public sealed class TigerDatabase : IDisposable
 {
-    public const int CurrentSchemaVersion = 4;
+    public const int CurrentSchemaVersion = 5;
 
     public string DatabasePath { get; }
     public SqliteConnection Connection { get; }
@@ -119,7 +119,7 @@ public sealed class TigerDatabase : IDisposable
                 pr_number INTEGER,
                 finish_time TEXT,
                 ingested_at TEXT NOT NULL DEFAULT (datetime('now')),
-                PRIMARY KEY (organization, project, build_id)
+                PRIMARY KEY (organization, build_id)
             );
 
             CREATE INDEX IF NOT EXISTS ix_builds_definition
@@ -139,8 +139,8 @@ public sealed class TigerDatabase : IDisposable
                 failed_tests INTEGER NOT NULL DEFAULT 0,
                 skipped_tests INTEGER NOT NULL DEFAULT 0,
                 PRIMARY KEY (organization, project, run_id),
-                FOREIGN KEY (organization, project, build_id)
-                    REFERENCES builds (organization, project, build_id)
+                FOREIGN KEY (organization, build_id)
+                    REFERENCES builds (organization, build_id)
             );
 
             CREATE TABLE IF NOT EXISTS test_results (
@@ -202,12 +202,12 @@ public sealed class TigerDatabase : IDisposable
                 issue_type TEXT NOT NULL,
                 issue_message TEXT NOT NULL,
                 issue_category TEXT,
-                FOREIGN KEY (organization, project, build_id)
-                    REFERENCES builds (organization, project, build_id)
+                FOREIGN KEY (organization, build_id)
+                    REFERENCES builds (organization, build_id)
             );
 
             CREATE INDEX IF NOT EXISTS ix_timeline_issues_build
-                ON build_timeline_issues (organization, project, build_id);
+                ON build_timeline_issues (organization, build_id);
 
             CREATE TABLE IF NOT EXISTS build_ingestion_tasks (
                 organization TEXT NOT NULL,
@@ -220,7 +220,7 @@ public sealed class TigerDatabase : IDisposable
                 last_attempt_time TEXT,
                 next_retry_time TEXT,
                 completed_time TEXT,
-                PRIMARY KEY (organization, project, build_id, task_type)
+                PRIMARY KEY (organization, build_id, task_type)
             );
 
             CREATE INDEX IF NOT EXISTS ix_ingestion_tasks_status
@@ -266,18 +266,105 @@ public sealed class TigerDatabase : IDisposable
             );
             """;
         cmd.ExecuteNonQuery();
+    }
 
-        // Migration: add files column if it doesn't exist
-        using var alterCmd = Connection.CreateCommand();
-        alterCmd.CommandText = """
-            SELECT COUNT(*) FROM pragma_table_info('helix_work_items') WHERE name = 'files'
-            """;
-        if (Convert.ToInt64(alterCmd.ExecuteScalar()) == 0)
+    /// <summary>
+    /// Deletes a build and all associated data (test runs, test results, helix work items,
+    /// timeline issues, ingestion tasks). This is a complete wipe of the build from the database.
+    /// Build IDs are unique within an organization.
+    /// </summary>
+    public void DeleteBuild(string organization, int buildId)
+    {
+        using var transaction = Connection.BeginTransaction();
+
+        // Delete helix work items referenced by test results for this build
+        using (var cmd = Connection.CreateCommand())
         {
-            using var addCol = Connection.CreateCommand();
-            addCol.CommandText = "ALTER TABLE helix_work_items ADD COLUMN files TEXT";
-            addCol.ExecuteNonQuery();
+            cmd.Transaction = transaction;
+            cmd.CommandText = """
+                DELETE FROM helix_work_items
+                WHERE (job_name, work_item_name) IN (
+                    SELECT tr.helix_job_name, tr.helix_work_item_name
+                    FROM test_results tr
+                    JOIN test_runs r ON tr.organization = r.organization AND tr.project = r.project AND tr.run_id = r.run_id
+                    WHERE r.organization = @org AND r.build_id = @buildId
+                      AND tr.helix_job_name IS NOT NULL
+                )
+                """;
+            cmd.Parameters.AddWithValue("@org", organization);
+            cmd.Parameters.AddWithValue("@buildId", buildId);
+            cmd.ExecuteNonQuery();
         }
+
+        // Delete test results for this build
+        using (var cmd = Connection.CreateCommand())
+        {
+            cmd.Transaction = transaction;
+            cmd.CommandText = """
+                DELETE FROM test_results
+                WHERE (organization, project, run_id) IN (
+                    SELECT organization, project, run_id FROM test_runs
+                    WHERE organization = @org AND build_id = @buildId
+                )
+                """;
+            cmd.Parameters.AddWithValue("@org", organization);
+            cmd.Parameters.AddWithValue("@buildId", buildId);
+            cmd.ExecuteNonQuery();
+        }
+
+        // Delete test runs
+        using (var cmd = Connection.CreateCommand())
+        {
+            cmd.Transaction = transaction;
+            cmd.CommandText = """
+                DELETE FROM test_runs
+                WHERE organization = @org AND build_id = @buildId
+                """;
+            cmd.Parameters.AddWithValue("@org", organization);
+            cmd.Parameters.AddWithValue("@buildId", buildId);
+            cmd.ExecuteNonQuery();
+        }
+
+        // Delete timeline issues
+        using (var cmd = Connection.CreateCommand())
+        {
+            cmd.Transaction = transaction;
+            cmd.CommandText = """
+                DELETE FROM build_timeline_issues
+                WHERE organization = @org AND build_id = @buildId
+                """;
+            cmd.Parameters.AddWithValue("@org", organization);
+            cmd.Parameters.AddWithValue("@buildId", buildId);
+            cmd.ExecuteNonQuery();
+        }
+
+        // Delete ingestion tasks
+        using (var cmd = Connection.CreateCommand())
+        {
+            cmd.Transaction = transaction;
+            cmd.CommandText = """
+                DELETE FROM build_ingestion_tasks
+                WHERE organization = @org AND build_id = @buildId
+                """;
+            cmd.Parameters.AddWithValue("@org", organization);
+            cmd.Parameters.AddWithValue("@buildId", buildId);
+            cmd.ExecuteNonQuery();
+        }
+
+        // Delete the build itself
+        using (var cmd = Connection.CreateCommand())
+        {
+            cmd.Transaction = transaction;
+            cmd.CommandText = """
+                DELETE FROM builds
+                WHERE organization = @org AND build_id = @buildId
+                """;
+            cmd.Parameters.AddWithValue("@org", organization);
+            cmd.Parameters.AddWithValue("@buildId", buildId);
+            cmd.ExecuteNonQuery();
+        }
+
+        transaction.Commit();
     }
 
     public void Dispose()

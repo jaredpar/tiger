@@ -174,7 +174,7 @@ public sealed class HealthAgentService : IDisposable
         if (data.RecentFailures.Count > 0)
         {
             sb.AppendLine("## Recent Failures");
-            sb.AppendLine("These builds failed or partially succeeded. Use the (organization, project, build_id) primary key to query more details from the database.");
+            sb.AppendLine("These builds failed or partially succeeded. Use the (organization, build_id) primary key to query more details from the database.");
             sb.AppendLine();
             foreach (var f in data.RecentFailures)
             {

@@ -69,6 +69,13 @@ app.Configure(config =>
             .WithDescription("Start the build poller (foreground, Ctrl+C to stop)");
     });
 
+    config.AddBranch("db", db =>
+    {
+        db.SetDescription("Database management");
+        db.AddCommand<DbDeleteBuildCommand>("delete-build")
+            .WithDescription("Delete a build and all associated data from the database");
+    });
+
     config.AddCommand<StatusCommand>("status")
         .WithDescription("Show poller status, build counts, and recent activity");
 

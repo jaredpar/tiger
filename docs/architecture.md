@@ -70,7 +70,9 @@ src/
 
 ## SQLite Schema (Multi-Org Aware)
 
-All tables use `(organization, project)` as key prefix:
+Build IDs are unique within an organization in Azure DevOps.
+The `builds` table uses `(organization, build_id)` as its primary key.
+Other tables include `project` in their keys for test run/result scoping:
 
 ```sql
 CREATE TABLE builds (
@@ -84,7 +86,7 @@ CREATE TABLE builds (
     source_branch TEXT NOT NULL,
     finish_time TEXT,
     ingested_at TEXT NOT NULL DEFAULT (datetime('now')),
-    PRIMARY KEY (organization, project, build_id)
+    PRIMARY KEY (organization, build_id)
 );
 
 CREATE TABLE test_runs (
@@ -98,7 +100,7 @@ CREATE TABLE test_runs (
     failed_tests INTEGER NOT NULL DEFAULT 0,
     skipped_tests INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (organization, project, run_id),
-    FOREIGN KEY (organization, project, build_id) REFERENCES builds(organization, project, build_id)
+    FOREIGN KEY (organization, build_id) REFERENCES builds(organization, build_id)
 );
 
 CREATE TABLE test_results (
