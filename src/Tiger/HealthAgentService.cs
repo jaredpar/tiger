@@ -117,13 +117,13 @@ public sealed class HealthAgentService : IDisposable
         if (result is null)
             return;
 
-        var (reasoning, response) = result.Value;
+        var (transcript, response) = result.Value;
 
-        // Parse findings and state from response
+        // Parse findings and state from response (the non-reasoning output)
         var (findings, newState) = ParseResponse(response);
 
-        // Save the full log to disk (including reasoning)
-        var logPath = SaveLog(repository, definition, prompt, reasoning, response);
+        // Save the full log to disk (interleaved reasoning + messages)
+        var logPath = SaveLog(repository, definition, prompt, transcript);
 
         // Update state on disk
         SaveState(repository, definition, newState ?? response);
@@ -266,7 +266,7 @@ public sealed class HealthAgentService : IDisposable
         return sb.ToString();
     }
 
-    private async Task<(string Reasoning, string Response)?> InvokeLlmAsync(string prompt, CancellationToken ct)
+    private async Task<(string Transcript, string Response)?> InvokeLlmAsync(string prompt, CancellationToken ct)
     {
         try
         {
@@ -305,28 +305,83 @@ public sealed class HealthAgentService : IDisposable
 
             await using var session = await client.CreateSessionAsync(new SessionConfig
             {
-                Model = "claude-sonnet-4.5",
+                Model = "claude-opus-4.6",
                 Streaming = false,
                 OnPermissionRequest = PermissionHandler.ApproveAll,
                 SystemMessage = new SystemMessageConfig { Content = systemMessage },
             });
 
             var responseTcs = new TaskCompletionSource<(string, string)>();
-            var reasoningText = new System.Text.StringBuilder();
+            var transcript = new System.Text.StringBuilder();
             var responseText = new System.Text.StringBuilder();
+            var lastEventKind = TranscriptEventKind.None;
 
             using var subscription = session.On(evt =>
             {
                 switch (evt)
                 {
                     case AssistantReasoningEvent reasoning:
-                        reasoningText.Append(reasoning.Data.Content);
+                        if (lastEventKind != TranscriptEventKind.Reasoning && transcript.Length > 0)
+                        {
+                            transcript.AppendLine();
+                        }
+                        foreach (var line in (reasoning.Data.Content ?? "").Split('\n'))
+                        {
+                            transcript.AppendLine($"*{line.TrimEnd('\r')}*");
+                        }
+                        lastEventKind = TranscriptEventKind.Reasoning;
                         break;
                     case AssistantMessageEvent msg:
+                        if (lastEventKind != TranscriptEventKind.Message && lastEventKind != TranscriptEventKind.None)
+                        {
+                            transcript.AppendLine();
+                        }
+                        transcript.Append(msg.Data.Content);
                         responseText.Append(msg.Data.Content);
+                        lastEventKind = TranscriptEventKind.Message;
+                        break;
+                    case ToolExecutionStartEvent toolStart:
+                        if (lastEventKind != TranscriptEventKind.None)
+                        {
+                            transcript.AppendLine();
+                        }
+                        transcript.AppendLine($"> **Tool:** `{toolStart.Data.ToolName}`");
+                        var args = toolStart.Data.Arguments?.ToString();
+                        if (!string.IsNullOrWhiteSpace(args))
+                        {
+                            // Truncate long args for readability
+                            if (args.Length > 500)
+                            {
+                                args = args[..500] + "...";
+                            }
+                            transcript.AppendLine($"> **Input:** `{args}`");
+                        }
+                        lastEventKind = TranscriptEventKind.Tool;
+                        break;
+                    case ToolExecutionCompleteEvent toolComplete:
+                        var status = toolComplete.Data.Success ? "✓" : "✗";
+                        transcript.AppendLine($"> **Result ({status}):**");
+                        if (toolComplete.Data.Result?.Content is not null)
+                        {
+                            var content = toolComplete.Data.Result.Content;
+                            if (content.Length > 1000)
+                            {
+                                content = content[..1000] + "\n> _(truncated)_";
+                            }
+                            foreach (var line in content.Split('\n'))
+                            {
+                                transcript.AppendLine($"> {line.TrimEnd('\r')}");
+                            }
+                        }
+                        else if (toolComplete.Data.Error is not null)
+                        {
+                            transcript.AppendLine($"> Error: {toolComplete.Data.Error}");
+                        }
+                        transcript.AppendLine();
+                        lastEventKind = TranscriptEventKind.Tool;
                         break;
                     case SessionIdleEvent:
-                        responseTcs.TrySetResult((reasoningText.ToString(), responseText.ToString()));
+                        responseTcs.TrySetResult((transcript.ToString(), responseText.ToString()));
                         break;
                     case SessionErrorEvent err:
                         responseTcs.TrySetException(new InvalidOperationException(err.Data.Message));
@@ -561,7 +616,7 @@ public sealed class HealthAgentService : IDisposable
         return Path.Combine(_healthDir, safeRepo, safeDef);
     }
 
-    private string SaveLog(string repository, string definition, string prompt, string reasoning, string response)
+    private string SaveLog(string repository, string definition, string prompt, string transcript)
     {
         var dir = GetComboDir(repository, definition);
         Directory.CreateDirectory(dir);
@@ -574,11 +629,10 @@ public sealed class HealthAgentService : IDisposable
             ## Prompt (input to LLM)
             {prompt}
 
-            ## Reasoning (LLM internal chain-of-thought)
-            {reasoning}
+            ## Agent Output
+            Reasoning is shown in *italics*. Tool calls are shown in blockquotes (>). Normal text is the agent's response.
 
-            ## Response (LLM output message)
-            {response}
+            {transcript}
             """;
         File.WriteAllText(path, content);
         return path;
@@ -675,6 +729,8 @@ public sealed class HealthAgentService : IDisposable
 }
 
 // ── Supporting types ────────────────────────────────────────────────
+
+internal enum TranscriptEventKind { None, Reasoning, Message, Tool }
 
 public sealed record HealthRunInfo(string Repository, string Definition, string Timestamp, string LogPath);
 
