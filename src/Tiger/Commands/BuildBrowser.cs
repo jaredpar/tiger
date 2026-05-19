@@ -831,6 +831,30 @@ public sealed class BuildBrowser
                     AnsiConsole.MarkupLine($"  [bold]Work Item:[/] {Markup.Escape(helixWorkItem)}");
                     var consoleUrl = $"https://helix.dot.net/api/2019-06-17/jobs/{Uri.EscapeDataString(helixJob)}/workitems/{Uri.EscapeDataString(helixWorkItem)}/console";
                     AnsiConsole.MarkupLine($"  [bold]Console Log:[/] [link={consoleUrl}]{consoleUrl}[/]");
+
+                    // Show attached files if available
+                    using var filesCmd = _db.Connection.CreateCommand();
+                    filesCmd.CommandText = """
+                        SELECT files FROM helix_work_items
+                        WHERE job_name = @job AND work_item_name = @wi
+                        """;
+                    filesCmd.Parameters.AddWithValue("@job", helixJob);
+                    filesCmd.Parameters.AddWithValue("@wi", helixWorkItem);
+                    var filesJson = filesCmd.ExecuteScalar() as string;
+                    if (!string.IsNullOrWhiteSpace(filesJson))
+                    {
+                        var files = System.Text.Json.JsonSerializer.Deserialize<List<HelixFileEntry>>(filesJson);
+                        if (files is { Count: > 0 })
+                        {
+                            AnsiConsole.MarkupLine($"  [bold]Files ({files.Count}):[/]");
+                            foreach (var f in files)
+                            {
+                                AnsiConsole.MarkupLine($"    {Markup.Escape(f.FileName ?? "unknown")}");
+                                if (f.Uri is not null)
+                                    AnsiConsole.MarkupLine($"      [dim]{Markup.Escape(f.Uri)}[/]");
+                            }
+                        }
+                    }
                 }
             }
             else
@@ -1430,4 +1454,10 @@ public sealed class BuildBrowser
         string DefinitionName, string? Result, string Branch,
         int? PrNumber, string? FinishTime, string IngestionStatus = "pending",
         int DefinitionId = 0, string? RepositoryName = null);
+
+    private sealed class HelixFileEntry
+    {
+        public string? FileName { get; set; }
+        public string? Uri { get; set; }
+    }
 }
