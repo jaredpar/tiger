@@ -150,13 +150,22 @@ public class HelixWorkItemError
 /// A file uploaded from a Helix work item.
 /// Maps to the WorkItemFile schema from the Helix REST API.
 /// </summary>
-public class HelixWorkItemFile
+public partial class HelixWorkItemFile
 {
     [JsonPropertyName("fileName")]
     public required string FileName { get; init; }
 
     [JsonPropertyName("uri")]
     public required string Uri { get; init; }
+
+    /// <summary>
+    /// Whether this file is the console log (matches pattern "console.[hex].log").
+    /// </summary>
+    [JsonIgnore]
+    public bool IsConsoleLog => ConsoleLogRegex().IsMatch(FileName);
+
+    [System.Text.RegularExpressions.GeneratedRegex(@"^console\.[a-z0-9]+\.log$", System.Text.RegularExpressions.RegexOptions.IgnoreCase)]
+    private static partial System.Text.RegularExpressions.Regex ConsoleLogRegex();
 }
 
 /// <summary>

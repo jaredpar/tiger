@@ -283,20 +283,35 @@ public sealed class IngestionWorker : IDisposable
             {
                 var workItem = await helixClient.GetWorkItemAsync(jobName, workItemName);
 
+                // Collect non-console-log files as JSON
+                string? filesJson = null;
+                if (workItem.Files is { Count: > 0 })
+                {
+                    var filtered = workItem.Files
+                        .Where(f => !f.IsConsoleLog)
+                        .Select(f => new { fileName = f.FileName, uri = f.Uri })
+                        .ToList();
+                    if (filtered.Count > 0)
+                    {
+                        filesJson = System.Text.Json.JsonSerializer.Serialize(filtered);
+                    }
+                }
+
                 lock (_dbLock)
                 {
                     using var insertCmd = _db.Connection.CreateCommand();
                     insertCmd.CommandText = """
                         INSERT OR IGNORE INTO helix_work_items
-                            (job_name, work_item_name, state, exit_code, console_output_uri)
+                            (job_name, work_item_name, state, exit_code, console_output_uri, files)
                         VALUES
-                            (@job, @wi, @state, @exitCode, @consoleUri)
+                            (@job, @wi, @state, @exitCode, @consoleUri, @files)
                         """;
                     insertCmd.Parameters.AddWithValue("@job", workItem.Job);
                     insertCmd.Parameters.AddWithValue("@wi", workItem.Name);
                     insertCmd.Parameters.AddWithValue("@state", workItem.State);
                     insertCmd.Parameters.AddWithValue("@exitCode", workItem.ExitCode.HasValue ? workItem.ExitCode.Value : DBNull.Value);
                     insertCmd.Parameters.AddWithValue("@consoleUri", (object?)workItem.ConsoleOutputUri ?? DBNull.Value);
+                    insertCmd.Parameters.AddWithValue("@files", (object?)filesJson ?? DBNull.Value);
                     insertCmd.ExecuteNonQuery();
                 }
                 insertedCount++;

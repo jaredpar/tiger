@@ -261,10 +261,23 @@ public sealed class TigerDatabase : IDisposable
                 state TEXT NOT NULL,
                 exit_code INTEGER,
                 console_output_uri TEXT,
+                files TEXT,
                 PRIMARY KEY (job_name, work_item_name)
             );
             """;
         cmd.ExecuteNonQuery();
+
+        // Migration: add files column if it doesn't exist
+        using var alterCmd = Connection.CreateCommand();
+        alterCmd.CommandText = """
+            SELECT COUNT(*) FROM pragma_table_info('helix_work_items') WHERE name = 'files'
+            """;
+        if (Convert.ToInt64(alterCmd.ExecuteScalar()) == 0)
+        {
+            using var addCol = Connection.CreateCommand();
+            addCol.CommandText = "ALTER TABLE helix_work_items ADD COLUMN files TEXT";
+            addCol.ExecuteNonQuery();
+        }
     }
 
     public void Dispose()

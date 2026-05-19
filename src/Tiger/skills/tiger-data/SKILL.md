@@ -139,6 +139,7 @@ Cached Helix work item details for failed tests that ran on Helix.
 | state | TEXT | Work item state (e.g. "Finished") |
 | exit_code | INTEGER | Process exit code (NULL if not finished) |
 | console_output_uri | TEXT | URI to console output log |
+| files | TEXT | JSON array of attached files (crash dumps, etc.), excluding the console log. Each entry has `fileName` and `uri`. NULL if no extra files. |
 
 Primary key: `(job_name, work_item_name)`
 
