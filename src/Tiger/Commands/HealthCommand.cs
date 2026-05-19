@@ -93,16 +93,77 @@ public sealed class HealthCommand : AsyncCommand
             }
 
             AnsiConsole.WriteLine();
-            AnsiConsole.MarkupLine("[dim]Press Enter to view agent runs, Esc/B to go back[/]");
+            AnsiConsole.MarkupLine("[dim][[G]] Create public gist  [[R]] View agent runs  [[Esc/B]] Back[/]");
 
             var key = Console.ReadKey(true);
-            if (key.Key == ConsoleKey.Escape || key.Key == ConsoleKey.B)
-                return;
-            if (key.Key == ConsoleKey.Enter)
+            switch (key.Key)
             {
-                ShowRunsPage(agent, repository, definition);
+                case ConsoleKey.Escape:
+                case ConsoleKey.B:
+                    return;
+                case ConsoleKey.R:
+                    ShowRunsPage(agent, repository, definition);
+                    break;
+                case ConsoleKey.G:
+                    CreateGist(repository, definition, state);
+                    break;
             }
         }
+    }
+
+    private static void CreateGist(string repository, string definition, string? markdownContent)
+    {
+        if (string.IsNullOrWhiteSpace(markdownContent))
+        {
+            AnsiConsole.MarkupLine("[yellow]No state content to create a gist from.[/]");
+            AnsiConsole.MarkupLine("[dim]Press any key to continue...[/]");
+            Console.ReadKey(true);
+            return;
+        }
+
+        AnsiConsole.MarkupLine("[dim]Creating gist...[/]");
+
+        // Write content to a temp file for gh CLI
+        var tempFile = Path.GetTempFileName();
+        var fileName = $"{repository.Replace("/", "-")}-{definition.Replace(" ", "-")}-health.md";
+        var tempMdFile = Path.Combine(Path.GetDirectoryName(tempFile)!, fileName);
+        try
+        {
+            File.Move(tempFile, tempMdFile);
+            File.WriteAllText(tempMdFile, $"# Health Report — {repository} / {definition}\n\n{markdownContent}");
+
+            var process = new System.Diagnostics.Process();
+            process.StartInfo.FileName = "gh";
+            process.StartInfo.Arguments = $"gist create --public \"{tempMdFile}\"";
+            process.StartInfo.RedirectStandardOutput = true;
+            process.StartInfo.RedirectStandardError = true;
+            process.StartInfo.UseShellExecute = false;
+            process.Start();
+
+            var output = process.StandardOutput.ReadToEnd();
+            var error = process.StandardError.ReadToEnd();
+            process.WaitForExit();
+
+            if (process.ExitCode == 0)
+            {
+                var url = output.Trim();
+                AnsiConsole.MarkupLine($"[green]Gist created:[/] {Markup.Escape(url)}");
+            }
+            else
+            {
+                AnsiConsole.MarkupLine($"[red]Failed to create gist:[/] {Markup.Escape(error.Trim())}");
+            }
+        }
+        finally
+        {
+            if (File.Exists(tempMdFile))
+                File.Delete(tempMdFile);
+            if (File.Exists(tempFile))
+                File.Delete(tempFile);
+        }
+
+        AnsiConsole.MarkupLine("[dim]Press any key to continue...[/]");
+        Console.ReadKey(true);
     }
 
     /// <summary>
