@@ -9,7 +9,7 @@ namespace Tiger.Commands;
 /// </summary>
 public sealed class DashboardCommand : AsyncCommand
 {
-    private const string MenuStatus = "Status (live service log)";
+    private const string MenuStatus = "Status";
     private const string MenuBuilds = "Builds";
     private const string MenuTests = "Tests";
     private const string MenuHealth = "Health";
@@ -124,7 +124,16 @@ public sealed class DashboardCommand : AsyncCommand
                     await healthCmd.RunAsync(ct);
                     break;
                 case MenuConfig:
-                    ShowConfig(tigerContext);
+                    var configEditor = new ConfigEditor(tigerContext.Config, tigerContext.ConfigDirectory);
+                    configEditor.Show();
+                    if (configEditor.Changed)
+                    {
+                        var ingestion = new BuildIngestionService(db, serviceLog);
+                        var backfill = new BuildBackfillService(tigerContext.Config, db, ingestion, clientFactory, serviceLog);
+                        _ = Task.Run(() => backfill.BackfillAsync(ct), ct);
+                        AnsiConsole.MarkupLine("[green]Configuration changed — backfill started in background.[/]");
+                        Console.ReadKey(true);
+                    }
                     break;
                 case MenuQuit:
                     return;
@@ -212,28 +221,6 @@ public sealed class DashboardCommand : AsyncCommand
             var service = Markup.Escape(entry.Service);
             var message = Markup.Escape(entry.Message);
             AnsiConsole.MarkupLine($"[dim]{time}[/] [{levelColor}]{service}[/] {message}");
-        }
-    }
-
-    private static void ShowConfig(TigerContext tigerContext)
-    {
-        var config = tigerContext.Config;
-        AnsiConsole.MarkupLine($"[bold]Config path:[/] {TigerConfig.GetConfigPath(tigerContext.ConfigDirectory)}");
-        AnsiConsole.MarkupLine($"[bold]Poll interval:[/] {config.PollIntervalSeconds}s");
-        AnsiConsole.MarkupLine($"[bold]Sources:[/]");
-
-        foreach (var source in config.Sources)
-        {
-            AnsiConsole.MarkupLine($"  [green]{source.Organization}[/] / [green]{source.Project}[/]");
-            if (source.Repositories.Count > 0)
-            {
-                foreach (var repo in source.Repositories)
-                    AnsiConsole.MarkupLine($"    - {repo}");
-            }
-            else
-            {
-                AnsiConsole.MarkupLine("    [dim](all repositories)[/]");
-            }
         }
     }
 }
