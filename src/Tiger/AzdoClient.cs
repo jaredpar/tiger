@@ -5,7 +5,7 @@ using Azure.Core;
 
 namespace Tiger;
 
-public sealed class AzdoClient : IBuildDataSource
+public sealed class AzdoClient
 {
     public const string DefaultOrganization = "dnceng-public";
     public const string DefaultProject = "public";
@@ -176,7 +176,13 @@ public sealed class AzdoClient : IBuildDataSource
         return result.Value.Select(MapBuild).ToList();
     }
 
-    public async Task<List<AzdoTestResult>> GetTestFailuresAsync(int buildId)
+    /// <summary>
+    /// Fetches test failures for a build.
+    /// </summary>
+    /// <param name="buildId">The build ID.</param>
+    /// <param name="subResultCount">Controls sub-result fetching for grouped results (e.g. xUnit theories):
+    /// null = do not fetch sub-results, positive = fetch up to that many, -1 = no limit.</param>
+    public async Task<List<AzdoTestResult>> GetTestFailuresAsync(int buildId, int? subResultCount = null)
     {
         var buildUri = $"vstfs:///Build/Build/{buildId}";
         var runsUrl = $"_apis/test/runs?api-version=7.1&buildUri={Uri.EscapeDataString(buildUri)}";
@@ -189,6 +195,8 @@ public sealed class AzdoClient : IBuildDataSource
             ?? throw new InvalidOperationException("Failed to deserialize test runs response");
 
         var failures = new List<AzdoTestResult>();
+        var subResultsFetched = 0;
+
         foreach (var run in runs.Value)
         {
             var resultsUrl = $"_apis/test/Runs/{run.Id}/results?api-version=7.1&outcomes=Failed";
@@ -201,9 +209,11 @@ public sealed class AzdoClient : IBuildDataSource
 
             foreach (var result in results.Value)
             {
-                if (result.HasSubResults)
+                var canFetchSubs = subResultCount is not null &&
+                    (subResultCount == -1 || subResultsFetched < subResultCount);
+
+                if (result.HasSubResults && canFetchSubs)
                 {
-                    // Grouped result (e.g. xUnit theory parent). Fetch with sub-results.
                     var detailed = await GetTestResultWithSubResultsAsync(run.Id, result.Id);
                     if (detailed is not null && detailed.SubResults.Count > 0)
                     {
@@ -215,6 +225,7 @@ public sealed class AzdoClient : IBuildDataSource
                         if (failedSubs.Count > 0)
                         {
                             failures.AddRange(failedSubs);
+                            subResultsFetched++;
                             continue;
                         }
                     }
@@ -365,8 +376,8 @@ public sealed class AzdoClient : IBuildDataSource
         return result.Value[0].Id;
     }
 
-    public async Task<List<AzdoTestResult>> GetTestFailuresAsync(string buildNumber) =>
-        await GetTestFailuresAsync(await ResolveIdAsync(buildNumber));
+    public async Task<List<AzdoTestResult>> GetTestFailuresAsync(string buildNumber, int? subResultCount = null) =>
+        await GetTestFailuresAsync(await ResolveIdAsync(buildNumber), subResultCount);
 
     public async Task<List<AzdoJobTestSummary>> GetTestSummaryByJobAsync(string buildNumber) =>
         await GetTestSummaryByJobAsync(await ResolveIdAsync(buildNumber));

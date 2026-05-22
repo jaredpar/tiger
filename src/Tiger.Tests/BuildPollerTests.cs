@@ -83,8 +83,6 @@ public class BuildPollerTests : IDisposable
             new() { Id = 3, BuildNumber = "3", Status = "inProgress", Uri = "", SourceBranch = "main", DefinitionName = "def" },
         };
 
-        // A fake client factory that returns a mock-ish data source
-        var fakeSource = new FakeBuildDataSource(builds);
         var config = new TigerConfig
         {
             PollIntervalSeconds = 3600,
@@ -113,16 +111,5 @@ public class BuildPollerTests : IDisposable
     {
         var config = new TigerConfig { Sources = [] };
         return new BuildPoller(config, _db, (org, proj) => throw new NotImplementedException());
-    }
-
-    private sealed class FakeBuildDataSource : IBuildDataSource
-    {
-        private readonly List<AzdoBuild> _builds;
-        public FakeBuildDataSource(List<AzdoBuild> builds) => _builds = builds;
-        public Task<List<AzdoBuild>> GetRecentBuildsAsync(int? definitionId = null, int top = 10) => Task.FromResult(_builds.Take(top).ToList());
-        public Task<List<AzdoBuild>> GetBuildsForRepositoryAsync(string repository, int top = 10, string? reasonFilter = null) => Task.FromResult<List<AzdoBuild>>([]);
-        public Task<List<AzdoBuild>> GetBuildsForPullRequestAsync(string repository, int prNumber, int top = 10) => Task.FromResult<List<AzdoBuild>>([]);
-        public Task<List<AzdoTestResult>> GetTestFailuresAsync(int buildId) => Task.FromResult<List<AzdoTestResult>>([]);
-        public Task<List<AzdoJobTestSummary>> GetTestSummaryByJobAsync(int buildId) => Task.FromResult<List<AzdoJobTestSummary>>([]);
     }
 }

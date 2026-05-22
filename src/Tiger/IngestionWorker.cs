@@ -183,7 +183,7 @@ public sealed class IngestionWorker : IDisposable
         _log?.Info("Worker", $"Fetching tests for build #{task.BuildId}...");
 
         var testSummary = await client.GetTestSummaryByJobAsync(task.BuildId);
-        var failures = await client.GetTestFailuresAsync(task.BuildId);
+        var failures = await client.GetTestFailuresAsync(task.BuildId, subResultCount: 50);
 
         var runGroups = failures.GroupBy(f => f.TestRunId);
         foreach (var group in runGroups)
