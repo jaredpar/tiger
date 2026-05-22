@@ -358,39 +358,6 @@ public sealed class AzdoClient
         await response.Content.CopyToAsync(fileStream);
     }
 
-    // buildNumber overloads — resolve to buildId via the builds list endpoint, then delegate
-
-    private async Task<int> ResolveIdAsync(string buildNumber)
-    {
-        var url = $"_apis/build/builds?api-version=7.1&buildNumber={Uri.EscapeDataString(buildNumber)}&$top=1";
-        var response = await HttpClient.GetAsync(url);
-        response.EnsureSuccessStatusCode();
-
-        var json = await response.Content.ReadAsStringAsync();
-        var result = JsonSerializer.Deserialize<AzdoListResponse<AzdoBuildRaw>>(json, s_jsonOptions)
-            ?? throw new InvalidOperationException("Failed to deserialize builds response");
-
-        if (result.Value.Count == 0)
-            throw new InvalidOperationException($"No build found with buildNumber '{buildNumber}'");
-
-        return result.Value[0].Id;
-    }
-
-    public async Task<List<AzdoTestResult>> GetTestFailuresAsync(string buildNumber, int? subResultCount = null) =>
-        await GetTestFailuresAsync(await ResolveIdAsync(buildNumber), subResultCount);
-
-    public async Task<List<AzdoJobTestSummary>> GetTestSummaryByJobAsync(string buildNumber) =>
-        await GetTestSummaryByJobAsync(await ResolveIdAsync(buildNumber));
-
-    public async Task<AzdoTimeline> GetTimelineAsync(string buildNumber) =>
-        await GetTimelineAsync(await ResolveIdAsync(buildNumber));
-
-    public async Task<List<AzdoArtifact>> GetArtifactsAsync(string buildNumber) =>
-        await GetArtifactsAsync(await ResolveIdAsync(buildNumber));
-
-    public async Task DownloadArtifactAsync(string buildNumber, string artifactName, string outputPath) =>
-        await DownloadArtifactAsync(await ResolveIdAsync(buildNumber), artifactName, outputPath);
-
     // Internal types for JSON deserialization of raw API responses
 
     private class AzdoListResponse<T>
