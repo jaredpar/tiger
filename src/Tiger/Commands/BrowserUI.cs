@@ -153,6 +153,30 @@ public static class BrowserUI
     /// <summary>
     /// Formats an ISO time string to local 12-hour time.
     /// </summary>
+    /// <summary>
+    /// Selection menu for build kind filter (pr/ci). Returns null if cancelled or "all" selected.
+    /// </summary>
+    public static string? PromptKindFilter()
+    {
+        AnsiConsole.WriteLine();
+        var choices = new[] { "all", "pr", "ci" };
+        var selected = SelectWithEscape("Select build kind:", choices.ToList(), pageSize: 5);
+        if (selected < 0) return null;
+        return choices[selected] == "all" ? null : choices[selected];
+    }
+
+    /// <summary>
+    /// Applies a kind filter (pr/ci) to a SQL WHERE clause list.
+    /// </summary>
+    public static void ApplyKindFilter(string? kindPattern, List<string> where, string prColumnExpr = "b.pr_number")
+    {
+        if (kindPattern is null) return;
+        if (kindPattern.Equals("pr", StringComparison.OrdinalIgnoreCase))
+            where.Add($"{prColumnExpr} IS NOT NULL");
+        else if (kindPattern.Equals("ci", StringComparison.OrdinalIgnoreCase))
+            where.Add($"{prColumnExpr} IS NULL");
+    }
+
     public static string FormatTime(string? isoTime)
     {
         if (isoTime is null) return "—";

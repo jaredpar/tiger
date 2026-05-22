@@ -239,10 +239,7 @@ public sealed class BuildBrowser
         }
         if (_filter.KindPattern is not null)
         {
-            if (_filter.KindPattern.Equals("pr", StringComparison.OrdinalIgnoreCase))
-                where.Add("b.pr_number IS NOT NULL");
-            else if (_filter.KindPattern.Equals("ci", StringComparison.OrdinalIgnoreCase))
-                where.Add("b.pr_number IS NULL");
+            BrowserUI.ApplyKindFilter(_filter.KindPattern, where);
         }
 
         var whereClause = where.Count > 0 ? "WHERE " + string.Join(" AND ", where) : "";
@@ -357,7 +354,7 @@ public sealed class BuildBrowser
                 _filter.ResultPattern = PromptResultFilter();
                 break;
             case ConsoleKey.K:
-                _filter.KindPattern = PromptKindFilter();
+                _filter.KindPattern = BrowserUI.PromptKindFilter();
                 break;
             case ConsoleKey.C:
                 _filter.Clear();
@@ -374,18 +371,6 @@ public sealed class BuildBrowser
         AnsiConsole.WriteLine();
         var choices = new[] { "all", "failed", "succeeded", "partiallySucceeded" };
         var selected = BrowserUI.SelectWithEscape("Select outcome:", choices.ToList(), pageSize: 5);
-        if (selected < 0) return null; // cancelled
-        return choices[selected] == "all" ? null : choices[selected];
-    }
-
-    /// <summary>
-    /// Selection menu for kind filter. Returns null if cancelled.
-    /// </summary>
-    private static string? PromptKindFilter()
-    {
-        AnsiConsole.WriteLine();
-        var choices = new[] { "all", "pr", "ci" };
-        var selected = BrowserUI.SelectWithEscape("Select build kind:", choices.ToList(), pageSize: 5);
         if (selected < 0) return null; // cancelled
         return choices[selected] == "all" ? null : choices[selected];
     }

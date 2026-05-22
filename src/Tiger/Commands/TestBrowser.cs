@@ -175,6 +175,7 @@ public sealed class TestBrowser
             where.Add(isExact ? "b.definition_name = @def" : "b.definition_name LIKE @def");
             cmd.Parameters.AddWithValue("@def", pattern);
         }
+        BrowserUI.ApplyKindFilter(_filter.KindPattern, where);
 
         var whereClause = "WHERE " + string.Join(" AND ", where);
 
@@ -275,16 +276,17 @@ public sealed class TestBrowser
         AnsiConsole.MarkupLine("[bold underline]Set Filter[/]");
         AnsiConsole.MarkupLine($"[dim]Current: {Markup.Escape(_filter.ToString())}[/]");
         AnsiConsole.WriteLine();
-        AnsiConsole.MarkupLine("  [blue]T[/] Filter by test name");
+        AnsiConsole.MarkupLine("  [blue]N[/] Filter by test name");
         AnsiConsole.MarkupLine("  [blue]R[/] Filter by repository");
         AnsiConsole.MarkupLine("  [blue]D[/] Filter by definition");
+        AnsiConsole.MarkupLine("  [blue]K[/] Filter by kind (pr, ci)");
         AnsiConsole.MarkupLine("  [blue]C[/] Clear all filters");
         AnsiConsole.MarkupLine("  [blue]Esc[/] Cancel");
 
         var key = Console.ReadKey(true);
         switch (key.Key)
         {
-            case ConsoleKey.T:
+            case ConsoleKey.N:
                 _filter.TestNamePattern = BrowserUI.PromptPattern("Test name pattern (e.g. Serialization, *EditAndContinue*):");
                 break;
             case ConsoleKey.R:
@@ -292,6 +294,9 @@ public sealed class TestBrowser
                 break;
             case ConsoleKey.D:
                 _filter.DefinitionPattern = BrowserUI.PromptPattern("Definition pattern (e.g. ci, roslyn-CI*):");
+                break;
+            case ConsoleKey.K:
+                _filter.KindPattern = BrowserUI.PromptKindFilter();
                 break;
             case ConsoleKey.C:
                 _filter.Clear();
@@ -320,6 +325,7 @@ public sealed class TestBrowser
         AnsiConsole.MarkupLine("  [blue]test:[/]  Test name");
         AnsiConsole.MarkupLine("  [blue]repo:[/]  Repository name");
         AnsiConsole.MarkupLine("  [blue]def:[/]   Definition/pipeline name");
+        AnsiConsole.MarkupLine("  [blue]kind:[/]  Build kind (pr, ci)");
         AnsiConsole.WriteLine();
         AnsiConsole.MarkupLine("[bold]Multiple filters combine with AND.[/]");
         AnsiConsole.MarkupLine("[dim]Press any key to continue...[/]");
@@ -346,15 +352,17 @@ public sealed class TestBrowser
         public string? TestNamePattern { get; set; }
         public string? RepoPattern { get; set; }
         public string? DefinitionPattern { get; set; }
+        public string? KindPattern { get; set; }
 
         public bool IsActive => TestNamePattern is not null || RepoPattern is not null
-            || DefinitionPattern is not null;
+            || DefinitionPattern is not null || KindPattern is not null;
 
         public void Clear()
         {
             TestNamePattern = null;
             RepoPattern = null;
             DefinitionPattern = null;
+            KindPattern = null;
         }
 
         public void ParseExpression(string expression)
@@ -369,6 +377,8 @@ public sealed class TestBrowser
                     RepoPattern = part[5..];
                 else if (part.StartsWith("def:", StringComparison.OrdinalIgnoreCase))
                     DefinitionPattern = part[4..];
+                else if (part.StartsWith("kind:", StringComparison.OrdinalIgnoreCase))
+                    KindPattern = part[5..];
             }
         }
 
@@ -378,6 +388,7 @@ public sealed class TestBrowser
             if (TestNamePattern is not null) parts.Add($"test:{TestNamePattern}");
             if (RepoPattern is not null) parts.Add($"repo:{RepoPattern}");
             if (DefinitionPattern is not null) parts.Add($"def:{DefinitionPattern}");
+            if (KindPattern is not null) parts.Add($"kind:{KindPattern}");
             return parts.Count > 0 ? string.Join(" ", parts) : "(none)";
         }
 
