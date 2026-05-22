@@ -115,6 +115,108 @@ public class AzdoTestResult
     public string? HelixJobName { get; init; }
     public string? HelixWorkItemName { get; init; }
     public bool IsHelixWorkItem { get; init; }
+    public int SubResultCount { get; init; }
+    public string? ResultGroupType { get; init; }
+    public List<AzdoTestSubResult> SubResults { get; init; } = [];
+
+    /// <summary>
+    /// True if this is a grouped result (e.g. xUnit theory parent) that has
+    /// sub-results representing individual invocations.
+    /// </summary>
+    public bool HasSubResults => ResultGroupType is not null &&
+        !ResultGroupType.Equals("none", StringComparison.OrdinalIgnoreCase);
+}
+
+/// <summary>
+/// A sub-result of a test result, e.g. an individual xUnit theory invocation.
+/// </summary>
+[JsonConverter(typeof(AzdoTestSubResultConverter))]
+public class AzdoTestSubResult
+{
+    public int Id { get; init; }
+    public required string DisplayName { get; init; }
+    public required string Outcome { get; init; }
+    public string? ErrorMessage { get; init; }
+    public string? StackTrace { get; init; }
+    public string? Comment { get; init; }
+    public string? HelixJobName { get; init; }
+    public string? HelixWorkItemName { get; init; }
+    public bool IsHelixWorkItem { get; init; }
+
+    /// <summary>
+    /// Converts this sub-result to a full <see cref="AzdoTestResult"/> by merging
+    /// with the parent result's run information.
+    /// </summary>
+    public AzdoTestResult ToTestResult(int testRunId, string testRunName) => new()
+    {
+        Id = Id,
+        TestCaseTitle = DisplayName,
+        Outcome = Outcome,
+        ErrorMessage = ErrorMessage,
+        StackTrace = StackTrace,
+        Comment = Comment,
+        HelixJobName = HelixJobName,
+        HelixWorkItemName = HelixWorkItemName,
+        IsHelixWorkItem = IsHelixWorkItem,
+        TestRunId = testRunId,
+        TestRunName = testRunName,
+        SubResultCount = 0,
+    };
+}
+
+internal sealed class AzdoTestSubResultConverter : JsonConverter<AzdoTestSubResult>
+{
+    public override AzdoTestSubResult Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    {
+        using var doc = JsonDocument.ParseValue(ref reader);
+        var root = doc.RootElement;
+
+        var comment = root.TryGetProperty("comment", out var c) ? c.GetString() : null;
+
+        string? helixJobName = null;
+        string? helixWorkItemName = null;
+        if (comment is not null && comment.Contains("HelixJobId", StringComparison.OrdinalIgnoreCase))
+        {
+            try
+            {
+                using var commentDoc = JsonDocument.Parse(comment);
+                var commentRoot = commentDoc.RootElement;
+                if (commentRoot.TryGetProperty("HelixJobId", out var jobId))
+                    helixJobName = jobId.GetString();
+                if (commentRoot.TryGetProperty("HelixWorkItemName", out var wiName))
+                    helixWorkItemName = wiName.GetString();
+            }
+            catch (JsonException) { }
+        }
+
+        var errorMessage = root.TryGetProperty("errorMessage", out var em) ? em.GetString() : null;
+
+        return new AzdoTestSubResult
+        {
+            Id = root.TryGetProperty("id", out var id) ? id.GetInt32() : 0,
+            DisplayName = root.TryGetProperty("displayName", out var dn) ? dn.GetString() ?? "Unknown" : "Unknown",
+            Outcome = root.TryGetProperty("outcome", out var o) ? o.GetString() ?? "Unknown" : "Unknown",
+            ErrorMessage = errorMessage,
+            StackTrace = root.TryGetProperty("stackTrace", out var st) ? st.GetString() : null,
+            Comment = comment,
+            HelixJobName = helixJobName,
+            HelixWorkItemName = helixWorkItemName,
+            IsHelixWorkItem = errorMessage is not null &&
+                errorMessage.StartsWith("The Helix Work Item failed.", StringComparison.OrdinalIgnoreCase),
+        };
+    }
+
+    public override void Write(Utf8JsonWriter writer, AzdoTestSubResult value, JsonSerializerOptions options)
+    {
+        writer.WriteStartObject();
+        writer.WriteNumber("id", value.Id);
+        writer.WriteString("displayName", value.DisplayName);
+        writer.WriteString("outcome", value.Outcome);
+        writer.WriteString("errorMessage", value.ErrorMessage);
+        writer.WriteString("stackTrace", value.StackTrace);
+        writer.WriteString("comment", value.Comment);
+        writer.WriteEndObject();
+    }
 }
 
 internal sealed class AzdoTestResultConverter : JsonConverter<AzdoTestResult>
@@ -156,6 +258,19 @@ internal sealed class AzdoTestResultConverter : JsonConverter<AzdoTestResult>
         }
 
         var errorMessage = root.TryGetProperty("errorMessage", out var em) ? em.GetString() : null;
+        var subResultCount = root.TryGetProperty("subResultCount", out var src) ? src.GetInt32() : 0;
+        var resultGroupType = root.TryGetProperty("resultGroupType", out var rgt) ? rgt.GetString() : null;
+
+        var subResults = new List<AzdoTestSubResult>();
+        if (root.TryGetProperty("subResults", out var subArray))
+        {
+            foreach (var subEl in subArray.EnumerateArray())
+            {
+                var sub = JsonSerializer.Deserialize<AzdoTestSubResult>(subEl.GetRawText(), options);
+                if (sub is not null)
+                    subResults.Add(sub);
+            }
+        }
 
         return new AzdoTestResult
         {
@@ -170,6 +285,9 @@ internal sealed class AzdoTestResultConverter : JsonConverter<AzdoTestResult>
             HelixJobName = helixJobName,
             HelixWorkItemName = helixWorkItemName,
             IsHelixWorkItem = errorMessage is not null && errorMessage.StartsWith("The Helix Work Item failed.", StringComparison.OrdinalIgnoreCase),
+            SubResultCount = subResultCount,
+            ResultGroupType = resultGroupType,
+            SubResults = subResults,
         };
     }
 
@@ -187,6 +305,7 @@ internal sealed class AzdoTestResultConverter : JsonConverter<AzdoTestResult>
         writer.WriteString("helixJobName", value.HelixJobName);
         writer.WriteString("helixWorkItemName", value.HelixWorkItemName);
         writer.WriteBoolean("isHelixWorkItem", value.IsHelixWorkItem);
+        writer.WriteNumber("subResultCount", value.SubResultCount);
         writer.WriteEndObject();
     }
 }

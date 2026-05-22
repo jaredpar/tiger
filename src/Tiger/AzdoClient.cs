@@ -199,10 +199,45 @@ public sealed class AzdoClient : IBuildDataSource
             var results = JsonSerializer.Deserialize<AzdoListResponse<AzdoTestResult>>(resultsJson, s_jsonOptions)
                 ?? throw new InvalidOperationException("Failed to deserialize test results response");
 
-            failures.AddRange(results.Value);
+            foreach (var result in results.Value)
+            {
+                if (result.HasSubResults)
+                {
+                    // Grouped result (e.g. xUnit theory parent). Fetch with sub-results.
+                    var detailed = await GetTestResultWithSubResultsAsync(run.Id, result.Id);
+                    if (detailed is not null && detailed.SubResults.Count > 0)
+                    {
+                        var failedSubs = detailed.SubResults
+                            .Where(s => s.Outcome == "Failed")
+                            .Select(s => s.ToTestResult(result.TestRunId, result.TestRunName))
+                            .ToList();
+
+                        if (failedSubs.Count > 0)
+                        {
+                            failures.AddRange(failedSubs);
+                            continue;
+                        }
+                    }
+                }
+
+                failures.Add(result);
+            }
         }
 
         return failures;
+    }
+
+    /// <summary>
+    /// Fetches a single test result with sub-results included.
+    /// </summary>
+    private async Task<AzdoTestResult?> GetTestResultWithSubResultsAsync(int runId, int resultId)
+    {
+        var url = $"_apis/test/Runs/{runId}/results/{resultId}?api-version=7.1&detailsToInclude=SubResults";
+        var response = await HttpClient.GetAsync(url);
+        response.EnsureSuccessStatusCode();
+
+        var json = await response.Content.ReadAsStringAsync();
+        return JsonSerializer.Deserialize<AzdoTestResult>(json, s_jsonOptions);
     }
 
     public async Task<List<AzdoTestAttachment>> GetTestResultAttachmentsAsync(int runId, int testCaseResultId)

@@ -1,4 +1,7 @@
 <Solution>
   <Project Path="src\Tiger\Tiger.csproj" />
+  <Folder Name="/src/">
+    <Project Path="src/Scratch/Scratch.csproj" />
+  </Folder>
   <Project Path="src\Tiger.Tests\Tiger.Tests.csproj" />
 </Solution>
