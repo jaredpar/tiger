@@ -34,3 +34,9 @@ Read `docs/todo.md` for the current work item checklist.
 - All SQLite tables are keyed by `(organization, project)` for multi-org support
 - GitHub operations use the user's `gh` CLI auth
 - AzDO auth uses `DefaultAzureCredential`
+
+## UI Conventions
+
+- **Menus** use `BrowserUI.SelectWithEscape` with hotkey support (the `extraKeys` parameter). Menu items are rendered with markup showing the hotkey: `[blue](X)[/] Label`. This gives both arrow-key scrolling and single-keypress shortcuts.
+- **Escape** always means "go back" or "cancel" in any interactive context.
+- **if/try/catch** bodies and braces must be on separate lines — never on the same line as the keyword.

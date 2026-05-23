@@ -24,35 +24,47 @@ public sealed class ConfigEditor
 
     public void Show()
     {
+        var menuItems = new List<string>
+        {
+            "[blue](A)[/] Add source (org/project)",
+            "[blue](R)[/] Add repository to a source",
+            "[blue](D)[/] Remove source",
+            "[blue](X)[/] Remove repository from a source",
+        };
+        var hotkeys = new Dictionary<ConsoleKey, int>
+        {
+            [ConsoleKey.A] = 0,
+            [ConsoleKey.R] = 1,
+            [ConsoleKey.D] = 2,
+            [ConsoleKey.X] = 3,
+        };
+
         while (true)
         {
             AnsiConsole.Clear();
             RenderConfig();
 
-            AnsiConsole.MarkupLine("[bold]Actions:[/]");
-            AnsiConsole.MarkupLine("  [blue]A[/] Add source (org/project)");
-            AnsiConsole.MarkupLine("  [blue]D[/] Delete source");
-            AnsiConsole.MarkupLine("  [blue]R[/] Add repository to a source");
-            AnsiConsole.MarkupLine("  [blue]X[/] Remove repository from a source");
-            AnsiConsole.MarkupLine("  [blue]Esc[/] Back to menu");
-
-            var key = Console.ReadKey(true);
-            switch (key.Key)
+            var selected = BrowserUI.SelectWithEscape(
+                "Actions:", menuItems, extraKeys: hotkeys, useMarkup: true);
+            if (selected < 0)
             {
-                case ConsoleKey.A:
+                return;
+            }
+
+            switch (selected)
+            {
+                case 0:
                     AddSource();
                     break;
-                case ConsoleKey.D:
-                    DeleteSource();
-                    break;
-                case ConsoleKey.R:
+                case 1:
                     AddRepository();
                     break;
-                case ConsoleKey.X:
+                case 2:
+                    DeleteSource();
+                    break;
+                case 3:
                     RemoveRepository();
                     break;
-                case ConsoleKey.Escape:
-                    return;
             }
         }
     }
@@ -131,7 +143,7 @@ public sealed class ConfigEditor
     {
         if (_config.Sources.Count == 0)
         {
-            AnsiConsole.MarkupLine("[yellow]No sources to delete.[/]");
+            AnsiConsole.MarkupLine("[yellow]No sources to remove.[/]");
             Console.ReadKey(true);
             return;
         }
@@ -140,14 +152,14 @@ public sealed class ConfigEditor
         var choices = _config.Sources.Select(s =>
             $"{s.Organization}/{s.Project} ({s.Repositories.Count} repos)").ToList();
 
-        var selected = BrowserUI.SelectWithEscape("Select source to delete:", choices);
+        var selected = BrowserUI.SelectWithEscape("Select source to remove:", choices);
         if (selected < 0) return;
 
         var source = _config.Sources[selected];
         _config.Sources.RemoveAt(selected);
         _config.Save(_configDirectory);
         Changed = true;
-        AnsiConsole.MarkupLine($"[green]Deleted source {Markup.Escape(source.Organization)}/{Markup.Escape(source.Project)}[/]");
+        AnsiConsole.MarkupLine($"[green]Removed source {Markup.Escape(source.Organization)}/{Markup.Escape(source.Project)}[/]");
         Console.ReadKey(true);
     }
 
@@ -207,7 +219,10 @@ public sealed class ConfigEditor
         }
 
         if (_config.Sources.Count == 1)
+        {
+            AnsiConsole.MarkupLine($"[dim]Using source: {Markup.Escape(_config.Sources[0].Organization)}/{Markup.Escape(_config.Sources[0].Project)}[/]");
             return _config.Sources[0];
+        }
 
         AnsiConsole.WriteLine();
         var choices = _config.Sources.Select(s =>
