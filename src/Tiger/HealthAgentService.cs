@@ -123,7 +123,7 @@ public sealed class HealthAgentService : IDisposable
                 COUNT(DISTINCT CASE WHEN t.status != 'pending' AND t.status != 'running' THEN b.build_id END) as ready
             FROM builds b
             LEFT JOIN build_ingestion_tasks t
-                ON b.organization = t.organization AND b.project = t.project AND b.build_id = t.build_id
+                ON b.organization = t.organization AND b.build_id = t.build_id
                 AND t.task_type = 'tests'
             WHERE b.repository_name = @repo
               AND b.definition_name = @def

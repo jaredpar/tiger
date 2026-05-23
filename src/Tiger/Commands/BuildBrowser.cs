@@ -249,7 +249,7 @@ public sealed class BuildBrowser
                    b.result, b.source_branch, b.pr_number, b.finish_time,
                    CASE WHEN EXISTS (
                        SELECT 1 FROM build_ingestion_tasks t
-                       WHERE t.organization = b.organization AND t.project = b.project
+                       WHERE t.organization = b.organization
                          AND t.build_id = b.build_id AND t.status != 'complete'
                    ) THEN 'pending' ELSE 'complete' END as ingestion_status,
                    b.definition_id, b.repository_name
@@ -1141,7 +1141,6 @@ public sealed class BuildBrowser
             ORDER BY task_type
             """;
         cmd.Parameters.AddWithValue("@org", org);
-        cmd.Parameters.AddWithValue("@proj", project);
         cmd.Parameters.AddWithValue("@buildId", buildId);
         using var reader = cmd.ExecuteReader();
         while (reader.Read())
