@@ -3,18 +3,21 @@ using Microsoft.Extensions.Logging;
 namespace Tiger;
 
 /// <summary>
-/// Runs on startup to fill gaps in the build database. When tiger is shut down
-/// and restarted, there may be builds that completed during the downtime.
-/// This service queries AzDO for all completed builds since the last poll time
-/// and ingests them into SQLite.
+/// Persistent background service that fills gaps in the build database.
+/// Runs an initial backfill on startup, then waits for requests triggered
+/// by configuration changes. Only one backfill runs at a time — if a
+/// request arrives mid-backfill, it runs again after the current one completes.
 /// </summary>
-public sealed class BuildBackfillService
+public sealed class BuildBackfillService : IDisposable
 {
     private readonly TigerConfig _config;
     private readonly TigerDatabase _db;
     private readonly BuildIngestionService _ingestion;
     private readonly Func<string, string, AzdoClient> _clientFactory;
     private readonly ServiceLog _log;
+    private readonly ManualResetEventSlim _requested = new(true); // signaled for initial run
+    private CancellationTokenSource? _cts;
+    private Task? _runTask;
 
     public BuildBackfillService(
         TigerConfig config,
@@ -31,10 +34,75 @@ public sealed class BuildBackfillService
     }
 
     /// <summary>
-    /// Backfills all configured sources.
-    /// Returns the total number of builds ingested.
+    /// Starts the background loop. Returns immediately.
     /// </summary>
-    public async Task<int> BackfillAsync(CancellationToken ct = default)
+    public void Start()
+    {
+        if (_runTask is not null)
+        {
+            return;
+        }
+
+        _cts = new CancellationTokenSource();
+        _runTask = Task.Run(() => RunLoopAsync(_cts.Token));
+    }
+
+    /// <summary>
+    /// Signals the service to run a backfill. If one is already in progress,
+    /// another will run after it completes.
+    /// </summary>
+    public void RequestBackfill()
+    {
+        _requested.Set();
+    }
+
+    public async Task StopAsync()
+    {
+        if (_cts is not null)
+        {
+            await _cts.CancelAsync();
+        }
+
+        if (_runTask is not null)
+        {
+            try
+            {
+                await _runTask;
+            }
+            catch (OperationCanceledException)
+            {
+            }
+        }
+    }
+
+    public void Dispose()
+    {
+        _cts?.Dispose();
+        _requested.Dispose();
+    }
+
+    private async Task RunLoopAsync(CancellationToken ct)
+    {
+        while (!ct.IsCancellationRequested)
+        {
+            try
+            {
+                _requested.Wait(ct);
+                _requested.Reset();
+                await BackfillAsync(ct);
+            }
+            catch (OperationCanceledException)
+            {
+                break;
+            }
+            catch (Exception ex)
+            {
+                _log.Error("Backfill", $"Unexpected error: {ex.Message}");
+            }
+        }
+    }
+
+    private async Task<int> BackfillAsync(CancellationToken ct)
     {
         _log.Info("Backfill", "Starting backfill...");
         var totalIngested = 0;
@@ -42,7 +110,9 @@ public sealed class BuildBackfillService
         foreach (var source in _config.Sources)
         {
             if (ct.IsCancellationRequested)
+            {
                 break;
+            }
 
             try
             {

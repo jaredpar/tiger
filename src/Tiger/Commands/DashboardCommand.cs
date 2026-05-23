@@ -46,18 +46,19 @@ public sealed class DashboardCommand : AsyncCommand
         healthAgent.Start();
 
         var backfill = new BuildBackfillService(config, db, ingestion, clientFactory, serviceLog);
-        _ = Task.Run(() => backfill.BackfillAsync(ct), ct);
+        backfill.Start();
 
         try
         {
             RenderBanner(config, tigerContext, poller, worker);
-            await RunMenuLoopAsync(tigerContext, db, clientFactory, poller, serviceLog, ct);
+            await RunMenuLoopAsync(tigerContext, db, clientFactory, backfill, serviceLog, ct);
         }
         finally
         {
             AnsiConsole.MarkupLine("[yellow]Stopping services...[/]");
             await worker.StopAsync();
             await poller.StopAsync();
+            await backfill.StopAsync();
         }
 
         return 0;
@@ -88,7 +89,7 @@ public sealed class DashboardCommand : AsyncCommand
     private static async Task RunMenuLoopAsync(
         TigerContext tigerContext, TigerDatabase db,
         Func<string, string, AzdoClient> clientFactory,
-        BuildPoller? poller,
+        BuildBackfillService backfill,
         ServiceLog serviceLog, CancellationToken ct)
     {
         var menuItems = new List<string>
@@ -152,10 +153,8 @@ public sealed class DashboardCommand : AsyncCommand
                     configEditor.Show();
                     if (configEditor.Changed)
                     {
-                        var ingestion = new BuildIngestionService(db, serviceLog);
-                        var backfill = new BuildBackfillService(tigerContext.Config, db, ingestion, clientFactory, serviceLog);
-                        _ = Task.Run(() => backfill.BackfillAsync(ct), ct);
-                        AnsiConsole.MarkupLine("[green]Configuration changed — backfill started in background.[/]");
+                        backfill.RequestBackfill();
+                        AnsiConsole.MarkupLine("[green]Configuration changed — backfill requested.[/]");
                         Console.ReadKey(true);
                     }
                     break;
