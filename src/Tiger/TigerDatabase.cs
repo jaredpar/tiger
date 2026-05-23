@@ -128,6 +128,9 @@ public sealed class TigerDatabase : IDisposable
             CREATE INDEX IF NOT EXISTS ix_builds_branch
                 ON builds (organization, project, source_branch, finish_time);
 
+            CREATE INDEX IF NOT EXISTS ix_builds_repo_def
+                ON builds (repository_name, definition_name, finish_time);
+
             CREATE TABLE IF NOT EXISTS test_runs (
                 organization TEXT NOT NULL,
                 project TEXT NOT NULL,

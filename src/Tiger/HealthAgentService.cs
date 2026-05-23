@@ -93,6 +93,12 @@ public sealed class HealthAgentService : IDisposable
             if (ct.IsCancellationRequested)
                 break;
 
+            if (!IsDataReady(repo, definition))
+            {
+                _log?.Info("HealthAgent", $"Skipping {repo} / {definition} — ingestion not ready yet.");
+                continue;
+            }
+
             try
             {
                 await EvaluateHealthAsync(repo, definition, ct);
@@ -102,6 +108,43 @@ public sealed class HealthAgentService : IDisposable
                 _log?.Warning("HealthAgent", $"Failed to evaluate {repo}/{definition}: {ex.Message}");
             }
         }
+    }
+
+    /// <summary>
+    /// Returns true if at least 90% of builds in the lookback window for this
+    /// repo/definition have non-pending ingestion status.
+    /// </summary>
+    private bool IsDataReady(string repository, string definition)
+    {
+        using var cmd = _db.Connection.CreateCommand();
+        cmd.CommandText = $"""
+            SELECT
+                COUNT(DISTINCT b.build_id) as total,
+                COUNT(DISTINCT CASE WHEN t.status != 'pending' AND t.status != 'running' THEN b.build_id END) as ready
+            FROM builds b
+            LEFT JOIN build_ingestion_tasks t
+                ON b.organization = t.organization AND b.project = t.project AND b.build_id = t.build_id
+                AND t.task_type = 'tests'
+            WHERE b.repository_name = @repo
+              AND b.definition_name = @def
+              AND b.finish_time >= datetime('now', '-{LookbackDays} days')
+            """;
+        cmd.Parameters.AddWithValue("@repo", repository);
+        cmd.Parameters.AddWithValue("@def", definition);
+
+        using var reader = cmd.ExecuteReader();
+        if (!reader.Read())
+            return false;
+
+        var total = reader.GetInt32(0);
+        var ready = reader.GetInt32(1);
+
+        if (total == 0)
+            return false;
+
+        var readyPct = (double)ready / total;
+        _log?.Info("HealthAgent", $"  {repository} / {definition}: {ready}/{total} builds ready ({readyPct:P0})");
+        return readyPct >= 0.9;
     }
 
     private async Task EvaluateHealthAsync(string repository, string definition, CancellationToken ct)
