@@ -1,3 +1,4 @@
+using System.Threading.Channels;
 using Microsoft.Extensions.Logging;
 
 namespace Tiger;
@@ -15,9 +16,11 @@ public sealed class BuildBackfillService : IDisposable
     private readonly BuildIngestionService _ingestion;
     private readonly Func<string, string, AzdoClient> _clientFactory;
     private readonly ServiceLog _log;
-    private readonly ManualResetEventSlim _requested = new(true); // signaled for initial run
+    private readonly Channel<BackfillMode> _channel = Channel.CreateUnbounded<BackfillMode>();
     private CancellationTokenSource? _cts;
     private Task? _runTask;
+
+    private enum BackfillMode { Fast, Full }
 
     public BuildBackfillService(
         TigerConfig config,
@@ -31,6 +34,9 @@ public sealed class BuildBackfillService : IDisposable
         _ingestion = ingestion;
         _clientFactory = clientFactory;
         _log = log;
+
+        // Queue initial fast backfill
+        _channel.Writer.TryWrite(BackfillMode.Fast);
     }
 
     /// <summary>
@@ -48,12 +54,13 @@ public sealed class BuildBackfillService : IDisposable
     }
 
     /// <summary>
-    /// Signals the service to run a backfill. If one is already in progress,
-    /// another will run after it completes.
+    /// Signals the service to run a full backfill using the entire backfill
+    /// window instead of the watermark, since new sources may have been added.
+    /// If one is already in progress, another will run after it completes.
     /// </summary>
     public void RequestBackfill()
     {
-        _requested.Set();
+        _channel.Writer.TryWrite(BackfillMode.Full);
     }
 
     public async Task StopAsync()
@@ -78,18 +85,28 @@ public sealed class BuildBackfillService : IDisposable
     public void Dispose()
     {
         _cts?.Dispose();
-        _requested.Dispose();
     }
 
     private async Task RunLoopAsync(CancellationToken ct)
     {
+        var reader = _channel.Reader;
         while (!ct.IsCancellationRequested)
         {
             try
             {
-                _requested.Wait(ct);
-                _requested.Reset();
-                await BackfillAsync(ct);
+                // Wait for at least one request
+                var mode = await reader.ReadAsync(ct);
+
+                // Drain any queued requests, upgrading to Full if any request is Full
+                while (reader.TryRead(out var next))
+                {
+                    if (next == BackfillMode.Full)
+                    {
+                        mode = BackfillMode.Full;
+                    }
+                }
+
+                await BackfillAsync(mode == BackfillMode.Full, ct);
             }
             catch (OperationCanceledException)
             {
@@ -102,7 +119,7 @@ public sealed class BuildBackfillService : IDisposable
         }
     }
 
-    private async Task<int> BackfillAsync(CancellationToken ct)
+    private async Task<int> BackfillAsync(bool forceFullWindow, CancellationToken ct)
     {
         _log.Info("Backfill", "Starting backfill...");
         var totalIngested = 0;
@@ -116,7 +133,7 @@ public sealed class BuildBackfillService : IDisposable
 
             try
             {
-                var count = await BackfillSourceAsync(source, ct);
+                var count = await BackfillSourceAsync(source, forceFullWindow, ct);
                 totalIngested += count;
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
@@ -130,10 +147,18 @@ public sealed class BuildBackfillService : IDisposable
         return totalIngested;
     }
 
-    private async Task<int> BackfillSourceAsync(AzdoSource source, CancellationToken ct)
+    private async Task<int> BackfillSourceAsync(AzdoSource source, bool forceFullWindow, CancellationToken ct)
     {
-        var lastPollTime = GetLastPollTime(source.Organization, source.Project);
-        var since = lastPollTime ?? DateTime.UtcNow - TimeSpan.FromDays(_config.BackfillDays);
+        DateTime since;
+        if (forceFullWindow)
+        {
+            since = DateTime.UtcNow - TimeSpan.FromDays(_config.BackfillDays);
+        }
+        else
+        {
+            var lastPollTime = GetLastPollTime(source.Organization, source.Project);
+            since = lastPollTime ?? DateTime.UtcNow - TimeSpan.FromDays(_config.BackfillDays);
+        }
 
         _log.Info("Backfill",
             $"{source.Organization}/{source.Project} — fetching builds since {TigerUtils.FormatLocalTime(since)}");
