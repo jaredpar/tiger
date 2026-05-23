@@ -76,12 +76,11 @@ public sealed class BuildIngestionService
             using var cmd = _db.Connection.CreateCommand();
             cmd.CommandText = """
                 INSERT OR IGNORE INTO build_ingestion_tasks
-                    (organization, project, build_id, task_type, status)
+                    (organization, build_id, task_type, status)
                 VALUES
-                    (@org, @proj, @buildId, @type, 'pending')
+                    (@org, @buildId, @type, 'pending')
                 """;
             cmd.Parameters.AddWithValue("@org", organization);
-            cmd.Parameters.AddWithValue("@proj", project);
             cmd.Parameters.AddWithValue("@buildId", build.Id);
             cmd.Parameters.AddWithValue("@type", taskType);
             cmd.ExecuteNonQuery();
@@ -147,9 +146,8 @@ public sealed class BuildIngestionService
     {
         using (var delCmd = _db.Connection.CreateCommand())
         {
-            delCmd.CommandText = "DELETE FROM build_timeline_issues WHERE organization = @org AND project = @proj AND build_id = @buildId";
+            delCmd.CommandText = "DELETE FROM build_timeline_issues WHERE organization = @org AND build_id = @buildId";
             delCmd.Parameters.AddWithValue("@org", organization);
-            delCmd.Parameters.AddWithValue("@proj", project);
             delCmd.Parameters.AddWithValue("@buildId", buildId);
             delCmd.ExecuteNonQuery();
         }
@@ -169,14 +167,13 @@ public sealed class BuildIngestionService
                 using var cmd = _db.Connection.CreateCommand();
                 cmd.CommandText = """
                     INSERT INTO build_timeline_issues
-                        (organization, project, build_id, record_name, record_type,
+                        (organization, build_id, record_name, record_type,
                          parent_name, record_result, issue_type, issue_message, issue_category)
                     VALUES
-                        (@org, @proj, @buildId, @name, @type,
+                        (@org, @buildId, @name, @type,
                          @parent, @result, @issueType, @message, @category)
                     """;
                 cmd.Parameters.AddWithValue("@org", organization);
-                cmd.Parameters.AddWithValue("@proj", project);
                 cmd.Parameters.AddWithValue("@buildId", buildId);
                 cmd.Parameters.AddWithValue("@name", record.Name);
                 cmd.Parameters.AddWithValue("@type", record.RecordType);

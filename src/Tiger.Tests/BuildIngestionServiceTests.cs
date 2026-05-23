@@ -167,6 +167,137 @@ public class BuildIngestionServiceTests : IDisposable
         Assert.True(reader.IsDBNull(1));
     }
 
+    [Fact]
+    public void IngestTimelineIssues_StoresCorrectly()
+    {
+        InsertSampleBuild(40);
+
+        var timeline = new AzdoTimeline
+        {
+            Records =
+            [
+                new AzdoTimelineRecord
+                {
+                    Id = "job-1",
+                    ParentId = null,
+                    Name = "Build_Windows",
+                    RecordType = "Job",
+                    Result = "failed",
+                    Issues =
+                    [
+                        new AzdoTimelineIssue { Type = "error", Message = "Build failed", Category = "General" },
+                    ],
+                },
+                new AzdoTimelineRecord
+                {
+                    Id = "task-1",
+                    ParentId = "job-1",
+                    Name = "Compile",
+                    RecordType = "Task",
+                    Result = "failed",
+                    Issues =
+                    [
+                        new AzdoTimelineIssue { Type = "error", Message = "CS0001: Compilation error" },
+                        new AzdoTimelineIssue { Type = "warning", Message = "CS0168: Unused variable" },
+                    ],
+                },
+                new AzdoTimelineRecord
+                {
+                    Id = "job-2",
+                    ParentId = null,
+                    Name = "Build_Linux",
+                    RecordType = "Job",
+                    Result = "succeeded",
+                    Issues = [],
+                },
+            ],
+        };
+
+        _service.IngestTimelineIssues("org", "proj", 40, timeline);
+
+        using var cmd = _db.Connection.CreateCommand();
+        cmd.CommandText = "SELECT record_name, record_type, parent_name, issue_type, issue_message FROM build_timeline_issues WHERE build_id = 40 ORDER BY record_name, issue_type;";
+        using var reader = cmd.ExecuteReader();
+
+        // First: Build_Windows job error
+        Assert.True(reader.Read());
+        Assert.Equal("Build_Windows", reader.GetString(0));
+        Assert.Equal("Job", reader.GetString(1));
+        Assert.True(reader.IsDBNull(2)); // no parent
+        Assert.Equal("error", reader.GetString(3));
+        Assert.Equal("Build failed", reader.GetString(4));
+
+        // Second: Compile task error
+        Assert.True(reader.Read());
+        Assert.Equal("Compile", reader.GetString(0));
+        Assert.Equal("Task", reader.GetString(1));
+        Assert.Equal("Build_Windows", reader.GetString(2)); // parent is the job
+        Assert.Equal("error", reader.GetString(3));
+        Assert.Equal("CS0001: Compilation error", reader.GetString(4));
+
+        // Third: Compile task warning
+        Assert.True(reader.Read());
+        Assert.Equal("Compile", reader.GetString(0));
+        Assert.Equal("warning", reader.GetString(3));
+
+        // No more rows (Build_Linux had no issues)
+        Assert.False(reader.Read());
+    }
+
+    [Fact]
+    public void IngestTimelineIssues_ReIngestion_ReplacesOldData()
+    {
+        InsertSampleBuild(50);
+
+        var timeline1 = new AzdoTimeline
+        {
+            Records =
+            [
+                new AzdoTimelineRecord
+                {
+                    Id = "j1", Name = "Job1", RecordType = "Job",
+                    Issues = [new AzdoTimelineIssue { Type = "error", Message = "Old error" }],
+                },
+            ],
+        };
+
+        _service.IngestTimelineIssues("org", "proj", 50, timeline1);
+
+        using (var cmd = _db.Connection.CreateCommand())
+        {
+            cmd.CommandText = "SELECT COUNT(*) FROM build_timeline_issues WHERE build_id = 50;";
+            Assert.Equal(1L, cmd.ExecuteScalar());
+        }
+
+        // Re-ingest with different data
+        var timeline2 = new AzdoTimeline
+        {
+            Records =
+            [
+                new AzdoTimelineRecord
+                {
+                    Id = "j2", Name = "Job2", RecordType = "Job",
+                    Issues =
+                    [
+                        new AzdoTimelineIssue { Type = "error", Message = "New error 1" },
+                        new AzdoTimelineIssue { Type = "warning", Message = "New warning" },
+                    ],
+                },
+            ],
+        };
+
+        _service.IngestTimelineIssues("org", "proj", 50, timeline2);
+
+        using (var cmd = _db.Connection.CreateCommand())
+        {
+            cmd.CommandText = "SELECT COUNT(*) FROM build_timeline_issues WHERE build_id = 50;";
+            Assert.Equal(2L, cmd.ExecuteScalar());
+
+            cmd.CommandText = "SELECT issue_message FROM build_timeline_issues WHERE build_id = 50 AND issue_type = 'error';";
+            Assert.Equal("New error 1", cmd.ExecuteScalar());
+        }
+    }
+
     private void InsertSampleBuild(int buildId)
     {
         _service.InsertBuild("org", "proj", new AzdoBuild

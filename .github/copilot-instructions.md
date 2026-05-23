@@ -9,7 +9,10 @@ Work through `docs/todo.md` **one item at a time**:
 2. **Stop and present the changes for human review** — do NOT commit or move on
 3. Only after explicit approval: commit and proceed to the next item
 
-Do not batch multiple todo items. Do not commit without sign-off.
+Rules:
+
+- Do not commit without explicit approval.
+- Do not delete `tiger.db` without explicit approval.
 
 ## Key Documentation
 

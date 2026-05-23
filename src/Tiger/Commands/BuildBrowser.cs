@@ -415,7 +415,7 @@ public sealed class BuildBrowser
         buildCmd.CommandText = """
             SELECT build_number, definition_name, result, source_branch, pr_number, finish_time, repository_name
             FROM builds
-            WHERE organization = @org AND project = @proj AND build_id = @buildId
+            WHERE organization = @org AND build_id = @buildId
             """;
         buildCmd.Parameters.AddWithValue("@org", page.Org);
         buildCmd.Parameters.AddWithValue("@proj", page.Project);
@@ -521,7 +521,7 @@ public sealed class BuildBrowser
             jobsCmd.CommandText = """
                 SELECT DISTINCT parent_name
                 FROM build_timeline_issues
-                WHERE organization = @org AND project = @proj AND build_id = @buildId
+                WHERE organization = @org AND build_id = @buildId
                   AND parent_name IS NOT NULL AND issue_type = 'error'
                 ORDER BY parent_name
                 """;
@@ -560,7 +560,7 @@ public sealed class BuildBrowser
             testsCmd.CommandText = """
                 SELECT r.run_name, tr.test_case_title, tr.error_message
                 FROM test_results tr
-                JOIN test_runs r ON tr.organization = r.organization AND tr.project = r.project AND tr.run_id = r.run_id
+                JOIN test_runs r ON tr.organization = r.organization AND tr.run_id = r.run_id
                 WHERE r.organization = @org AND r.project = @proj AND r.build_id = @buildId
                       AND tr.outcome = 'Failed'
                 ORDER BY r.run_name, tr.test_case_title
@@ -659,7 +659,7 @@ public sealed class BuildBrowser
         cmd.CommandText = """
             SELECT r.run_name, tr.test_case_title
             FROM test_results tr
-            JOIN test_runs r ON tr.organization = r.organization AND tr.project = r.project AND tr.run_id = r.run_id
+            JOIN test_runs r ON tr.organization = r.organization AND tr.run_id = r.run_id
             WHERE r.organization = @org AND r.project = @proj AND r.build_id = @buildId
                   AND tr.outcome = 'Failed'
             ORDER BY r.run_name, tr.test_case_title
@@ -720,7 +720,7 @@ public sealed class BuildBrowser
             SELECT tr.error_message, tr.stack_trace, tr.helix_job_name, tr.helix_work_item_name,
                    r.build_id, r.run_name
             FROM test_results tr
-            JOIN test_runs r ON tr.organization = r.organization AND tr.project = r.project AND tr.run_id = r.run_id
+            JOIN test_runs r ON tr.organization = r.organization AND tr.run_id = r.run_id
             WHERE tr.organization = @org AND tr.project = @proj
                   AND tr.test_case_title = @testName AND tr.outcome = 'Failed'
             ORDER BY r.build_id DESC
@@ -750,7 +750,7 @@ public sealed class BuildBrowser
         countCmd.CommandText = """
             SELECT COUNT(DISTINCT r.build_id)
             FROM test_results tr
-            JOIN test_runs r ON tr.organization = r.organization AND tr.project = r.project AND tr.run_id = r.run_id
+            JOIN test_runs r ON tr.organization = r.organization AND tr.run_id = r.run_id
             WHERE tr.organization = @org AND tr.project = @proj
                   AND tr.test_case_title = @testName AND tr.outcome = 'Failed'
             """;
@@ -880,8 +880,8 @@ public sealed class BuildBrowser
                    b.definition_name, b.result, b.source_branch, b.pr_number, b.finish_time,
                    b.definition_id, b.repository_name
             FROM test_results tr
-            JOIN test_runs r ON tr.organization = r.organization AND tr.project = r.project AND tr.run_id = r.run_id
-            JOIN builds b ON r.organization = b.organization AND r.project = b.project AND r.build_id = b.build_id
+            JOIN test_runs r ON tr.organization = r.organization AND tr.run_id = r.run_id
+            JOIN builds b ON r.organization = b.organization AND r.build_id = b.build_id
             WHERE tr.organization = @org AND tr.project = @proj
                   AND tr.test_case_title = @testName AND tr.outcome = 'Failed'
             ORDER BY b.finish_time DESC
@@ -947,7 +947,7 @@ public sealed class BuildBrowser
         cmd.CommandText = """
             SELECT parent_name, record_name, record_type, record_result, issue_type, issue_message
             FROM build_timeline_issues
-            WHERE organization = @org AND project = @proj AND build_id = @buildId
+            WHERE organization = @org AND build_id = @buildId
             ORDER BY parent_name, record_name, issue_type
             """;
         cmd.Parameters.AddWithValue("@org", page.Org);
@@ -1080,7 +1080,7 @@ public sealed class BuildBrowser
         cmd.CommandText = """
             SELECT DISTINCT tr.helix_job_name, tr.helix_work_item_name, hw.state, hw.exit_code, hw.console_output_uri
             FROM test_results tr
-            JOIN test_runs r ON tr.organization = r.organization AND tr.project = r.project AND tr.run_id = r.run_id
+            JOIN test_runs r ON tr.organization = r.organization AND tr.run_id = r.run_id
             LEFT JOIN helix_work_items hw ON tr.helix_job_name = hw.job_name
                 AND tr.helix_work_item_name = hw.work_item_name
             WHERE r.organization = @org AND r.project = @proj AND r.build_id = @buildId
@@ -1137,7 +1137,7 @@ public sealed class BuildBrowser
         cmd.CommandText = """
             SELECT task_type, status, attempts
             FROM build_ingestion_tasks
-            WHERE organization = @org AND project = @proj AND build_id = @buildId
+            WHERE organization = @org AND build_id = @buildId
             ORDER BY task_type
             """;
         cmd.Parameters.AddWithValue("@org", org);

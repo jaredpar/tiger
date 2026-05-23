@@ -315,7 +315,7 @@ public static class BrowserUI
             SELECT tr.error_message, tr.stack_trace, tr.helix_job_name, tr.helix_work_item_name,
                    r.build_id, r.run_name
             FROM test_results tr
-            JOIN test_runs r ON tr.organization = r.organization AND tr.project = r.project AND tr.run_id = r.run_id
+            JOIN test_runs r ON tr.organization = r.organization AND tr.run_id = r.run_id
             WHERE tr.organization = @org AND tr.project = @proj
                   AND tr.test_case_title = @testName AND tr.outcome = 'Failed'
             ORDER BY r.build_id DESC
@@ -341,7 +341,7 @@ public static class BrowserUI
         countCmd.CommandText = """
             SELECT COUNT(DISTINCT r.build_id)
             FROM test_results tr
-            JOIN test_runs r ON tr.organization = r.organization AND tr.project = r.project AND tr.run_id = r.run_id
+            JOIN test_runs r ON tr.organization = r.organization AND tr.run_id = r.run_id
             WHERE tr.organization = @org AND tr.project = @proj
                   AND tr.test_case_title = @testName AND tr.outcome = 'Failed'
             """;

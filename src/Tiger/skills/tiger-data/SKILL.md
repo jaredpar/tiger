@@ -47,7 +47,7 @@ Test run summaries per build. A build can have multiple test runs (one per job/l
 | failed_tests | INTEGER | Failed count |
 | skipped_tests | INTEGER | Skipped count |
 
-Primary key: `(organization, project, run_id)`
+Primary key: `(organization, run_id)`
 
 ### test_results
 Individual test failure results. Only failed tests are stored.
@@ -65,7 +65,7 @@ Individual test failure results. Only failed tests are stored.
 | helix_job_name | TEXT | Helix job ID if test ran on Helix |
 | helix_work_item_name | TEXT | Helix work item name if applicable |
 
-Primary key: `(organization, project, run_id, result_id)`
+Primary key: `(organization, run_id, result_id)`
 
 ### build_timeline_issues
 Errors and warnings from the AzDO build timeline (jobs and tasks).
@@ -73,7 +73,6 @@ Errors and warnings from the AzDO build timeline (jobs and tasks).
 | Column | Type | Description |
 |--------|------|-------------|
 | organization | TEXT | AzDO organization |
-| project | TEXT | AzDO project |
 | build_id | INTEGER | FK to builds |
 | record_name | TEXT | Job or task name that produced the issue |
 | record_type | TEXT | "Job" or "Task" |
@@ -89,7 +88,6 @@ Tracks async ingestion of detailed data per build.
 | Column | Type | Description |
 |--------|------|-------------|
 | organization | TEXT | AzDO organization |
-| project | TEXT | AzDO project |
 | build_id | INTEGER | FK to builds |
 | task_type | TEXT | "tests", "timeline", "helix", or "pr_info" |
 | status | TEXT | "pending", "running", "complete", "failed", "abandoned" |
@@ -159,7 +157,7 @@ LIMIT 20;
 SELECT tr.test_case_title, COUNT(DISTINCT r.build_id) as build_count
 FROM test_results tr
 JOIN test_runs r ON tr.organization = r.organization
-    AND tr.project = r.project AND tr.run_id = r.run_id
+    AND tr.run_id = r.run_id
 WHERE tr.outcome = 'Failed'
 GROUP BY tr.test_case_title
 ORDER BY build_count DESC
@@ -171,7 +169,7 @@ LIMIT 20;
 SELECT tr.test_case_title, tr.error_message, tr.helix_job_name
 FROM test_results tr
 JOIN test_runs r ON tr.organization = r.organization
-    AND tr.project = r.project AND tr.run_id = r.run_id
+    AND tr.run_id = r.run_id
 WHERE r.build_id = BUILD_ID AND tr.outcome = 'Failed'
 ORDER BY tr.test_case_title;
 ```
@@ -189,9 +187,9 @@ ORDER BY parent_name, record_name;
 SELECT b.build_id, b.definition_name, b.result, b.finish_time, b.source_branch
 FROM test_results tr
 JOIN test_runs r ON tr.organization = r.organization
-    AND tr.project = r.project AND tr.run_id = r.run_id
+    AND tr.run_id = r.run_id
 JOIN builds b ON r.organization = b.organization
-    AND r.project = b.project AND r.build_id = b.build_id
+    AND r.build_id = b.build_id
 WHERE tr.test_case_title = 'FULL_TEST_NAME' AND tr.outcome = 'Failed'
 ORDER BY b.finish_time DESC;
 ```
@@ -201,9 +199,9 @@ ORDER BY b.finish_time DESC;
 SELECT tr.test_case_title, COUNT(*) as fail_count
 FROM test_results tr
 JOIN test_runs r ON tr.organization = r.organization
-    AND tr.project = r.project AND tr.run_id = r.run_id
+    AND tr.run_id = r.run_id
 JOIN builds b ON r.organization = b.organization
-    AND r.project = b.project AND r.build_id = b.build_id
+    AND r.build_id = b.build_id
 WHERE tr.outcome = 'Failed' AND b.source_branch = 'refs/heads/main'
 GROUP BY tr.test_case_title
 ORDER BY fail_count DESC

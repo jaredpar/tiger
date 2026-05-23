@@ -235,13 +235,11 @@ public sealed class IngestionWorker : IDisposable
             cmd.CommandText = """
                 SELECT DISTINCT tr.helix_job_name, tr.helix_work_item_name
                 FROM test_results tr
-                JOIN test_runs trn ON tr.organization = trn.organization
-                    AND tr.project = trn.project AND tr.run_id = trn.run_id
-                WHERE trn.organization = @org AND trn.project = @proj AND trn.build_id = @buildId
+                JOIN test_runs trn ON tr.organization = trn.organization AND tr.run_id = trn.run_id
+                WHERE trn.organization = @org AND trn.build_id = @buildId
                   AND tr.helix_job_name IS NOT NULL AND tr.helix_work_item_name IS NOT NULL
                 """;
             cmd.Parameters.AddWithValue("@org", task.Organization);
-            cmd.Parameters.AddWithValue("@proj", task.Project);
             cmd.Parameters.AddWithValue("@buildId", task.BuildId);
 
             using var reader = cmd.ExecuteReader();
@@ -329,9 +327,8 @@ public sealed class IngestionWorker : IDisposable
     {
         // Look up the build's PR number and repo
         using var cmd = _db.Connection.CreateCommand();
-        cmd.CommandText = "SELECT pr_number, repository_name FROM builds WHERE organization = @org AND project = @proj AND build_id = @buildId";
+        cmd.CommandText = "SELECT pr_number, repository_name FROM builds WHERE organization = @org AND build_id = @buildId";
         cmd.Parameters.AddWithValue("@org", task.Organization);
-        cmd.Parameters.AddWithValue("@proj", task.Project);
         cmd.Parameters.AddWithValue("@buildId", task.BuildId);
 
         using var reader = cmd.ExecuteReader();
@@ -414,19 +411,19 @@ public sealed class IngestionWorker : IDisposable
         var tasks = new List<IngestionTask>();
         using var cmd = _db.Connection.CreateCommand();
         cmd.CommandText = """
-            SELECT organization, project, build_id, task_type, status, attempts
+            SELECT t.organization, b.project, t.build_id, t.task_type, t.status, t.attempts
             FROM build_ingestion_tasks t
-            WHERE status IN ('pending', 'failed')
-              AND (next_retry_time IS NULL OR next_retry_time <= datetime('now'))
-              AND (task_type != 'helix' OR EXISTS (
+            JOIN builds b ON t.organization = b.organization AND t.build_id = b.build_id
+            WHERE t.status IN ('pending', 'failed')
+              AND (t.next_retry_time IS NULL OR t.next_retry_time <= datetime('now'))
+              AND (t.task_type != 'helix' OR EXISTS (
                   SELECT 1 FROM build_ingestion_tasks dep
                   WHERE dep.organization = t.organization
-                    AND dep.project = t.project
                     AND dep.build_id = t.build_id
                     AND dep.task_type = 'tests'
                     AND dep.status = 'complete'
               ))
-            ORDER BY build_id DESC, task_type ASC
+            ORDER BY t.build_id DESC, t.task_type ASC
             LIMIT 20
             """;
 
@@ -450,10 +447,9 @@ public sealed class IngestionWorker : IDisposable
         cmd.CommandText = """
             UPDATE build_ingestion_tasks
             SET status = 'running', last_attempt_time = datetime('now')
-            WHERE organization = @org AND project = @proj AND build_id = @buildId AND task_type = @type
+            WHERE organization = @org AND build_id = @buildId AND task_type = @type
             """;
         cmd.Parameters.AddWithValue("@org", task.Organization);
-        cmd.Parameters.AddWithValue("@proj", task.Project);
         cmd.Parameters.AddWithValue("@buildId", task.BuildId);
         cmd.Parameters.AddWithValue("@type", task.TaskType);
         cmd.ExecuteNonQuery();
@@ -465,10 +461,9 @@ public sealed class IngestionWorker : IDisposable
         cmd.CommandText = """
             UPDATE build_ingestion_tasks
             SET status = 'complete', completed_time = datetime('now'), last_error = NULL
-            WHERE organization = @org AND project = @proj AND build_id = @buildId AND task_type = @type
+            WHERE organization = @org AND build_id = @buildId AND task_type = @type
             """;
         cmd.Parameters.AddWithValue("@org", task.Organization);
-        cmd.Parameters.AddWithValue("@proj", task.Project);
         cmd.Parameters.AddWithValue("@buildId", task.BuildId);
         cmd.Parameters.AddWithValue("@type", task.TaskType);
         cmd.ExecuteNonQuery();
@@ -484,10 +479,9 @@ public sealed class IngestionWorker : IDisposable
                 last_error = @error,
                 last_attempt_time = datetime('now'),
                 next_retry_time = datetime('now', '+{retryDelaySecs} seconds')
-            WHERE organization = @org AND project = @proj AND build_id = @buildId AND task_type = @type
+            WHERE organization = @org AND build_id = @buildId AND task_type = @type
             """;
         cmd.Parameters.AddWithValue("@org", task.Organization);
-        cmd.Parameters.AddWithValue("@proj", task.Project);
         cmd.Parameters.AddWithValue("@buildId", task.BuildId);
         cmd.Parameters.AddWithValue("@type", task.TaskType);
         cmd.Parameters.AddWithValue("@error", error);
@@ -503,10 +497,9 @@ public sealed class IngestionWorker : IDisposable
                 attempts = attempts + 1,
                 last_error = @error,
                 last_attempt_time = datetime('now')
-            WHERE organization = @org AND project = @proj AND build_id = @buildId AND task_type = @type
+            WHERE organization = @org AND build_id = @buildId AND task_type = @type
             """;
         cmd.Parameters.AddWithValue("@org", task.Organization);
-        cmd.Parameters.AddWithValue("@proj", task.Project);
         cmd.Parameters.AddWithValue("@buildId", task.BuildId);
         cmd.Parameters.AddWithValue("@type", task.TaskType);
         cmd.Parameters.AddWithValue("@error", error);

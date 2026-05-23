@@ -82,10 +82,10 @@ public sealed class StatusCommand : AsyncCommand
                     w.project,
                     w.last_build_id,
                     w.last_poll_time,
-                    (SELECT COUNT(*) FROM builds b WHERE b.organization = w.organization AND b.project = w.project),
+                    (SELECT COUNT(*) FROM builds b WHERE b.organization = w.organization),
                     (SELECT COUNT(*) FROM test_results tr
-                     JOIN test_runs r ON tr.organization = r.organization AND tr.project = r.project AND tr.run_id = r.run_id
-                     WHERE r.organization = w.organization AND r.project = w.project AND tr.outcome = 'Failed')
+                     JOIN test_runs r ON tr.organization = r.organization AND tr.run_id = r.run_id
+                     WHERE r.organization = w.organization AND tr.outcome = 'Failed')
                 FROM poll_watermarks w
                 ORDER BY w.organization, w.project
                 """;

@@ -142,11 +142,11 @@ public class TigerDatabaseTests : IDisposable
             INSERT INTO helix_work_items (job_name, work_item_name, state, exit_code, console_output_uri)
             VALUES ('job-{prefix}', 'wi-{prefix}', 'Finished', 1, 'https://example.com/console');
 
-            INSERT INTO build_timeline_issues (organization, project, build_id, record_name, record_type, issue_type, issue_message)
-            VALUES ('{org}', '{project}', {buildId}, 'Build', 'Job', 'error', 'Something failed');
+            INSERT INTO build_timeline_issues (organization, build_id, record_name, record_type, issue_type, issue_message)
+            VALUES ('{org}', {buildId}, 'Build', 'Job', 'error', 'Something failed');
 
-            INSERT INTO build_ingestion_tasks (organization, project, build_id, task_type, status)
-            VALUES ('{org}', '{project}', {buildId}, 'tests', 'completed');
+            INSERT INTO build_ingestion_tasks (organization, build_id, task_type, status)
+            VALUES ('{org}', {buildId}, 'tests', 'completed');
             """;
         cmd.ExecuteNonQuery();
     }

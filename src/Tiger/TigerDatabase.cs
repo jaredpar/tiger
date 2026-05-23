@@ -141,7 +141,7 @@ public sealed class TigerDatabase : IDisposable
                 passed_tests INTEGER NOT NULL DEFAULT 0,
                 failed_tests INTEGER NOT NULL DEFAULT 0,
                 skipped_tests INTEGER NOT NULL DEFAULT 0,
-                PRIMARY KEY (organization, project, run_id),
+                PRIMARY KEY (organization, run_id),
                 FOREIGN KEY (organization, build_id)
                     REFERENCES builds (organization, build_id)
             );
@@ -158,16 +158,16 @@ public sealed class TigerDatabase : IDisposable
                 duration_ms REAL,
                 helix_job_name TEXT,
                 helix_work_item_name TEXT,
-                PRIMARY KEY (organization, project, run_id, result_id),
-                FOREIGN KEY (organization, project, run_id)
-                    REFERENCES test_runs (organization, project, run_id)
+                PRIMARY KEY (organization, run_id, result_id),
+                FOREIGN KEY (organization, run_id)
+                    REFERENCES test_runs (organization, run_id)
             );
 
             CREATE INDEX IF NOT EXISTS ix_test_results_title
-                ON test_results (organization, project, test_case_title);
+                ON test_results (organization, test_case_title);
 
             CREATE INDEX IF NOT EXISTS ix_test_results_outcome
-                ON test_results (organization, project, outcome);
+                ON test_results (organization, outcome);
 
             CREATE TABLE IF NOT EXISTS poll_watermarks (
                 organization TEXT NOT NULL,
@@ -188,15 +188,14 @@ public sealed class TigerDatabase : IDisposable
                 flip_count INTEGER NOT NULL DEFAULT 0,
                 status TEXT NOT NULL DEFAULT 'active',
                 github_issue_url TEXT,
-                UNIQUE (organization, project, test_case_title, branch)
+                UNIQUE (organization, test_case_title, branch)
             );
 
             CREATE INDEX IF NOT EXISTS ix_flaky_tests_status
-                ON flaky_tests (organization, project, status);
+                ON flaky_tests (organization, status);
 
             CREATE TABLE IF NOT EXISTS build_timeline_issues (
                 organization TEXT NOT NULL,
-                project TEXT NOT NULL,
                 build_id INTEGER NOT NULL,
                 record_name TEXT NOT NULL,
                 record_type TEXT NOT NULL,
@@ -214,7 +213,6 @@ public sealed class TigerDatabase : IDisposable
 
             CREATE TABLE IF NOT EXISTS build_ingestion_tasks (
                 organization TEXT NOT NULL,
-                project TEXT NOT NULL,
                 build_id INTEGER NOT NULL,
                 task_type TEXT NOT NULL,
                 status TEXT NOT NULL DEFAULT 'pending',
@@ -289,7 +287,7 @@ public sealed class TigerDatabase : IDisposable
                 WHERE (job_name, work_item_name) IN (
                     SELECT tr.helix_job_name, tr.helix_work_item_name
                     FROM test_results tr
-                    JOIN test_runs r ON tr.organization = r.organization AND tr.project = r.project AND tr.run_id = r.run_id
+                    JOIN test_runs r ON tr.organization = r.organization AND tr.run_id = r.run_id
                     WHERE r.organization = @org AND r.build_id = @buildId
                       AND tr.helix_job_name IS NOT NULL
                 )
@@ -305,8 +303,8 @@ public sealed class TigerDatabase : IDisposable
             cmd.Transaction = transaction;
             cmd.CommandText = """
                 DELETE FROM test_results
-                WHERE (organization, project, run_id) IN (
-                    SELECT organization, project, run_id FROM test_runs
+                WHERE (organization, run_id) IN (
+                    SELECT organization, run_id FROM test_runs
                     WHERE organization = @org AND build_id = @buildId
                 )
                 """;

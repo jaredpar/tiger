@@ -183,8 +183,8 @@ public sealed class TestBrowser
             SELECT tr.test_case_title, COUNT(DISTINCT r.build_id) as fail_count,
                    MIN(r.organization) as org, MIN(r.project) as proj
             FROM test_results tr
-            JOIN test_runs r ON tr.organization = r.organization AND tr.project = r.project AND tr.run_id = r.run_id
-            JOIN builds b ON r.organization = b.organization AND r.project = b.project AND r.build_id = b.build_id
+            JOIN test_runs r ON tr.organization = r.organization AND tr.run_id = r.run_id
+            JOIN builds b ON r.organization = b.organization AND r.build_id = b.build_id
             {whereClause}
             GROUP BY tr.test_case_title
             ORDER BY fail_count DESC
@@ -209,8 +209,8 @@ public sealed class TestBrowser
             SELECT DISTINCT b.organization, b.project, b.build_id, b.definition_name,
                    b.result, b.pr_number, b.finish_time
             FROM test_results tr
-            JOIN test_runs r ON tr.organization = r.organization AND tr.project = r.project AND tr.run_id = r.run_id
-            JOIN builds b ON r.organization = b.organization AND r.project = b.project AND r.build_id = b.build_id
+            JOIN test_runs r ON tr.organization = r.organization AND tr.run_id = r.run_id
+            JOIN builds b ON r.organization = b.organization AND r.build_id = b.build_id
             WHERE tr.organization = @org AND tr.project = @proj
                   AND tr.test_case_title = @testName AND tr.outcome = 'Failed'
             ORDER BY b.finish_time DESC
