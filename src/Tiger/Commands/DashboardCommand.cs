@@ -99,12 +99,44 @@ public sealed class DashboardCommand : AsyncCommand
         BuildPoller? poller,
         ServiceLog serviceLog, CancellationToken ct)
     {
+        var menuItems = new List<string>
+        {
+            $"[blue](B)[/] {MenuBuilds}",
+            $"[blue](T)[/] {MenuTests}",
+            $"[blue](H)[/] {MenuHealth}",
+            $"[blue](C)[/] {MenuConfig}",
+            $"[blue](S)[/] {MenuStatus}",
+            $"[blue](Q)[/] {MenuQuit}",
+        };
+        var hotkeys = new Dictionary<ConsoleKey, int>
+        {
+            [ConsoleKey.B] = 0,
+            [ConsoleKey.T] = 1,
+            [ConsoleKey.H] = 2,
+            [ConsoleKey.C] = 3,
+            [ConsoleKey.S] = 4,
+            [ConsoleKey.Q] = 5,
+        };
+
         while (!ct.IsCancellationRequested)
         {
-            var choice = AnsiConsole.Prompt(
-                new SelectionPrompt<string>()
-                    .Title("[bold]What would you like to do?[/]")
-                    .AddChoices(MenuBuilds, MenuTests, MenuHealth, MenuConfig, MenuStatus, MenuQuit));
+            var selected = BrowserUI.SelectWithEscape(
+                "What would you like to do?", menuItems, extraKeys: hotkeys, useMarkup: true);
+            if (selected < 0)
+            {
+                return;
+            }
+
+            var choice = selected switch
+            {
+                0 => MenuBuilds,
+                1 => MenuTests,
+                2 => MenuHealth,
+                3 => MenuConfig,
+                4 => MenuStatus,
+                5 => MenuQuit,
+                _ => MenuQuit,
+            };
 
             switch (choice)
             {
