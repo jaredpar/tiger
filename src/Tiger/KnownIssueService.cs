@@ -99,8 +99,7 @@ public sealed class KnownIssueService : IDisposable
 
         var openIssueNumbers = new HashSet<int>();
 
-        using var transaction = _db.Connection.BeginTransaction();
-        try
+        _db.WithTransaction((conn, tx) =>
         {
             // Upsert all currently-open issues
             foreach (var issue in issues)
@@ -111,7 +110,8 @@ public sealed class KnownIssueService : IDisposable
 
                 openIssueNumbers.Add(issue.Number);
 
-                using var cmd = _db.Connection.CreateCommand();
+                using var cmd = conn.CreateCommand();
+                cmd.Transaction = tx;
                 cmd.CommandText = """
                     INSERT INTO known_issues
                         (repository, issue_number, title, error_message, error_pattern, build_retry, exclude_console_log, state, closed_at)
@@ -138,8 +138,9 @@ public sealed class KnownIssueService : IDisposable
             }
 
             // Mark issues that are no longer open as closed (if not already closed)
-            using (var markCmd = _db.Connection.CreateCommand())
+            using (var markCmd = conn.CreateCommand())
             {
+                markCmd.Transaction = tx;
                 var placeholders = string.Join(",", openIssueNumbers.Select((_, i) => $"@n{i}"));
                 var whereClause = openIssueNumbers.Count > 0
                     ? $"AND issue_number NOT IN ({placeholders})"
@@ -160,8 +161,9 @@ public sealed class KnownIssueService : IDisposable
             }
 
             // Purge issues that have been closed for more than 7 days
-            using (var purgeCmd = _db.Connection.CreateCommand())
+            using (var purgeCmd = conn.CreateCommand())
             {
+                purgeCmd.Transaction = tx;
                 purgeCmd.CommandText = """
                     DELETE FROM known_issues
                     WHERE repository = @repo AND state = 'closed'
@@ -170,15 +172,9 @@ public sealed class KnownIssueService : IDisposable
                 purgeCmd.Parameters.AddWithValue("@repo", repository);
                 purgeCmd.ExecuteNonQuery();
             }
+        });
 
-            transaction.Commit();
-            _log?.Info("KnownIssues", $"  {repository}: {openIssueNumbers.Count} open known issue(s)");
-        }
-        catch
-        {
-            transaction.Rollback();
-            throw;
-        }
+        _log?.Info("KnownIssues", $"  {repository}: {openIssueNumbers.Count} open known issue(s)");
     }
 
     /// <summary>
@@ -187,30 +183,32 @@ public sealed class KnownIssueService : IDisposable
     /// </summary>
     public List<KnownIssueMatch> FindMatches(string repository, string errorText)
     {
-        var matches = new List<KnownIssueMatch>();
-        using var cmd = _db.Connection.CreateCommand();
-        cmd.CommandText = """
-            SELECT issue_number, title, error_message, error_pattern
-            FROM known_issues
-            WHERE repository = @repo
-            """;
-        cmd.Parameters.AddWithValue("@repo", repository);
-
-        using var reader = cmd.ExecuteReader();
-        while (reader.Read())
+        return _db.WithCommand(cmd =>
         {
-            var issueNumber = reader.GetInt32(0);
-            var title = reader.GetString(1);
-            var errorMessage = reader.IsDBNull(2) ? null : reader.GetString(2);
-            var errorPattern = reader.IsDBNull(3) ? null : reader.GetString(3);
+            var matches = new List<KnownIssueMatch>();
+            cmd.CommandText = """
+                SELECT issue_number, title, error_message, error_pattern
+                FROM known_issues
+                WHERE repository = @repo
+                """;
+            cmd.Parameters.AddWithValue("@repo", repository);
 
-            if (IsMatch(errorText, errorMessage, errorPattern))
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
             {
-                matches.Add(new KnownIssueMatch(repository, issueNumber, title));
-            }
-        }
+                var issueNumber = reader.GetInt32(0);
+                var title = reader.GetString(1);
+                var errorMessage = reader.IsDBNull(2) ? null : reader.GetString(2);
+                var errorPattern = reader.IsDBNull(3) ? null : reader.GetString(3);
 
-        return matches;
+                if (IsMatch(errorText, errorMessage, errorPattern))
+                {
+                    matches.Add(new KnownIssueMatch(repository, issueNumber, title));
+                }
+            }
+
+            return matches;
+        });
     }
 
     private static bool IsMatch(string errorText, string? errorMessage, string? errorPattern)

@@ -74,7 +74,8 @@ public sealed class StatusCommand : AsyncCommand
             .AddColumn("Total Builds")
             .AddColumn("Failed Tests");
 
-        using (var cmd = db.Connection.CreateCommand())
+        var hasRows = false;
+        db.WithCommand(cmd =>
         {
             cmd.CommandText = """
                 SELECT
@@ -91,7 +92,6 @@ public sealed class StatusCommand : AsyncCommand
                 """;
 
             using var reader = cmd.ExecuteReader();
-            var hasRows = false;
             while (reader.Read())
             {
                 hasRows = true;
@@ -103,12 +103,12 @@ public sealed class StatusCommand : AsyncCommand
                     reader.GetInt64(4).ToString(),
                     reader.GetInt64(5).ToString());
             }
+        });
 
-            if (!hasRows)
-            {
-                AnsiConsole.MarkupLine("[yellow]No polling data yet. Run 'tiger poll start' to begin polling.[/]");
-                return 0;
-            }
+        if (!hasRows)
+        {
+            AnsiConsole.MarkupLine("[yellow]No polling data yet. Run 'tiger poll start' to begin polling.[/]");
+            return 0;
         }
 
         AnsiConsole.Write(table);
@@ -117,7 +117,7 @@ public sealed class StatusCommand : AsyncCommand
         AnsiConsole.WriteLine();
         AnsiConsole.MarkupLine("[bold]Recent builds:[/]");
 
-        using (var cmd = db.Connection.CreateCommand())
+        db.WithCommand(cmd =>
         {
             cmd.CommandText = """
                 SELECT organization, project, build_id, build_number, definition_name, result, finish_time
@@ -154,7 +154,7 @@ public sealed class StatusCommand : AsyncCommand
             }
 
             AnsiConsole.Write(recentTable);
-        }
+        });
 
         await Task.CompletedTask;
         return 0;

@@ -153,84 +153,88 @@ public sealed class TestBrowser
 
     private List<TestRow> QueryTests()
     {
-        var tests = new List<TestRow>();
-        using var cmd = _db.Connection.CreateCommand();
-
-        var where = new List<string> { "tr.outcome = 'Failed'" };
-        if (_filter.TestNamePattern is not null)
+        return _db.WithCommand(cmd =>
         {
-            var (pattern, isExact) = BrowserUI.ToSqlPattern(_filter.TestNamePattern);
-            where.Add(isExact ? "tr.test_case_title = @name" : "tr.test_case_title LIKE @name");
-            cmd.Parameters.AddWithValue("@name", pattern);
-        }
-        if (_filter.RepoPattern is not null)
-        {
-            var (pattern, isExact) = BrowserUI.ToSqlPattern(_filter.RepoPattern);
-            where.Add(isExact ? "b.repository_name = @repo" : "b.repository_name LIKE @repo");
-            cmd.Parameters.AddWithValue("@repo", pattern);
-        }
-        if (_filter.DefinitionPattern is not null)
-        {
-            var (pattern, isExact) = BrowserUI.ToSqlPattern(_filter.DefinitionPattern);
-            where.Add(isExact ? "b.definition_name = @def" : "b.definition_name LIKE @def");
-            cmd.Parameters.AddWithValue("@def", pattern);
-        }
-        BrowserUI.ApplyKindFilter(_filter.KindPattern, where);
+            var tests = new List<TestRow>();
 
-        var whereClause = "WHERE " + string.Join(" AND ", where);
+            var where = new List<string> { "tr.outcome = 'Failed'" };
+            if (_filter.TestNamePattern is not null)
+            {
+                var (pattern, isExact) = BrowserUI.ToSqlPattern(_filter.TestNamePattern);
+                where.Add(isExact ? "tr.test_case_title = @name" : "tr.test_case_title LIKE @name");
+                cmd.Parameters.AddWithValue("@name", pattern);
+            }
+            if (_filter.RepoPattern is not null)
+            {
+                var (pattern, isExact) = BrowserUI.ToSqlPattern(_filter.RepoPattern);
+                where.Add(isExact ? "b.repository_name = @repo" : "b.repository_name LIKE @repo");
+                cmd.Parameters.AddWithValue("@repo", pattern);
+            }
+            if (_filter.DefinitionPattern is not null)
+            {
+                var (pattern, isExact) = BrowserUI.ToSqlPattern(_filter.DefinitionPattern);
+                where.Add(isExact ? "b.definition_name = @def" : "b.definition_name LIKE @def");
+                cmd.Parameters.AddWithValue("@def", pattern);
+            }
+            BrowserUI.ApplyKindFilter(_filter.KindPattern, where);
 
-        cmd.CommandText = $"""
-            SELECT tr.test_case_title, COUNT(DISTINCT r.build_id) as fail_count,
-                   MIN(r.organization) as org, MIN(r.project) as proj
-            FROM test_results tr
-            JOIN test_runs r ON tr.organization = r.organization AND tr.run_id = r.run_id
-            JOIN builds b ON r.organization = b.organization AND r.build_id = b.build_id
-            {whereClause}
-            GROUP BY tr.test_case_title
-            ORDER BY fail_count DESC
-            LIMIT 50
-            """;
+            var whereClause = "WHERE " + string.Join(" AND ", where);
 
-        using var reader = cmd.ExecuteReader();
-        while (reader.Read())
-        {
-            tests.Add(new TestRow(
-                reader.GetString(0), reader.GetInt32(1),
-                reader.GetString(2), reader.GetString(3)));
-        }
-        return tests;
+            cmd.CommandText = $"""
+                SELECT tr.test_case_title, COUNT(DISTINCT r.build_id) as fail_count,
+                       MIN(r.organization) as org, MIN(r.project) as proj
+                FROM test_results tr
+                JOIN test_runs r ON tr.organization = r.organization AND tr.run_id = r.run_id
+                JOIN builds b ON r.organization = b.organization AND r.build_id = b.build_id
+                {whereClause}
+                GROUP BY tr.test_case_title
+                ORDER BY fail_count DESC
+                LIMIT 50
+                """;
+
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+            {
+                tests.Add(new TestRow(
+                    reader.GetString(0), reader.GetInt32(1),
+                    reader.GetString(2), reader.GetString(3)));
+            }
+            return tests;
+        });
     }
 
     private List<BuildRow> QueryTestBuilds(TestRow test)
     {
-        var builds = new List<BuildRow>();
-        using var cmd = _db.Connection.CreateCommand();
-        cmd.CommandText = """
-            SELECT DISTINCT b.organization, b.project, b.build_id, b.definition_name,
-                   b.result, b.pr_number, b.finish_time
-            FROM test_results tr
-            JOIN test_runs r ON tr.organization = r.organization AND tr.run_id = r.run_id
-            JOIN builds b ON r.organization = b.organization AND r.build_id = b.build_id
-            WHERE tr.organization = @org AND tr.project = @proj
-                  AND tr.test_case_title = @testName AND tr.outcome = 'Failed'
-            ORDER BY b.finish_time DESC
-            LIMIT 30
-            """;
-        cmd.Parameters.AddWithValue("@org", test.Org);
-        cmd.Parameters.AddWithValue("@proj", test.Project);
-        cmd.Parameters.AddWithValue("@testName", test.TestName);
-
-        using var reader = cmd.ExecuteReader();
-        while (reader.Read())
+        return _db.WithCommand(cmd =>
         {
-            builds.Add(new BuildRow(
-                reader.GetString(0), reader.GetString(1), reader.GetInt32(2),
-                reader.GetString(3),
-                reader.IsDBNull(4) ? null : reader.GetString(4),
-                reader.IsDBNull(5) ? null : reader.GetInt32(5),
-                reader.IsDBNull(6) ? null : reader.GetString(6)));
-        }
-        return builds;
+            var builds = new List<BuildRow>();
+            cmd.CommandText = """
+                SELECT DISTINCT b.organization, b.project, b.build_id, b.definition_name,
+                       b.result, b.pr_number, b.finish_time
+                FROM test_results tr
+                JOIN test_runs r ON tr.organization = r.organization AND tr.run_id = r.run_id
+                JOIN builds b ON r.organization = b.organization AND r.build_id = b.build_id
+                WHERE tr.organization = @org AND tr.project = @proj
+                      AND tr.test_case_title = @testName AND tr.outcome = 'Failed'
+                ORDER BY b.finish_time DESC
+                LIMIT 30
+                """;
+            cmd.Parameters.AddWithValue("@org", test.Org);
+            cmd.Parameters.AddWithValue("@proj", test.Project);
+            cmd.Parameters.AddWithValue("@testName", test.TestName);
+
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+            {
+                builds.Add(new BuildRow(
+                    reader.GetString(0), reader.GetString(1), reader.GetInt32(2),
+                    reader.GetString(3),
+                    reader.IsDBNull(4) ? null : reader.GetString(4),
+                    reader.IsDBNull(5) ? null : reader.GetInt32(5),
+                    reader.IsDBNull(6) ? null : reader.GetString(6)));
+            }
+            return builds;
+        });
     }
 
     // ── Filter UI ────────────────────────────────────────────────────

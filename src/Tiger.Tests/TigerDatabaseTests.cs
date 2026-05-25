@@ -1,4 +1,3 @@
-using Microsoft.Data.Sqlite;
 using Xunit;
 
 namespace Tiger.Tests;
@@ -29,9 +28,11 @@ public class TigerDatabaseTests : IDisposable
     public void Open_SetsSchemaVersion()
     {
         using var db = TigerDatabase.Open(_dbPath);
-        using var cmd = db.Connection.CreateCommand();
-        cmd.CommandText = "PRAGMA user_version;";
-        var version = Convert.ToInt32(cmd.ExecuteScalar());
+        var version = db.WithCommand(cmd =>
+        {
+            cmd.CommandText = "PRAGMA user_version;";
+            return Convert.ToInt32(cmd.ExecuteScalar());
+        });
         Assert.Equal(TigerDatabase.CurrentSchemaVersion, version);
     }
 
@@ -39,7 +40,7 @@ public class TigerDatabaseTests : IDisposable
     public void Open_CreatesAllTables()
     {
         using var db = TigerDatabase.Open(_dbPath);
-        var tables = GetTableNames(db.Connection);
+        var tables = GetTableNames(db);
         Assert.Contains("builds", tables);
         Assert.Contains("test_runs", tables);
         Assert.Contains("test_results", tables);
@@ -52,7 +53,7 @@ public class TigerDatabaseTests : IDisposable
     {
         using (var db = TigerDatabase.Open(_dbPath)) { }
         using var db2 = TigerDatabase.Open(_dbPath);
-        var tables = GetTableNames(db2.Connection);
+        var tables = GetTableNames(db2);
         Assert.Contains("builds", tables);
     }
 
@@ -60,19 +61,23 @@ public class TigerDatabaseTests : IDisposable
     public void Builds_InsertAndQuery()
     {
         using var db = TigerDatabase.Open(_dbPath);
-        using var insert = db.Connection.CreateCommand();
-        insert.CommandText = """
-            INSERT INTO builds (organization, project, build_id, build_number, definition_name, definition_id, status, source_branch)
-            VALUES ('dnceng-public', 'public', 1, '20250101.1', 'runtime', 42, 'completed', 'refs/heads/main');
-            """;
-        insert.ExecuteNonQuery();
+        db.WithCommand(cmd =>
+        {
+            cmd.CommandText = """
+                INSERT INTO builds (organization, project, build_id, build_number, definition_name, definition_id, status, source_branch)
+                VALUES ('dnceng-public', 'public', 1, '20250101.1', 'runtime', 42, 'completed', 'refs/heads/main');
+                """;
+            cmd.ExecuteNonQuery();
+        });
 
-        using var query = db.Connection.CreateCommand();
-        query.CommandText = "SELECT build_number, definition_name FROM builds WHERE build_id = 1;";
-        using var reader = query.ExecuteReader();
-        Assert.True(reader.Read());
-        Assert.Equal("20250101.1", reader.GetString(0));
-        Assert.Equal("runtime", reader.GetString(1));
+        db.WithCommand(cmd =>
+        {
+            cmd.CommandText = "SELECT build_number, definition_name FROM builds WHERE build_id = 1;";
+            using var reader = cmd.ExecuteReader();
+            Assert.True(reader.Read());
+            Assert.Equal("20250101.1", reader.GetString(0));
+            Assert.Equal("runtime", reader.GetString(1));
+        });
     }
 
     [Fact]
@@ -80,82 +85,96 @@ public class TigerDatabaseTests : IDisposable
     {
         using var db = TigerDatabase.Open(_dbPath);
 
-        // Enable FK enforcement
-        using var fk = db.Connection.CreateCommand();
-        fk.CommandText = "PRAGMA foreign_keys = ON;";
-        fk.ExecuteNonQuery();
+        db.WithCommand(cmd =>
+        {
+            // Enable FK enforcement
+            cmd.CommandText = "PRAGMA foreign_keys = ON;";
+            cmd.ExecuteNonQuery();
+        });
 
-        using var cmd = db.Connection.CreateCommand();
-        cmd.CommandText = """
-            INSERT INTO builds (organization, project, build_id, build_number, definition_name, definition_id, status, source_branch)
-            VALUES ('org', 'proj', 1, '1.0', 'def', 1, 'completed', 'main');
+        db.WithCommand(cmd =>
+        {
+            cmd.CommandText = """
+                INSERT INTO builds (organization, project, build_id, build_number, definition_name, definition_id, status, source_branch)
+                VALUES ('org', 'proj', 1, '1.0', 'def', 1, 'completed', 'main');
 
-            INSERT INTO test_runs (organization, project, build_id, run_id, run_name)
-            VALUES ('org', 'proj', 1, 100, 'Test Run');
+                INSERT INTO test_runs (organization, project, build_id, run_id, run_name)
+                VALUES ('org', 'proj', 1, 100, 'Test Run');
 
-            INSERT INTO test_results (organization, project, run_id, result_id, test_case_title, outcome)
-            VALUES ('org', 'proj', 100, 1, 'MyTest', 'Failed');
-            """;
-        cmd.ExecuteNonQuery();
+                INSERT INTO test_results (organization, project, run_id, result_id, test_case_title, outcome)
+                VALUES ('org', 'proj', 100, 1, 'MyTest', 'Failed');
+                """;
+            cmd.ExecuteNonQuery();
+        });
 
-        using var query = db.Connection.CreateCommand();
-        query.CommandText = """
-            SELECT tr.test_case_title, r.run_name, b.definition_name
-            FROM test_results tr
-            JOIN test_runs r ON tr.organization = r.organization AND tr.project = r.project AND tr.run_id = r.run_id
-            JOIN builds b ON r.organization = b.organization AND r.project = b.project AND r.build_id = b.build_id
-            WHERE tr.outcome = 'Failed';
-            """;
-        using var reader = query.ExecuteReader();
-        Assert.True(reader.Read());
-        Assert.Equal("MyTest", reader.GetString(0));
-        Assert.Equal("Test Run", reader.GetString(1));
-        Assert.Equal("def", reader.GetString(2));
+        db.WithCommand(cmd =>
+        {
+            cmd.CommandText = """
+                SELECT tr.test_case_title, r.run_name, b.definition_name
+                FROM test_results tr
+                JOIN test_runs r ON tr.organization = r.organization AND tr.project = r.project AND tr.run_id = r.run_id
+                JOIN builds b ON r.organization = b.organization AND r.project = b.project AND r.build_id = b.build_id
+                WHERE tr.outcome = 'Failed';
+                """;
+            using var reader = cmd.ExecuteReader();
+            Assert.True(reader.Read());
+            Assert.Equal("MyTest", reader.GetString(0));
+            Assert.Equal("Test Run", reader.GetString(1));
+            Assert.Equal("def", reader.GetString(2));
+        });
     }
 
-    private static List<string> GetTableNames(SqliteConnection connection)
+    private static List<string> GetTableNames(TigerDatabase db)
     {
-        using var cmd = connection.CreateCommand();
-        cmd.CommandText = "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name;";
-        var tables = new List<string>();
-        using var reader = cmd.ExecuteReader();
-        while (reader.Read())
-            tables.Add(reader.GetString(0));
-        return tables;
+        return db.WithCommand(cmd =>
+        {
+            cmd.CommandText = "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name;";
+            var tables = new List<string>();
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+            {
+                tables.Add(reader.GetString(0));
+            }
+            return tables;
+        });
     }
 
     private static void InsertFullBuild(TigerDatabase db, string org, string project, int buildId)
     {
         var prefix = $"{org}-{project}-{buildId}";
         var runId = Math.Abs($"{org}-{project}".GetHashCode() % 10000) + buildId * 100;
-        using var cmd = db.Connection.CreateCommand();
-        cmd.CommandText = $"""
-            INSERT INTO builds (organization, project, build_id, build_number, definition_name, definition_id, status, source_branch, finish_time)
-            VALUES ('{org}', '{project}', {buildId}, '1.0.{buildId}', 'pipeline', 1, 'completed', 'refs/heads/main', '2026-01-01T00:00:00Z');
+        db.WithCommand(cmd =>
+        {
+            cmd.CommandText = $"""
+                INSERT INTO builds (organization, project, build_id, build_number, definition_name, definition_id, status, source_branch, finish_time)
+                VALUES ('{org}', '{project}', {buildId}, '1.0.{buildId}', 'pipeline', 1, 'completed', 'refs/heads/main', '2026-01-01T00:00:00Z');
 
-            INSERT INTO test_runs (organization, project, build_id, run_id, run_name)
-            VALUES ('{org}', '{project}', {buildId}, {runId}, 'Run {buildId}');
+                INSERT INTO test_runs (organization, project, build_id, run_id, run_name)
+                VALUES ('{org}', '{project}', {buildId}, {runId}, 'Run {buildId}');
 
-            INSERT INTO test_results (organization, project, run_id, result_id, test_case_title, outcome, helix_job_name, helix_work_item_name)
-            VALUES ('{org}', '{project}', {runId}, 1, 'Test.One', 'Failed', 'job-{prefix}', 'wi-{prefix}');
+                INSERT INTO test_results (organization, project, run_id, result_id, test_case_title, outcome, helix_job_name, helix_work_item_name)
+                VALUES ('{org}', '{project}', {runId}, 1, 'Test.One', 'Failed', 'job-{prefix}', 'wi-{prefix}');
 
-            INSERT INTO helix_work_items (job_name, work_item_name, state, exit_code, console_output_uri)
-            VALUES ('job-{prefix}', 'wi-{prefix}', 'Finished', 1, 'https://example.com/console');
+                INSERT INTO helix_work_items (job_name, work_item_name, state, exit_code, console_output_uri)
+                VALUES ('job-{prefix}', 'wi-{prefix}', 'Finished', 1, 'https://example.com/console');
 
-            INSERT INTO build_timeline_issues (organization, build_id, record_name, record_type, issue_type, issue_message)
-            VALUES ('{org}', {buildId}, 'Build', 'Job', 'error', 'Something failed');
+                INSERT INTO build_timeline_issues (organization, build_id, record_name, record_type, issue_type, issue_message)
+                VALUES ('{org}', {buildId}, 'Build', 'Job', 'error', 'Something failed');
 
-            INSERT INTO build_ingestion_tasks (organization, build_id, task_type, status)
-            VALUES ('{org}', {buildId}, 'tests', 'completed');
-            """;
-        cmd.ExecuteNonQuery();
+                INSERT INTO build_ingestion_tasks (organization, build_id, task_type, status)
+                VALUES ('{org}', {buildId}, 'tests', 'completed');
+                """;
+            cmd.ExecuteNonQuery();
+        });
     }
 
     private static long CountRows(TigerDatabase db, string table, string? where = null)
     {
-        using var cmd = db.Connection.CreateCommand();
-        cmd.CommandText = where is null ? $"SELECT COUNT(*) FROM {table}" : $"SELECT COUNT(*) FROM {table} WHERE {where}";
-        return Convert.ToInt64(cmd.ExecuteScalar());
+        return db.WithCommand(cmd =>
+        {
+            cmd.CommandText = where is null ? $"SELECT COUNT(*) FROM {table}" : $"SELECT COUNT(*) FROM {table} WHERE {where}";
+            return Convert.ToInt64(cmd.ExecuteScalar());
+        });
     }
 
     [Fact]
@@ -242,18 +261,20 @@ public class TigerDatabaseTests : IDisposable
         using var db = TigerDatabase.Open(_dbPath);
 
         // Insert build with test results but no helix info
-        using var cmd = db.Connection.CreateCommand();
-        cmd.CommandText = """
-            INSERT INTO builds (organization, project, build_id, build_number, definition_name, definition_id, status, source_branch)
-            VALUES ('org', 'proj', 1, '1.0', 'pipeline', 1, 'completed', 'main');
+        db.WithCommand(cmd =>
+        {
+            cmd.CommandText = """
+                INSERT INTO builds (organization, project, build_id, build_number, definition_name, definition_id, status, source_branch)
+                VALUES ('org', 'proj', 1, '1.0', 'pipeline', 1, 'completed', 'main');
 
-            INSERT INTO test_runs (organization, project, build_id, run_id, run_name)
-            VALUES ('org', 'proj', 1, 100, 'Run 1');
+                INSERT INTO test_runs (organization, project, build_id, run_id, run_name)
+                VALUES ('org', 'proj', 1, 100, 'Run 1');
 
-            INSERT INTO test_results (organization, project, run_id, result_id, test_case_title, outcome)
-            VALUES ('org', 'proj', 100, 1, 'Test.One', 'Failed');
-            """;
-        cmd.ExecuteNonQuery();
+                INSERT INTO test_results (organization, project, run_id, result_id, test_case_title, outcome)
+                VALUES ('org', 'proj', 100, 1, 'Test.One', 'Failed');
+                """;
+            cmd.ExecuteNonQuery();
+        });
 
         db.DeleteBuild("org", 1);
 

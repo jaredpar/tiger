@@ -41,7 +41,11 @@ public sealed class IngestionWorker : IDisposable
 
     public void Start()
     {
-        if (IsRunning) return;
+        if (IsRunning)
+        {
+            return;
+        }
+
         _cts = new CancellationTokenSource();
         _workerTask = WorkLoopAsync(_cts.Token);
     }
@@ -53,7 +57,13 @@ public sealed class IngestionWorker : IDisposable
             await _cts.CancelAsync();
             if (_workerTask is not null)
             {
-                try { await _workerTask; } catch (OperationCanceledException) { }
+                try
+                {
+                    await _workerTask;
+                }
+                catch (OperationCanceledException)
+                {
+                }
             }
             _cts.Dispose();
             _cts = null;
@@ -61,7 +71,6 @@ public sealed class IngestionWorker : IDisposable
     }
 
     private const int MaxParallelism = 4;
-    private readonly object _dbLock = new();
 
     private async Task WorkLoopAsync(CancellationToken ct)
     {
@@ -71,11 +80,7 @@ public sealed class IngestionWorker : IDisposable
         {
             try
             {
-                List<IngestionTask> tasks;
-                lock (_dbLock)
-                {
-                    tasks = GetReadyTasks();
-                }
+                var tasks = GetReadyTasks();
 
                 if (tasks.Count == 0)
                 {
@@ -85,10 +90,9 @@ public sealed class IngestionWorker : IDisposable
                 }
 
                 // Mark all as running before launching parallel work
-                lock (_dbLock)
+                foreach (var task in tasks)
                 {
-                    foreach (var task in tasks)
-                        MarkTaskRunning(task);
+                    MarkTaskRunning(task);
                 }
 
                 using var semaphore = new SemaphoreSlim(MaxParallelism);
@@ -98,32 +102,27 @@ public sealed class IngestionWorker : IDisposable
                     try
                     {
                         await ProcessTaskAsync(task, ct);
-                        lock (_dbLock)
-                        {
-                            MarkTaskComplete(task);
-                        }
+                        MarkTaskComplete(task);
                         Interlocked.Exchange(ref consecutiveFailures, 0);
                     }
                     catch (Exception ex) when (ex is not OperationCanceledException)
                     {
                         var newAttempts = task.Attempts + 1;
-                        lock (_dbLock)
+                        if (newAttempts >= MaxAttempts)
                         {
-                            if (newAttempts >= MaxAttempts)
-                            {
-                                MarkTaskAbandoned(task, ex.Message);
-                                _log?.Error("Worker",
-                                    $"Task {task.TaskType} for build #{task.BuildId} abandoned after {newAttempts} attempts: {ex.Message}");
-                            }
-                            else
-                            {
-                                var backoffIndex = Math.Min(newAttempts - 1, s_backoffSeconds.Length - 1);
-                                var delaySecs = s_backoffSeconds[backoffIndex];
-                                MarkTaskFailed(task, ex.Message, delaySecs);
-                                _log?.Warning("Worker",
-                                    $"Task {task.TaskType} for build #{task.BuildId} failed (attempt {newAttempts}), retry in {delaySecs}s: {ex.Message}");
-                            }
+                            MarkTaskAbandoned(task, ex.Message);
+                            _log?.Error("Worker",
+                                $"Task {task.TaskType} for build #{task.BuildId} abandoned after {newAttempts} attempts: {ex.Message}");
                         }
+                        else
+                        {
+                            var backoffIndex = Math.Min(newAttempts - 1, s_backoffSeconds.Length - 1);
+                            var delaySecs = s_backoffSeconds[backoffIndex];
+                            MarkTaskFailed(task, ex.Message, delaySecs);
+                            _log?.Warning("Worker",
+                                $"Task {task.TaskType} for build #{task.BuildId} failed (attempt {newAttempts}), retry in {delaySecs}s: {ex.Message}");
+                        }
+
                         Interlocked.Increment(ref consecutiveFailures);
                     }
                     finally
@@ -228,10 +227,8 @@ public sealed class IngestionWorker : IDisposable
         _log?.Info("Worker", $"Fetching helix work items for build #{task.BuildId}...");
 
         // Get distinct helix job/work-item pairs from failed test results for this build
-        var workItemKeys = new List<(string JobName, string WorkItemName)>();
-        lock (_dbLock)
+        var workItemKeys = _db.WithCommand(cmd =>
         {
-            using var cmd = _db.Connection.CreateCommand();
             cmd.CommandText = """
                 SELECT DISTINCT tr.helix_job_name, tr.helix_work_item_name
                 FROM test_results tr
@@ -242,12 +239,15 @@ public sealed class IngestionWorker : IDisposable
             cmd.Parameters.AddWithValue("@org", task.Organization);
             cmd.Parameters.AddWithValue("@buildId", task.BuildId);
 
+            var workItemKeys = new List<(string JobName, string WorkItemName)>();
             using var reader = cmd.ExecuteReader();
             while (reader.Read())
             {
                 workItemKeys.Add((reader.GetString(0), reader.GetString(1)));
             }
-        }
+
+            return workItemKeys;
+        });
 
         if (workItemKeys.Count == 0)
         {
@@ -261,21 +261,23 @@ public sealed class IngestionWorker : IDisposable
         foreach (var (jobName, workItemName) in workItemKeys)
         {
             if (ct.IsCancellationRequested)
-                break;
-
-            // Skip if already fetched
-            bool exists;
-            lock (_dbLock)
             {
-                using var checkCmd = _db.Connection.CreateCommand();
-                checkCmd.CommandText = "SELECT 1 FROM helix_work_items WHERE job_name = @job AND work_item_name = @wi";
-                checkCmd.Parameters.AddWithValue("@job", jobName);
-                checkCmd.Parameters.AddWithValue("@wi", workItemName);
-                exists = checkCmd.ExecuteScalar() is not null;
+                break;
             }
 
+            // Skip if already fetched
+            var exists = _db.WithCommand(cmd =>
+            {
+                cmd.CommandText = "SELECT 1 FROM helix_work_items WHERE job_name = @job AND work_item_name = @wi";
+                cmd.Parameters.AddWithValue("@job", jobName);
+                cmd.Parameters.AddWithValue("@wi", workItemName);
+                return cmd.ExecuteScalar() is not null;
+            });
+
             if (exists)
+            {
                 continue;
+            }
 
             try
             {
@@ -295,23 +297,22 @@ public sealed class IngestionWorker : IDisposable
                     }
                 }
 
-                lock (_dbLock)
+                _db.WithCommand(cmd =>
                 {
-                    using var insertCmd = _db.Connection.CreateCommand();
-                    insertCmd.CommandText = """
+                    cmd.CommandText = """
                         INSERT OR IGNORE INTO helix_work_items
                             (job_name, work_item_name, state, exit_code, console_output_uri, files)
                         VALUES
                             (@job, @wi, @state, @exitCode, @consoleUri, @files)
                         """;
-                    insertCmd.Parameters.AddWithValue("@job", workItem.Job);
-                    insertCmd.Parameters.AddWithValue("@wi", workItem.Name);
-                    insertCmd.Parameters.AddWithValue("@state", workItem.State);
-                    insertCmd.Parameters.AddWithValue("@exitCode", workItem.ExitCode.HasValue ? workItem.ExitCode.Value : DBNull.Value);
-                    insertCmd.Parameters.AddWithValue("@consoleUri", (object?)workItem.ConsoleOutputUri ?? DBNull.Value);
-                    insertCmd.Parameters.AddWithValue("@files", (object?)filesJson ?? DBNull.Value);
-                    insertCmd.ExecuteNonQuery();
-                }
+                    cmd.Parameters.AddWithValue("@job", workItem.Job);
+                    cmd.Parameters.AddWithValue("@wi", workItem.Name);
+                    cmd.Parameters.AddWithValue("@state", workItem.State);
+                    cmd.Parameters.AddWithValue("@exitCode", workItem.ExitCode.HasValue ? workItem.ExitCode.Value : DBNull.Value);
+                    cmd.Parameters.AddWithValue("@consoleUri", (object?)workItem.ConsoleOutputUri ?? DBNull.Value);
+                    cmd.Parameters.AddWithValue("@files", (object?)filesJson ?? DBNull.Value);
+                    cmd.ExecuteNonQuery();
+                });
                 insertedCount++;
             }
             catch (HttpRequestException ex)
@@ -326,28 +327,38 @@ public sealed class IngestionWorker : IDisposable
     private async Task ProcessPrInfoAsync(IngestionTask task, CancellationToken ct)
     {
         // Look up the build's PR number and repo
-        using var cmd = _db.Connection.CreateCommand();
-        cmd.CommandText = "SELECT pr_number, repository_name FROM builds WHERE organization = @org AND build_id = @buildId";
-        cmd.Parameters.AddWithValue("@org", task.Organization);
-        cmd.Parameters.AddWithValue("@buildId", task.BuildId);
+        var prInfo = _db.WithCommand(cmd =>
+        {
+            cmd.CommandText = "SELECT pr_number, repository_name FROM builds WHERE organization = @org AND build_id = @buildId";
+            cmd.Parameters.AddWithValue("@org", task.Organization);
+            cmd.Parameters.AddWithValue("@buildId", task.BuildId);
 
-        using var reader = cmd.ExecuteReader();
-        if (!reader.Read() || reader.IsDBNull(0) || reader.IsDBNull(1))
+            using var reader = cmd.ExecuteReader();
+            if (!reader.Read() || reader.IsDBNull(0) || reader.IsDBNull(1))
+            {
+                return ((int PrNumber, string Repository)?)null;
+            }
+
+            return (reader.GetInt32(0), reader.GetString(1));
+        });
+
+        if (prInfo is null)
         {
             _log?.Info("Worker", $"  Build #{task.BuildId} — no PR info to fetch");
             return;
         }
 
-        var prNumber = reader.GetInt32(0);
-        var repository = reader.GetString(1);
-        reader.Close();
+        var (prNumber, repository) = prInfo.Value;
 
         // Check if we already have this PR cached
-        using var checkCmd = _db.Connection.CreateCommand();
-        checkCmd.CommandText = "SELECT 1 FROM pull_requests WHERE repository = @repo AND pr_number = @pr";
-        checkCmd.Parameters.AddWithValue("@repo", repository);
-        checkCmd.Parameters.AddWithValue("@pr", prNumber);
-        if (checkCmd.ExecuteScalar() is not null)
+        var exists = _db.WithCommand(cmd =>
+        {
+            cmd.CommandText = "SELECT 1 FROM pull_requests WHERE repository = @repo AND pr_number = @pr";
+            cmd.Parameters.AddWithValue("@repo", repository);
+            cmd.Parameters.AddWithValue("@pr", prNumber);
+            return cmd.ExecuteScalar() is not null;
+        });
+        if (exists)
         {
             _log?.Info("Worker", $"  Build #{task.BuildId} — PR #{prNumber} already cached");
             return;
@@ -385,16 +396,18 @@ public sealed class IngestionWorker : IDisposable
             var author = prData.RootElement.TryGetProperty("author", out var a) && a.TryGetProperty("login", out var login)
                 ? login.GetString() : null;
 
-            using var insertCmd = _db.Connection.CreateCommand();
-            insertCmd.CommandText = """
-                INSERT OR IGNORE INTO pull_requests (repository, pr_number, title, author)
-                VALUES (@repo, @pr, @title, @author)
-                """;
-            insertCmd.Parameters.AddWithValue("@repo", repository);
-            insertCmd.Parameters.AddWithValue("@pr", prNumber);
-            insertCmd.Parameters.AddWithValue("@title", (object?)title ?? DBNull.Value);
-            insertCmd.Parameters.AddWithValue("@author", (object?)author ?? DBNull.Value);
-            insertCmd.ExecuteNonQuery();
+            _db.WithCommand(cmd =>
+            {
+                cmd.CommandText = """
+                    INSERT OR IGNORE INTO pull_requests (repository, pr_number, title, author)
+                    VALUES (@repo, @pr, @title, @author)
+                    """;
+                cmd.Parameters.AddWithValue("@repo", repository);
+                cmd.Parameters.AddWithValue("@pr", prNumber);
+                cmd.Parameters.AddWithValue("@title", (object?)title ?? DBNull.Value);
+                cmd.Parameters.AddWithValue("@author", (object?)author ?? DBNull.Value);
+                cmd.ExecuteNonQuery();
+            });
 
             _log?.Info("Worker", $"  Build #{task.BuildId} — PR #{prNumber} info cached ({author})");
         }
@@ -408,102 +421,113 @@ public sealed class IngestionWorker : IDisposable
 
     private List<IngestionTask> GetReadyTasks()
     {
-        var tasks = new List<IngestionTask>();
-        using var cmd = _db.Connection.CreateCommand();
-        cmd.CommandText = """
-            SELECT t.organization, b.project, t.build_id, t.task_type, t.status, t.attempts
-            FROM build_ingestion_tasks t
-            JOIN builds b ON t.organization = b.organization AND t.build_id = b.build_id
-            WHERE t.status IN ('pending', 'failed')
-              AND (t.next_retry_time IS NULL OR t.next_retry_time <= datetime('now'))
-              AND (t.task_type != 'helix' OR EXISTS (
-                  SELECT 1 FROM build_ingestion_tasks dep
-                  WHERE dep.organization = t.organization
-                    AND dep.build_id = t.build_id
-                    AND dep.task_type = 'tests'
-                    AND dep.status = 'complete'
-              ))
-            ORDER BY t.build_id DESC, t.task_type ASC
-            LIMIT 20
-            """;
-
-        using var reader = cmd.ExecuteReader();
-        while (reader.Read())
+        return _db.WithCommand(cmd =>
         {
-            tasks.Add(new IngestionTask(
-                reader.GetString(0),
-                reader.GetString(1),
-                reader.GetInt32(2),
-                reader.GetString(3),
-                reader.GetString(4),
-                reader.GetInt32(5)));
-        }
-        return tasks;
+            cmd.CommandText = """
+                SELECT t.organization, b.project, t.build_id, t.task_type, t.status, t.attempts
+                FROM build_ingestion_tasks t
+                JOIN builds b ON t.organization = b.organization AND t.build_id = b.build_id
+                WHERE t.status IN ('pending', 'failed')
+                  AND (t.next_retry_time IS NULL OR t.next_retry_time <= datetime('now'))
+                  AND (t.task_type != 'helix' OR EXISTS (
+                      SELECT 1 FROM build_ingestion_tasks dep
+                      WHERE dep.organization = t.organization
+                        AND dep.build_id = t.build_id
+                        AND dep.task_type = 'tests'
+                        AND dep.status = 'complete'
+                  ))
+                ORDER BY t.build_id DESC, t.task_type ASC
+                LIMIT 20
+                """;
+
+            var tasks = new List<IngestionTask>();
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+            {
+                tasks.Add(new IngestionTask(
+                    reader.GetString(0),
+                    reader.GetString(1),
+                    reader.GetInt32(2),
+                    reader.GetString(3),
+                    reader.GetString(4),
+                    reader.GetInt32(5)));
+            }
+
+            return tasks;
+        });
     }
 
     private void MarkTaskRunning(IngestionTask task)
     {
-        using var cmd = _db.Connection.CreateCommand();
-        cmd.CommandText = """
-            UPDATE build_ingestion_tasks
-            SET status = 'running', last_attempt_time = datetime('now')
-            WHERE organization = @org AND build_id = @buildId AND task_type = @type
-            """;
-        cmd.Parameters.AddWithValue("@org", task.Organization);
-        cmd.Parameters.AddWithValue("@buildId", task.BuildId);
-        cmd.Parameters.AddWithValue("@type", task.TaskType);
-        cmd.ExecuteNonQuery();
+        _db.WithCommand(cmd =>
+        {
+            cmd.CommandText = """
+                UPDATE build_ingestion_tasks
+                SET status = 'running', last_attempt_time = datetime('now')
+                WHERE organization = @org AND build_id = @buildId AND task_type = @type
+                """;
+            cmd.Parameters.AddWithValue("@org", task.Organization);
+            cmd.Parameters.AddWithValue("@buildId", task.BuildId);
+            cmd.Parameters.AddWithValue("@type", task.TaskType);
+            cmd.ExecuteNonQuery();
+        });
     }
 
     private void MarkTaskComplete(IngestionTask task)
     {
-        using var cmd = _db.Connection.CreateCommand();
-        cmd.CommandText = """
-            UPDATE build_ingestion_tasks
-            SET status = 'complete', completed_time = datetime('now'), last_error = NULL
-            WHERE organization = @org AND build_id = @buildId AND task_type = @type
-            """;
-        cmd.Parameters.AddWithValue("@org", task.Organization);
-        cmd.Parameters.AddWithValue("@buildId", task.BuildId);
-        cmd.Parameters.AddWithValue("@type", task.TaskType);
-        cmd.ExecuteNonQuery();
+        _db.WithCommand(cmd =>
+        {
+            cmd.CommandText = """
+                UPDATE build_ingestion_tasks
+                SET status = 'complete', completed_time = datetime('now'), last_error = NULL
+                WHERE organization = @org AND build_id = @buildId AND task_type = @type
+                """;
+            cmd.Parameters.AddWithValue("@org", task.Organization);
+            cmd.Parameters.AddWithValue("@buildId", task.BuildId);
+            cmd.Parameters.AddWithValue("@type", task.TaskType);
+            cmd.ExecuteNonQuery();
+        });
     }
 
     private void MarkTaskFailed(IngestionTask task, string error, int retryDelaySecs)
     {
-        using var cmd = _db.Connection.CreateCommand();
-        cmd.CommandText = $"""
-            UPDATE build_ingestion_tasks
-            SET status = 'failed',
-                attempts = attempts + 1,
-                last_error = @error,
-                last_attempt_time = datetime('now'),
-                next_retry_time = datetime('now', '+{retryDelaySecs} seconds')
-            WHERE organization = @org AND build_id = @buildId AND task_type = @type
-            """;
-        cmd.Parameters.AddWithValue("@org", task.Organization);
-        cmd.Parameters.AddWithValue("@buildId", task.BuildId);
-        cmd.Parameters.AddWithValue("@type", task.TaskType);
-        cmd.Parameters.AddWithValue("@error", error);
-        cmd.ExecuteNonQuery();
+        _db.WithCommand(cmd =>
+        {
+            cmd.CommandText = $"""
+                UPDATE build_ingestion_tasks
+                SET status = 'failed',
+                    attempts = attempts + 1,
+                    last_error = @error,
+                    last_attempt_time = datetime('now'),
+                    next_retry_time = datetime('now', '+{retryDelaySecs} seconds')
+                WHERE organization = @org AND build_id = @buildId AND task_type = @type
+                """;
+            cmd.Parameters.AddWithValue("@org", task.Organization);
+            cmd.Parameters.AddWithValue("@buildId", task.BuildId);
+            cmd.Parameters.AddWithValue("@type", task.TaskType);
+            cmd.Parameters.AddWithValue("@error", error);
+            cmd.ExecuteNonQuery();
+        });
     }
 
     private void MarkTaskAbandoned(IngestionTask task, string error)
     {
-        using var cmd = _db.Connection.CreateCommand();
-        cmd.CommandText = """
-            UPDATE build_ingestion_tasks
-            SET status = 'abandoned',
-                attempts = attempts + 1,
-                last_error = @error,
-                last_attempt_time = datetime('now')
-            WHERE organization = @org AND build_id = @buildId AND task_type = @type
-            """;
-        cmd.Parameters.AddWithValue("@org", task.Organization);
-        cmd.Parameters.AddWithValue("@buildId", task.BuildId);
-        cmd.Parameters.AddWithValue("@type", task.TaskType);
-        cmd.Parameters.AddWithValue("@error", error);
-        cmd.ExecuteNonQuery();
+        _db.WithCommand(cmd =>
+        {
+            cmd.CommandText = """
+                UPDATE build_ingestion_tasks
+                SET status = 'abandoned',
+                    attempts = attempts + 1,
+                    last_error = @error,
+                    last_attempt_time = datetime('now')
+                WHERE organization = @org AND build_id = @buildId AND task_type = @type
+                """;
+            cmd.Parameters.AddWithValue("@org", task.Organization);
+            cmd.Parameters.AddWithValue("@buildId", task.BuildId);
+            cmd.Parameters.AddWithValue("@type", task.TaskType);
+            cmd.Parameters.AddWithValue("@error", error);
+            cmd.ExecuteNonQuery();
+        });
     }
 
     /// <summary>
@@ -511,13 +535,15 @@ public sealed class IngestionWorker : IDisposable
     /// </summary>
     public int RetryAbandoned()
     {
-        using var cmd = _db.Connection.CreateCommand();
-        cmd.CommandText = """
-            UPDATE build_ingestion_tasks
-            SET status = 'pending', attempts = 0, last_error = NULL, next_retry_time = NULL
-            WHERE status = 'abandoned'
-            """;
-        return cmd.ExecuteNonQuery();
+        return _db.WithCommand(cmd =>
+        {
+            cmd.CommandText = """
+                UPDATE build_ingestion_tasks
+                SET status = 'pending', attempts = 0, last_error = NULL, next_retry_time = NULL
+                WHERE status = 'abandoned'
+                """;
+            return cmd.ExecuteNonQuery();
+        });
     }
 
     public void Dispose()

@@ -4,19 +4,21 @@ namespace Tiger;
 
 /// <summary>
 /// Manages the SQLite database at ~/.tiger/tiger.db.
-/// Handles connection creation and schema migration.
+/// Handles connection pooling and schema migration.
+/// Each operation creates its own connection from a pool managed by
+/// Microsoft.Data.Sqlite, so no application-level locking is needed.
 /// </summary>
 public sealed class TigerDatabase : IDisposable
 {
     public const int CurrentSchemaVersion = 5;
 
     public string DatabasePath { get; }
-    public SqliteConnection Connection { get; }
+    private string ConnectionString { get; }
 
-    private TigerDatabase(string databasePath, SqliteConnection connection)
+    private TigerDatabase(string databasePath, string connectionString)
     {
         DatabasePath = databasePath;
-        Connection = connection;
+        ConnectionString = connectionString;
     }
 
     /// <summary>
@@ -31,19 +33,82 @@ public sealed class TigerDatabase : IDisposable
             Mode = SqliteOpenMode.ReadWriteCreate,
         }.ToString();
 
-        var connection = new SqliteConnection(connectionString);
-        connection.Open();
+        var db = new TigerDatabase(databasePath, connectionString);
 
-        // Enable WAL mode for better concurrent read performance
-        using (var cmd = connection.CreateCommand())
+        // Initialize schema and WAL mode using a one-off connection
+        db.WithCommand(cmd =>
         {
             cmd.CommandText = "PRAGMA journal_mode=WAL;";
             cmd.ExecuteNonQuery();
-        }
-
-        var db = new TigerDatabase(databasePath, connection);
+        });
         db.EnsureSchema();
         return db;
+    }
+
+    /// <summary>
+    /// Executes an action with a fresh command. The connection and command
+    /// are created from the pool and disposed after the action completes.
+    /// </summary>
+    public void WithCommand(Action<SqliteCommand> action)
+    {
+        using var connection = new SqliteConnection(ConnectionString);
+        connection.Open();
+        using var cmd = connection.CreateCommand();
+        action(cmd);
+    }
+
+    /// <summary>
+    /// Executes a function with a fresh command and returns its result.
+    /// </summary>
+    public T WithCommand<T>(Func<SqliteCommand, T> func)
+    {
+        using var connection = new SqliteConnection(ConnectionString);
+        connection.Open();
+        using var cmd = connection.CreateCommand();
+        return func(cmd);
+    }
+
+    /// <summary>
+    /// Executes an action within a transaction. The connection, transaction,
+    /// and disposal are managed automatically. Commits on success, rolls back
+    /// on exception.
+    /// </summary>
+    public void WithTransaction(Action<SqliteConnection, SqliteTransaction> action)
+    {
+        using var connection = new SqliteConnection(ConnectionString);
+        connection.Open();
+        using var transaction = connection.BeginTransaction();
+        try
+        {
+            action(connection, transaction);
+            transaction.Commit();
+        }
+        catch
+        {
+            transaction.Rollback();
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Executes a function within a transaction and returns its result.
+    /// </summary>
+    public T WithTransaction<T>(Func<SqliteConnection, SqliteTransaction, T> func)
+    {
+        using var connection = new SqliteConnection(ConnectionString);
+        connection.Open();
+        using var transaction = connection.BeginTransaction();
+        try
+        {
+            var result = func(connection, transaction);
+            transaction.Commit();
+            return result;
+        }
+        catch
+        {
+            transaction.Rollback();
+            throw;
+        }
     }
 
     /// <summary>
@@ -88,22 +153,27 @@ public sealed class TigerDatabase : IDisposable
 
     private int GetSchemaVersion()
     {
-        using var cmd = Connection.CreateCommand();
-        cmd.CommandText = "PRAGMA user_version;";
-        return Convert.ToInt32(cmd.ExecuteScalar());
+        return WithCommand(cmd =>
+        {
+            cmd.CommandText = "PRAGMA user_version;";
+            return Convert.ToInt32(cmd.ExecuteScalar());
+        });
     }
 
     private void SetSchemaVersion(int version)
     {
-        using var cmd = Connection.CreateCommand();
-        cmd.CommandText = $"PRAGMA user_version = {version};";
-        cmd.ExecuteNonQuery();
+        WithCommand(cmd =>
+        {
+            cmd.CommandText = $"PRAGMA user_version = {version};";
+            cmd.ExecuteNonQuery();
+        });
     }
 
     private void CreateSchema()
     {
-        using var cmd = Connection.CreateCommand();
-        cmd.CommandText = """
+        WithCommand(cmd =>
+        {
+            cmd.CommandText = """
             CREATE TABLE IF NOT EXISTS builds (
                 organization TEXT NOT NULL,
                 project TEXT NOT NULL,
@@ -266,7 +336,8 @@ public sealed class TigerDatabase : IDisposable
                 PRIMARY KEY (job_name, work_item_name)
             );
             """;
-        cmd.ExecuteNonQuery();
+            cmd.ExecuteNonQuery();
+        });
     }
 
     /// <summary>
@@ -276,100 +347,100 @@ public sealed class TigerDatabase : IDisposable
     /// </summary>
     public void DeleteBuild(string organization, int buildId)
     {
-        using var transaction = Connection.BeginTransaction();
-
-        // Delete helix work items referenced by test results for this build
-        using (var cmd = Connection.CreateCommand())
+        WithTransaction((conn, tx) =>
         {
-            cmd.Transaction = transaction;
-            cmd.CommandText = """
-                DELETE FROM helix_work_items
-                WHERE (job_name, work_item_name) IN (
-                    SELECT tr.helix_job_name, tr.helix_work_item_name
-                    FROM test_results tr
-                    JOIN test_runs r ON tr.organization = r.organization AND tr.run_id = r.run_id
-                    WHERE r.organization = @org AND r.build_id = @buildId
-                      AND tr.helix_job_name IS NOT NULL
-                )
-                """;
-            cmd.Parameters.AddWithValue("@org", organization);
-            cmd.Parameters.AddWithValue("@buildId", buildId);
-            cmd.ExecuteNonQuery();
-        }
+            // Delete helix work items referenced by test results for this build
+            using (var cmd = conn.CreateCommand())
+            {
+                cmd.Transaction = tx;
+                cmd.CommandText = """
+                    DELETE FROM helix_work_items
+                    WHERE (job_name, work_item_name) IN (
+                        SELECT tr.helix_job_name, tr.helix_work_item_name
+                        FROM test_results tr
+                        JOIN test_runs r ON tr.organization = r.organization AND tr.run_id = r.run_id
+                        WHERE r.organization = @org AND r.build_id = @buildId
+                          AND tr.helix_job_name IS NOT NULL
+                    )
+                    """;
+                cmd.Parameters.AddWithValue("@org", organization);
+                cmd.Parameters.AddWithValue("@buildId", buildId);
+                cmd.ExecuteNonQuery();
+            }
 
-        // Delete test results for this build
-        using (var cmd = Connection.CreateCommand())
-        {
-            cmd.Transaction = transaction;
-            cmd.CommandText = """
-                DELETE FROM test_results
-                WHERE (organization, run_id) IN (
-                    SELECT organization, run_id FROM test_runs
+            // Delete test results for this build
+            using (var cmd = conn.CreateCommand())
+            {
+                cmd.Transaction = tx;
+                cmd.CommandText = """
+                    DELETE FROM test_results
+                    WHERE (organization, run_id) IN (
+                        SELECT organization, run_id FROM test_runs
+                        WHERE organization = @org AND build_id = @buildId
+                    )
+                    """;
+                cmd.Parameters.AddWithValue("@org", organization);
+                cmd.Parameters.AddWithValue("@buildId", buildId);
+                cmd.ExecuteNonQuery();
+            }
+
+            // Delete test runs
+            using (var cmd = conn.CreateCommand())
+            {
+                cmd.Transaction = tx;
+                cmd.CommandText = """
+                    DELETE FROM test_runs
                     WHERE organization = @org AND build_id = @buildId
-                )
-                """;
-            cmd.Parameters.AddWithValue("@org", organization);
-            cmd.Parameters.AddWithValue("@buildId", buildId);
-            cmd.ExecuteNonQuery();
-        }
+                    """;
+                cmd.Parameters.AddWithValue("@org", organization);
+                cmd.Parameters.AddWithValue("@buildId", buildId);
+                cmd.ExecuteNonQuery();
+            }
 
-        // Delete test runs
-        using (var cmd = Connection.CreateCommand())
-        {
-            cmd.Transaction = transaction;
-            cmd.CommandText = """
-                DELETE FROM test_runs
-                WHERE organization = @org AND build_id = @buildId
-                """;
-            cmd.Parameters.AddWithValue("@org", organization);
-            cmd.Parameters.AddWithValue("@buildId", buildId);
-            cmd.ExecuteNonQuery();
-        }
+            // Delete timeline issues
+            using (var cmd = conn.CreateCommand())
+            {
+                cmd.Transaction = tx;
+                cmd.CommandText = """
+                    DELETE FROM build_timeline_issues
+                    WHERE organization = @org AND build_id = @buildId
+                    """;
+                cmd.Parameters.AddWithValue("@org", organization);
+                cmd.Parameters.AddWithValue("@buildId", buildId);
+                cmd.ExecuteNonQuery();
+            }
 
-        // Delete timeline issues
-        using (var cmd = Connection.CreateCommand())
-        {
-            cmd.Transaction = transaction;
-            cmd.CommandText = """
-                DELETE FROM build_timeline_issues
-                WHERE organization = @org AND build_id = @buildId
-                """;
-            cmd.Parameters.AddWithValue("@org", organization);
-            cmd.Parameters.AddWithValue("@buildId", buildId);
-            cmd.ExecuteNonQuery();
-        }
+            // Delete ingestion tasks
+            using (var cmd = conn.CreateCommand())
+            {
+                cmd.Transaction = tx;
+                cmd.CommandText = """
+                    DELETE FROM build_ingestion_tasks
+                    WHERE organization = @org AND build_id = @buildId
+                    """;
+                cmd.Parameters.AddWithValue("@org", organization);
+                cmd.Parameters.AddWithValue("@buildId", buildId);
+                cmd.ExecuteNonQuery();
+            }
 
-        // Delete ingestion tasks
-        using (var cmd = Connection.CreateCommand())
-        {
-            cmd.Transaction = transaction;
-            cmd.CommandText = """
-                DELETE FROM build_ingestion_tasks
-                WHERE organization = @org AND build_id = @buildId
-                """;
-            cmd.Parameters.AddWithValue("@org", organization);
-            cmd.Parameters.AddWithValue("@buildId", buildId);
-            cmd.ExecuteNonQuery();
-        }
-
-        // Delete the build itself
-        using (var cmd = Connection.CreateCommand())
-        {
-            cmd.Transaction = transaction;
-            cmd.CommandText = """
-                DELETE FROM builds
-                WHERE organization = @org AND build_id = @buildId
-                """;
-            cmd.Parameters.AddWithValue("@org", organization);
-            cmd.Parameters.AddWithValue("@buildId", buildId);
-            cmd.ExecuteNonQuery();
-        }
-
-        transaction.Commit();
+            // Delete the build itself
+            using (var cmd = conn.CreateCommand())
+            {
+                cmd.Transaction = tx;
+                cmd.CommandText = """
+                    DELETE FROM builds
+                    WHERE organization = @org AND build_id = @buildId
+                    """;
+                cmd.Parameters.AddWithValue("@org", organization);
+                cmd.Parameters.AddWithValue("@buildId", buildId);
+                cmd.ExecuteNonQuery();
+            }
+        });
     }
 
     public void Dispose()
     {
-        Connection.Dispose();
+        // Connection pooling: no shared connection to dispose.
+        // Microsoft.Data.Sqlite manages the pool internally.
     }
 }

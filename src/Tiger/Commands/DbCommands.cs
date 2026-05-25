@@ -65,21 +65,23 @@ public class DbDeleteBuildCommand : Command<DbDeleteBuildCommand.Settings>
     {
         var cutoff = DateTime.UtcNow.AddDays(-days).ToString("o");
 
-        using var cmd = db.Connection.CreateCommand();
-        cmd.CommandText = """
-            SELECT build_id FROM builds
-            WHERE organization = @org AND finish_time < @cutoff
-            """;
-        cmd.Parameters.AddWithValue("@org", organization);
-        cmd.Parameters.AddWithValue("@cutoff", cutoff);
-
-        var buildIds = new List<int>();
-        using var reader = cmd.ExecuteReader();
-        while (reader.Read())
+        var buildIds = db.WithCommand(cmd =>
         {
-            buildIds.Add(reader.GetInt32(0));
-        }
-        reader.Close();
+            cmd.CommandText = """
+                SELECT build_id FROM builds
+                WHERE organization = @org AND finish_time < @cutoff
+                """;
+            cmd.Parameters.AddWithValue("@org", organization);
+            cmd.Parameters.AddWithValue("@cutoff", cutoff);
+
+            var buildIds = new List<int>();
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+            {
+                buildIds.Add(reader.GetInt32(0));
+            }
+            return buildIds;
+        });
 
         foreach (var buildId in buildIds)
         {
@@ -92,20 +94,22 @@ public class DbDeleteBuildCommand : Command<DbDeleteBuildCommand.Settings>
 
     private static int DeleteAll(TigerDatabase db, string organization)
     {
-        using var cmd = db.Connection.CreateCommand();
-        cmd.CommandText = """
-            SELECT build_id FROM builds
-            WHERE organization = @org
-            """;
-        cmd.Parameters.AddWithValue("@org", organization);
-
-        var buildIds = new List<int>();
-        using var reader = cmd.ExecuteReader();
-        while (reader.Read())
+        var buildIds = db.WithCommand(cmd =>
         {
-            buildIds.Add(reader.GetInt32(0));
-        }
-        reader.Close();
+            cmd.CommandText = """
+                SELECT build_id FROM builds
+                WHERE organization = @org
+                """;
+            cmd.Parameters.AddWithValue("@org", organization);
+
+            var buildIds = new List<int>();
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+            {
+                buildIds.Add(reader.GetInt32(0));
+            }
+            return buildIds;
+        });
 
         foreach (var buildId in buildIds)
         {

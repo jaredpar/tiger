@@ -116,35 +116,41 @@ public sealed class HealthAgentService : IDisposable
     /// </summary>
     private bool IsDataReady(string repository, string definition)
     {
-        using var cmd = _db.Connection.CreateCommand();
-        cmd.CommandText = $"""
-            SELECT
-                COUNT(DISTINCT b.build_id) as total,
-                COUNT(DISTINCT CASE WHEN t.status != 'pending' AND t.status != 'running' THEN b.build_id END) as ready
-            FROM builds b
-            LEFT JOIN build_ingestion_tasks t
-                ON b.organization = t.organization AND b.build_id = t.build_id
-                AND t.task_type = 'tests'
-            WHERE b.repository_name = @repo
-              AND b.definition_name = @def
-              AND b.finish_time >= datetime('now', '-{LookbackDays} days')
-            """;
-        cmd.Parameters.AddWithValue("@repo", repository);
-        cmd.Parameters.AddWithValue("@def", definition);
+        return _db.WithCommand(cmd =>
+        {
+            cmd.CommandText = $"""
+                SELECT
+                    COUNT(DISTINCT b.build_id) as total,
+                    COUNT(DISTINCT CASE WHEN t.status != 'pending' AND t.status != 'running' THEN b.build_id END) as ready
+                FROM builds b
+                LEFT JOIN build_ingestion_tasks t
+                    ON b.organization = t.organization AND b.build_id = t.build_id
+                    AND t.task_type = 'tests'
+                WHERE b.repository_name = @repo
+                  AND b.definition_name = @def
+                  AND b.finish_time >= datetime('now', '-{LookbackDays} days')
+                """;
+            cmd.Parameters.AddWithValue("@repo", repository);
+            cmd.Parameters.AddWithValue("@def", definition);
 
-        using var reader = cmd.ExecuteReader();
-        if (!reader.Read())
-            return false;
+            using var reader = cmd.ExecuteReader();
+            if (!reader.Read())
+            {
+                return false;
+            }
 
-        var total = reader.GetInt32(0);
-        var ready = reader.GetInt32(1);
+            var total = reader.GetInt32(0);
+            var ready = reader.GetInt32(1);
 
-        if (total == 0)
-            return false;
+            if (total == 0)
+            {
+                return false;
+            }
 
-        var readyPct = (double)ready / total;
-        _log?.Info("HealthAgent", $"  {repository} / {definition}: {ready}/{total} builds ready ({readyPct:P0})");
-        return readyPct >= 0.9;
+            var readyPct = (double)ready / total;
+            _log?.Info("HealthAgent", $"  {repository} / {definition}: {ready}/{total} builds ready ({readyPct:P0})");
+            return readyPct >= 0.9;
+        });
     }
 
     private async Task EvaluateHealthAsync(string repository, string definition, CancellationToken ct)
@@ -493,7 +499,7 @@ public sealed class HealthAgentService : IDisposable
         var data = new BuildHealthData();
 
         // Pipeline identity (org, project, definition_id)
-        using (var cmd = _db.Connection.CreateCommand())
+        _db.WithCommand(cmd =>
         {
             cmd.CommandText = """
                 SELECT organization, project, definition_id FROM builds
@@ -509,10 +515,10 @@ public sealed class HealthAgentService : IDisposable
                 data.Project = reader.GetString(1);
                 data.DefinitionId = reader.IsDBNull(2) ? null : reader.GetInt32(2);
             }
-        }
+        });
 
         // Build counts
-        using (var cmd = _db.Connection.CreateCommand())
+        _db.WithCommand(cmd =>
         {
             cmd.CommandText = """
                 SELECT result, COUNT(*) FROM builds
@@ -530,15 +536,21 @@ public sealed class HealthAgentService : IDisposable
                 data.TotalBuilds += count;
                 switch (result)
                 {
-                    case "failed": data.FailedBuilds = count; break;
-                    case "succeeded": data.SucceededBuilds = count; break;
-                    case "partiallySucceeded": data.PartialBuilds = count; break;
+                    case "failed":
+                        data.FailedBuilds = count;
+                        break;
+                    case "succeeded":
+                        data.SucceededBuilds = count;
+                        break;
+                    case "partiallySucceeded":
+                        data.PartialBuilds = count;
+                        break;
                 }
             }
-        }
+        });
 
         // Recent failures
-        using (var cmd = _db.Connection.CreateCommand())
+        _db.WithCommand(cmd =>
         {
             cmd.CommandText = """
                 SELECT organization, project, build_id, result, finish_time, source_branch FROM builds
@@ -560,10 +572,10 @@ public sealed class HealthAgentService : IDisposable
                     reader.IsDBNull(4) ? "" : reader.GetString(4),
                     reader.IsDBNull(5) ? "" : reader.GetString(5)));
             }
-        }
+        });
 
         // Top failing tests (split by CI vs PR)
-        using (var cmd = _db.Connection.CreateCommand())
+        _db.WithCommand(cmd =>
         {
             cmd.CommandText = """
                 SELECT tr.test_case_title,
@@ -590,10 +602,10 @@ public sealed class HealthAgentService : IDisposable
                     reader.GetInt32(1),
                     reader.GetInt32(2)));
             }
-        }
+        });
 
         // Timeline errors
-        using (var cmd = _db.Connection.CreateCommand())
+        _db.WithCommand(cmd =>
         {
             cmd.CommandText = """
                 SELECT ti.record_name, ti.issue_type, ti.issue_message
@@ -613,10 +625,10 @@ public sealed class HealthAgentService : IDisposable
                 data.TimelineErrors.Add(new TimelineErrorInfo(
                     reader.GetString(0), reader.GetString(1), reader.GetString(2)));
             }
-        }
+        });
 
         // Known issues (with full detail)
-        using (var cmd = _db.Connection.CreateCommand())
+        _db.WithCommand(cmd =>
         {
             cmd.CommandText = """
                 SELECT issue_number, title, error_message, error_pattern, exclude_console_log
@@ -634,27 +646,30 @@ public sealed class HealthAgentService : IDisposable
                     reader.IsDBNull(3) ? null : reader.GetString(3),
                     reader.GetInt32(4) != 0));
             }
-        }
+        });
 
         return data;
     }
 
     private List<(string Repo, string Definition)> GetMonitoredCombinations()
     {
-        var combos = new List<(string, string)>();
-        using var cmd = _db.Connection.CreateCommand();
-        cmd.CommandText = """
-            SELECT DISTINCT repository_name, definition_name FROM builds
-            WHERE repository_name IS NOT NULL
-              AND finish_time >= datetime('now', '-7 days')
-            ORDER BY repository_name, definition_name
-            """;
-        using var reader = cmd.ExecuteReader();
-        while (reader.Read())
+        return _db.WithCommand(cmd =>
         {
-            combos.Add((reader.GetString(0), reader.GetString(1)));
-        }
-        return combos;
+            cmd.CommandText = """
+                SELECT DISTINCT repository_name, definition_name FROM builds
+                WHERE repository_name IS NOT NULL
+                  AND finish_time >= datetime('now', '-7 days')
+                ORDER BY repository_name, definition_name
+                """;
+            var combos = new List<(string, string)>();
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+            {
+                combos.Add((reader.GetString(0), reader.GetString(1)));
+            }
+
+            return combos;
+        });
     }
 
     // ── File I/O ────────────────────────────────────────────────────
@@ -672,30 +687,36 @@ public sealed class HealthAgentService : IDisposable
 
         // If we've never run before, always run
         if (!Directory.Exists(dir))
+        {
             return true;
+        }
 
         var logFiles = Directory.GetFiles(dir, "*.md")
             .Where(f => !Path.GetFileName(f).Equals("state.md", StringComparison.OrdinalIgnoreCase))
             .ToArray();
 
         if (logFiles.Length == 0)
+        {
             return true;
+        }
 
         // Get the most recent log file's write time as our "last run" marker
         var lastRunTime = logFiles.Max(f => File.GetLastWriteTimeUtc(f));
 
         // Check if there's any build that finished after our last run
-        using var cmd = _db.Connection.CreateCommand();
-        cmd.CommandText = """
-            SELECT COUNT(*) FROM builds
-            WHERE repository_name = @repo AND definition_name = @def
-              AND finish_time > @since
-            """;
-        cmd.Parameters.AddWithValue("@repo", repository);
-        cmd.Parameters.AddWithValue("@def", definition);
-        cmd.Parameters.AddWithValue("@since", lastRunTime.ToString("o"));
-        var count = Convert.ToInt64(cmd.ExecuteScalar());
-        return count > 0;
+        return _db.WithCommand(cmd =>
+        {
+            cmd.CommandText = """
+                SELECT COUNT(*) FROM builds
+                WHERE repository_name = @repo AND definition_name = @def
+                  AND finish_time > @since
+                """;
+            cmd.Parameters.AddWithValue("@repo", repository);
+            cmd.Parameters.AddWithValue("@def", definition);
+            cmd.Parameters.AddWithValue("@since", lastRunTime.ToString("o"));
+            var count = Convert.ToInt64(cmd.ExecuteScalar());
+            return count > 0;
+        });
     }
 
     private string SaveLog(string repository, string definition, string prompt, string transcript)

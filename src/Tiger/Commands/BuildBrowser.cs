@@ -209,74 +209,76 @@ public sealed class BuildBrowser
 
     private List<BuildRow> QueryBuilds()
     {
-        var builds = new List<BuildRow>();
-        using var cmd = _db.Connection.CreateCommand();
+        return _db.WithCommand(cmd =>
+        {
+            var builds = new List<BuildRow>();
 
-        var where = new List<string>();
-        if (_filter.RepoPattern is not null)
-        {
-            var (pattern, isExact) = BrowserUI.ToSqlPattern(_filter.RepoPattern);
-            where.Add(isExact ? "b.repository_name = @repo" : "b.repository_name LIKE @repo");
-            cmd.Parameters.AddWithValue("@repo", pattern);
-        }
-        if (_filter.DefinitionPattern is not null)
-        {
-            var (pattern, isExact) = BrowserUI.ToSqlPattern(_filter.DefinitionPattern);
-            where.Add(isExact ? "b.definition_name = @def" : "b.definition_name LIKE @def");
-            cmd.Parameters.AddWithValue("@def", pattern);
-        }
-        if (_filter.ResultPattern is not null)
-        {
-            var (pattern, isExact) = BrowserUI.ToSqlPattern(_filter.ResultPattern);
-            where.Add(isExact ? "b.result = @result" : "b.result LIKE @result");
-            cmd.Parameters.AddWithValue("@result", pattern);
-        }
-        if (_filter.IdPattern is not null)
-        {
-            var (pattern, isExact) = BrowserUI.ToSqlPattern(_filter.IdPattern);
-            where.Add(isExact ? "CAST(b.build_id AS TEXT) = @bid" : "CAST(b.build_id AS TEXT) LIKE @bid");
-            cmd.Parameters.AddWithValue("@bid", pattern);
-        }
-        if (_filter.KindPattern is not null)
-        {
-            BrowserUI.ApplyKindFilter(_filter.KindPattern, where);
-        }
+            var where = new List<string>();
+            if (_filter.RepoPattern is not null)
+            {
+                var (pattern, isExact) = BrowserUI.ToSqlPattern(_filter.RepoPattern);
+                where.Add(isExact ? "b.repository_name = @repo" : "b.repository_name LIKE @repo");
+                cmd.Parameters.AddWithValue("@repo", pattern);
+            }
+            if (_filter.DefinitionPattern is not null)
+            {
+                var (pattern, isExact) = BrowserUI.ToSqlPattern(_filter.DefinitionPattern);
+                where.Add(isExact ? "b.definition_name = @def" : "b.definition_name LIKE @def");
+                cmd.Parameters.AddWithValue("@def", pattern);
+            }
+            if (_filter.ResultPattern is not null)
+            {
+                var (pattern, isExact) = BrowserUI.ToSqlPattern(_filter.ResultPattern);
+                where.Add(isExact ? "b.result = @result" : "b.result LIKE @result");
+                cmd.Parameters.AddWithValue("@result", pattern);
+            }
+            if (_filter.IdPattern is not null)
+            {
+                var (pattern, isExact) = BrowserUI.ToSqlPattern(_filter.IdPattern);
+                where.Add(isExact ? "CAST(b.build_id AS TEXT) = @bid" : "CAST(b.build_id AS TEXT) LIKE @bid");
+                cmd.Parameters.AddWithValue("@bid", pattern);
+            }
+            if (_filter.KindPattern is not null)
+            {
+                BrowserUI.ApplyKindFilter(_filter.KindPattern, where);
+            }
 
-        var whereClause = where.Count > 0 ? "WHERE " + string.Join(" AND ", where) : "";
+            var whereClause = where.Count > 0 ? "WHERE " + string.Join(" AND ", where) : "";
 
-        cmd.CommandText = $"""
-            SELECT b.organization, b.project, b.build_id, b.build_number, b.definition_name,
-                   b.result, b.source_branch, b.pr_number, b.finish_time,
-                   CASE WHEN EXISTS (
-                       SELECT 1 FROM build_ingestion_tasks t
-                       WHERE t.organization = b.organization
-                         AND t.build_id = b.build_id AND t.status != 'complete'
-                   ) THEN 'pending' ELSE 'complete' END as ingestion_status,
-                   b.definition_id, b.repository_name
-            FROM builds b
-            {whereClause}
-            ORDER BY b.finish_time DESC, b.ingested_at DESC
-            LIMIT 50
-            """;
+            cmd.CommandText = $"""
+                SELECT b.organization, b.project, b.build_id, b.build_number, b.definition_name,
+                       b.result, b.source_branch, b.pr_number, b.finish_time,
+                       CASE WHEN EXISTS (
+                           SELECT 1 FROM build_ingestion_tasks t
+                           WHERE t.organization = b.organization
+                             AND t.build_id = b.build_id AND t.status != 'complete'
+                       ) THEN 'pending' ELSE 'complete' END as ingestion_status,
+                       b.definition_id, b.repository_name
+                FROM builds b
+                {whereClause}
+                ORDER BY b.finish_time DESC, b.ingested_at DESC
+                LIMIT 50
+                """;
 
-        using var reader = cmd.ExecuteReader();
-        while (reader.Read())
-        {
-            builds.Add(new BuildRow(
-                reader.GetString(0),
-                reader.GetString(1),
-                reader.GetInt32(2),
-                reader.GetString(3),
-                reader.GetString(4),
-                reader.IsDBNull(5) ? null : reader.GetString(5),
-                reader.GetString(6),
-                reader.IsDBNull(7) ? null : reader.GetInt32(7),
-                reader.IsDBNull(8) ? null : reader.GetString(8),
-                reader.GetString(9),
-                reader.GetInt32(10),
-                reader.IsDBNull(11) ? null : reader.GetString(11)));
-        }
-        return builds;
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+            {
+                builds.Add(new BuildRow(
+                    reader.GetString(0),
+                    reader.GetString(1),
+                    reader.GetInt32(2),
+                    reader.GetString(3),
+                    reader.GetString(4),
+                    reader.IsDBNull(5) ? null : reader.GetString(5),
+                    reader.GetString(6),
+                    reader.IsDBNull(7) ? null : reader.GetInt32(7),
+                    reader.IsDBNull(8) ? null : reader.GetString(8),
+                    reader.GetString(9),
+                    reader.GetInt32(10),
+                    reader.IsDBNull(11) ? null : reader.GetString(11)));
+            }
+            return builds;
+        });
     }
 
     private void EditFilter()
@@ -411,32 +413,49 @@ public sealed class BuildBrowser
         Console.SetCursorPosition(0, 0);
 
         // Header info from DB
-        using var buildCmd = _db.Connection.CreateCommand();
-        buildCmd.CommandText = """
-            SELECT build_number, definition_name, result, source_branch, pr_number, finish_time, repository_name
-            FROM builds
-            WHERE organization = @org AND build_id = @buildId
-            """;
-        buildCmd.Parameters.AddWithValue("@org", page.Org);
-        buildCmd.Parameters.AddWithValue("@proj", page.Project);
-        buildCmd.Parameters.AddWithValue("@buildId", page.BuildId);
+        var buildInfo = _db.WithCommand(cmd =>
+        {
+            cmd.CommandText = """
+                SELECT build_number, definition_name, result, source_branch, pr_number, finish_time, repository_name
+                FROM builds
+                WHERE organization = @org AND build_id = @buildId
+                """;
+            cmd.Parameters.AddWithValue("@org", page.Org);
+            cmd.Parameters.AddWithValue("@proj", page.Project);
+            cmd.Parameters.AddWithValue("@buildId", page.BuildId);
 
-        using var reader = buildCmd.ExecuteReader();
-        if (!reader.Read())
+            using var reader = cmd.ExecuteReader();
+            if (!reader.Read())
+            {
+                return (Found: false, BuildNumber: string.Empty, DefName: string.Empty, Result: (string?)null,
+                    Branch: string.Empty, PrNumber: (int?)null, FinishTime: (string?)null, RepoName: (string?)null);
+            }
+
+            return (
+                Found: true,
+                BuildNumber: reader.GetString(0),
+                DefName: reader.GetString(1),
+                Result: reader.IsDBNull(2) ? null : reader.GetString(2),
+                Branch: reader.GetString(3),
+                PrNumber: reader.IsDBNull(4) ? (int?)null : reader.GetInt32(4),
+                FinishTime: reader.IsDBNull(5) ? null : reader.GetString(5),
+                RepoName: reader.IsDBNull(6) ? null : reader.GetString(6));
+        });
+
+        if (!buildInfo.Found)
         {
             AnsiConsole.MarkupLine("[red]Build not found.[/]");
             Console.ReadKey(true);
             return NavAction.Back.Instance;
         }
 
-        var buildNumber = reader.GetString(0);
-        var defName = reader.GetString(1);
-        var result = reader.IsDBNull(2) ? null : reader.GetString(2);
-        var branch = reader.GetString(3);
-        var prNumber = reader.IsDBNull(4) ? (int?)null : reader.GetInt32(4);
-        var finishTime = reader.IsDBNull(5) ? null : reader.GetString(5);
-        var repoName = reader.IsDBNull(6) ? null : reader.GetString(6);
-        reader.Close();
+        var buildNumber = buildInfo.BuildNumber;
+        var defName = buildInfo.DefName;
+        var result = buildInfo.Result;
+        var branch = buildInfo.Branch;
+        var prNumber = buildInfo.PrNumber;
+        var finishTime = buildInfo.FinishTime;
+        var repoName = buildInfo.RepoName;
 
         var url = $"https://dev.azure.com/{Uri.EscapeDataString(page.Org)}/{Uri.EscapeDataString(page.Project)}/_build/results?buildId={page.BuildId}";
 
@@ -453,26 +472,30 @@ public sealed class BuildBrowser
             var prUrl = $"https://github.com/{repoName}/pull/{prNumber}";
 
             // Try to get cached PR info
-            using var prCmd = _db.Connection.CreateCommand();
-            prCmd.CommandText = "SELECT title, author FROM pull_requests WHERE repository = @repo AND pr_number = @pr";
-            prCmd.Parameters.AddWithValue("@repo", repoName);
-            prCmd.Parameters.AddWithValue("@pr", prNumber);
-            using var prReader = prCmd.ExecuteReader();
-            if (prReader.Read() && !prReader.IsDBNull(0))
+            var prInfo = _db.WithCommand(cmd =>
             {
-                var prTitle = prReader.GetString(0);
-                var prAuthor = prReader.IsDBNull(1) ? "" : prReader.GetString(1);
-                prReader.Close();
+                cmd.CommandText = "SELECT title, author FROM pull_requests WHERE repository = @repo AND pr_number = @pr";
+                cmd.Parameters.AddWithValue("@repo", repoName);
+                cmd.Parameters.AddWithValue("@pr", prNumber);
+                using var reader = cmd.ExecuteReader();
+                if (reader.Read() && !reader.IsDBNull(0))
+                {
+                    return (Found: true, Title: reader.GetString(0), Author: reader.IsDBNull(1) ? string.Empty : reader.GetString(1));
+                }
 
+                return (Found: false, Title: string.Empty, Author: string.Empty);
+            });
+
+            if (prInfo.Found)
+            {
                 // Truncate title to fit: "PR Info" col + "#123 author " leaves room for title
-                var prefix = $"#{prNumber} {prAuthor} ";
+                var prefix = $"#{prNumber} {prInfo.Author} ";
                 var maxTitleLen = Math.Max(10, Console.WindowWidth - prefix.Length - 20);
-                var truncatedTitle = prTitle.Length > maxTitleLen ? prTitle[..maxTitleLen] + "..." : prTitle;
-                headerTable.AddRow("[bold]PR Info[/]", $"#{prNumber} [blue]{Markup.Escape(prAuthor)}[/] {Markup.Escape(truncatedTitle)}");
+                var truncatedTitle = prInfo.Title.Length > maxTitleLen ? prInfo.Title[..maxTitleLen] + "..." : prInfo.Title;
+                headerTable.AddRow("[bold]PR Info[/]", $"#{prNumber} [blue]{Markup.Escape(prInfo.Author)}[/] {Markup.Escape(truncatedTitle)}");
             }
             else
             {
-                prReader.Close();
                 headerTable.AddRow("[bold]PR Info[/]", $"#{prNumber}");
             }
             headerTable.AddRow("[bold]PR Url[/]", $"[link={prUrl}]{prUrl}[/]");
@@ -517,23 +540,27 @@ public sealed class BuildBrowser
         // Failed jobs section (from DB timeline issues, when timeline is ingested)
         if (timelineStatus == "complete")
         {
-            using var jobsCmd = _db.Connection.CreateCommand();
-            jobsCmd.CommandText = """
-                SELECT DISTINCT parent_name
-                FROM build_timeline_issues
-                WHERE organization = @org AND build_id = @buildId
-                  AND parent_name IS NOT NULL AND issue_type = 'error'
-                ORDER BY parent_name
-                """;
-            jobsCmd.Parameters.AddWithValue("@org", page.Org);
-            jobsCmd.Parameters.AddWithValue("@proj", page.Project);
-            jobsCmd.Parameters.AddWithValue("@buildId", page.BuildId);
+            var failedJobNames = _db.WithCommand(cmd =>
+            {
+                cmd.CommandText = """
+                    SELECT DISTINCT parent_name
+                    FROM build_timeline_issues
+                    WHERE organization = @org AND build_id = @buildId
+                      AND parent_name IS NOT NULL AND issue_type = 'error'
+                    ORDER BY parent_name
+                    """;
+                cmd.Parameters.AddWithValue("@org", page.Org);
+                cmd.Parameters.AddWithValue("@proj", page.Project);
+                cmd.Parameters.AddWithValue("@buildId", page.BuildId);
 
-            using var jobsReader = jobsCmd.ExecuteReader();
-            var failedJobNames = new List<string>();
-            while (jobsReader.Read())
-                failedJobNames.Add(jobsReader.GetString(0));
-            jobsReader.Close();
+                var failedJobNames = new List<string>();
+                using var reader = cmd.ExecuteReader();
+                while (reader.Read())
+                {
+                    failedJobNames.Add(reader.GetString(0));
+                }
+                return failedJobNames;
+            });
 
             AnsiConsole.MarkupLine("[bold underline]Failed Jobs[/]");
             if (failedJobNames.Count > 0)
@@ -556,30 +583,32 @@ public sealed class BuildBrowser
         }
         else
         {
-            using var testsCmd = _db.Connection.CreateCommand();
-            testsCmd.CommandText = """
-                SELECT r.run_name, tr.test_case_title, tr.error_message
-                FROM test_results tr
-                JOIN test_runs r ON tr.organization = r.organization AND tr.run_id = r.run_id
-                WHERE r.organization = @org AND r.project = @proj AND r.build_id = @buildId
-                      AND tr.outcome = 'Failed'
-                ORDER BY r.run_name, tr.test_case_title
-                LIMIT 50
-                """;
-            testsCmd.Parameters.AddWithValue("@org", page.Org);
-            testsCmd.Parameters.AddWithValue("@proj", page.Project);
-            testsCmd.Parameters.AddWithValue("@buildId", page.BuildId);
-
-            using var testsReader = testsCmd.ExecuteReader();
-            var failedTests = new List<(string RunName, string Title, string Error)>();
-            while (testsReader.Read())
+            var failedTests = _db.WithCommand(cmd =>
             {
-                var runName = testsReader.GetString(0);
-                var title = testsReader.GetString(1);
-                var error = testsReader.IsDBNull(2) ? "" : testsReader.GetString(2);
-                failedTests.Add((runName, title, error));
-            }
-            testsReader.Close();
+                cmd.CommandText = """
+                    SELECT r.run_name, tr.test_case_title, tr.error_message
+                    FROM test_results tr
+                    JOIN test_runs r ON tr.organization = r.organization AND tr.run_id = r.run_id
+                    WHERE r.organization = @org AND r.project = @proj AND r.build_id = @buildId
+                          AND tr.outcome = 'Failed'
+                    ORDER BY r.run_name, tr.test_case_title
+                    LIMIT 50
+                    """;
+                cmd.Parameters.AddWithValue("@org", page.Org);
+                cmd.Parameters.AddWithValue("@proj", page.Project);
+                cmd.Parameters.AddWithValue("@buildId", page.BuildId);
+
+                var failedTests = new List<(string RunName, string Title, string Error)>();
+                using var reader = cmd.ExecuteReader();
+                while (reader.Read())
+                {
+                    var runName = reader.GetString(0);
+                    var title = reader.GetString(1);
+                    var error = reader.IsDBNull(2) ? string.Empty : reader.GetString(2);
+                    failedTests.Add((runName, title, error));
+                }
+                return failedTests;
+            });
 
             if (failedTests.Count == 0)
             {
@@ -610,9 +639,9 @@ public sealed class BuildBrowser
         }
 
         // Helix work items count
-        using (var helixCmd = _db.Connection.CreateCommand())
+        var helixCount = _db.WithCommand(cmd =>
         {
-            helixCmd.CommandText = """
+            cmd.CommandText = """
                 SELECT COUNT(DISTINCT hw.job_name || '/' || hw.work_item_name)
                 FROM test_results tr
                 JOIN test_runs trn ON tr.organization = trn.organization
@@ -622,14 +651,14 @@ public sealed class BuildBrowser
                 WHERE trn.organization = @org AND trn.project = @proj AND trn.build_id = @buildId
                   AND tr.outcome = 'Failed'
                 """;
-            helixCmd.Parameters.AddWithValue("@org", page.Org);
-            helixCmd.Parameters.AddWithValue("@proj", page.Project);
-            helixCmd.Parameters.AddWithValue("@buildId", page.BuildId);
-            var helixCount = Convert.ToInt32(helixCmd.ExecuteScalar());
-            if (helixCount > 0)
-            {
-                AnsiConsole.MarkupLine($"  [bold]Helix Work Items:[/] {helixCount}");
-            }
+            cmd.Parameters.AddWithValue("@org", page.Org);
+            cmd.Parameters.AddWithValue("@proj", page.Project);
+            cmd.Parameters.AddWithValue("@buildId", page.BuildId);
+            return Convert.ToInt32(cmd.ExecuteScalar());
+        });
+        if (helixCount > 0)
+        {
+            AnsiConsole.MarkupLine($"  [bold]Helix Work Items:[/] {helixCount}");
         }
 
         AnsiConsole.WriteLine();
@@ -654,24 +683,28 @@ public sealed class BuildBrowser
         AnsiConsole.MarkupLine("[dim]Select a test to see its failure history, or Escape to go back[/]");
         AnsiConsole.WriteLine();
 
-        var tests = new List<(string RunName, string Title)>();
-        using var cmd = _db.Connection.CreateCommand();
-        cmd.CommandText = """
-            SELECT r.run_name, tr.test_case_title
-            FROM test_results tr
-            JOIN test_runs r ON tr.organization = r.organization AND tr.run_id = r.run_id
-            WHERE r.organization = @org AND r.project = @proj AND r.build_id = @buildId
-                  AND tr.outcome = 'Failed'
-            ORDER BY r.run_name, tr.test_case_title
-            """;
-        cmd.Parameters.AddWithValue("@org", page.Org);
-        cmd.Parameters.AddWithValue("@proj", page.Project);
-        cmd.Parameters.AddWithValue("@buildId", page.BuildId);
+        var tests = _db.WithCommand(cmd =>
+        {
+            var tests = new List<(string RunName, string Title)>();
+            cmd.CommandText = """
+                SELECT r.run_name, tr.test_case_title
+                FROM test_results tr
+                JOIN test_runs r ON tr.organization = r.organization AND tr.run_id = r.run_id
+                WHERE r.organization = @org AND r.project = @proj AND r.build_id = @buildId
+                      AND tr.outcome = 'Failed'
+                ORDER BY r.run_name, tr.test_case_title
+                """;
+            cmd.Parameters.AddWithValue("@org", page.Org);
+            cmd.Parameters.AddWithValue("@proj", page.Project);
+            cmd.Parameters.AddWithValue("@buildId", page.BuildId);
 
-        using var reader = cmd.ExecuteReader();
-        while (reader.Read())
-            tests.Add((reader.GetString(0), reader.GetString(1)));
-        reader.Close();
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+            {
+                tests.Add((reader.GetString(0), reader.GetString(1)));
+            }
+            return tests;
+        });
 
         if (tests.Count == 0)
         {
@@ -715,49 +748,60 @@ public sealed class BuildBrowser
     private NavAction RenderTestDetail(TestDetailPage page)
     {
         // Get the most recent failure for this test to show error/stack/helix
-        using var cmd = _db.Connection.CreateCommand();
-        cmd.CommandText = """
-            SELECT tr.error_message, tr.stack_trace, tr.helix_job_name, tr.helix_work_item_name,
-                   r.build_id, r.run_name
-            FROM test_results tr
-            JOIN test_runs r ON tr.organization = r.organization AND tr.run_id = r.run_id
-            WHERE tr.organization = @org AND tr.project = @proj
-                  AND tr.test_case_title = @testName AND tr.outcome = 'Failed'
-            ORDER BY r.build_id DESC
-            LIMIT 1
-            """;
-        cmd.Parameters.AddWithValue("@org", page.Org);
-        cmd.Parameters.AddWithValue("@proj", page.Project);
-        cmd.Parameters.AddWithValue("@testName", page.TestName);
-
-        string? errorMessage = null, stackTrace = null, helixJob = null, helixWorkItem = null, runName = null;
-        int? buildId = null;
-
-        using var reader = cmd.ExecuteReader();
-        if (reader.Read())
+        var testInfo = _db.WithCommand(cmd =>
         {
-            errorMessage = reader.IsDBNull(0) ? null : reader.GetString(0);
-            stackTrace = reader.IsDBNull(1) ? null : reader.GetString(1);
-            helixJob = reader.IsDBNull(2) ? null : reader.GetString(2);
-            helixWorkItem = reader.IsDBNull(3) ? null : reader.GetString(3);
-            buildId = reader.GetInt32(4);
-            runName = reader.GetString(5);
-        }
-        reader.Close();
+            cmd.CommandText = """
+                SELECT tr.error_message, tr.stack_trace, tr.helix_job_name, tr.helix_work_item_name,
+                       r.build_id, r.run_name
+                FROM test_results tr
+                JOIN test_runs r ON tr.organization = r.organization AND tr.run_id = r.run_id
+                WHERE tr.organization = @org AND tr.project = @proj
+                      AND tr.test_case_title = @testName AND tr.outcome = 'Failed'
+                ORDER BY r.build_id DESC
+                LIMIT 1
+                """;
+            cmd.Parameters.AddWithValue("@org", page.Org);
+            cmd.Parameters.AddWithValue("@proj", page.Project);
+            cmd.Parameters.AddWithValue("@testName", page.TestName);
+
+            using var reader = cmd.ExecuteReader();
+            if (reader.Read())
+            {
+                return (
+                    ErrorMessage: reader.IsDBNull(0) ? null : reader.GetString(0),
+                    StackTrace: reader.IsDBNull(1) ? null : reader.GetString(1),
+                    HelixJob: reader.IsDBNull(2) ? null : reader.GetString(2),
+                    HelixWorkItem: reader.IsDBNull(3) ? null : reader.GetString(3),
+                    BuildId: (int?)reader.GetInt32(4),
+                    RunName: (string?)reader.GetString(5));
+            }
+
+            return (ErrorMessage: (string?)null, StackTrace: (string?)null, HelixJob: (string?)null,
+                HelixWorkItem: (string?)null, BuildId: (int?)null, RunName: (string?)null);
+        });
+
+        var errorMessage = testInfo.ErrorMessage;
+        var stackTrace = testInfo.StackTrace;
+        var helixJob = testInfo.HelixJob;
+        var helixWorkItem = testInfo.HelixWorkItem;
+        var buildId = testInfo.BuildId;
+        var runName = testInfo.RunName;
 
         // Count total builds with this failure
-        using var countCmd = _db.Connection.CreateCommand();
-        countCmd.CommandText = """
-            SELECT COUNT(DISTINCT r.build_id)
-            FROM test_results tr
-            JOIN test_runs r ON tr.organization = r.organization AND tr.run_id = r.run_id
-            WHERE tr.organization = @org AND tr.project = @proj
-                  AND tr.test_case_title = @testName AND tr.outcome = 'Failed'
-            """;
-        countCmd.Parameters.AddWithValue("@org", page.Org);
-        countCmd.Parameters.AddWithValue("@proj", page.Project);
-        countCmd.Parameters.AddWithValue("@testName", page.TestName);
-        var buildCount = Convert.ToInt32(countCmd.ExecuteScalar());
+        var buildCount = _db.WithCommand(cmd =>
+        {
+            cmd.CommandText = """
+                SELECT COUNT(DISTINCT r.build_id)
+                FROM test_results tr
+                JOIN test_runs r ON tr.organization = r.organization AND tr.run_id = r.run_id
+                WHERE tr.organization = @org AND tr.project = @proj
+                      AND tr.test_case_title = @testName AND tr.outcome = 'Failed'
+                """;
+            cmd.Parameters.AddWithValue("@org", page.Org);
+            cmd.Parameters.AddWithValue("@proj", page.Project);
+            cmd.Parameters.AddWithValue("@testName", page.TestName);
+            return Convert.ToInt32(cmd.ExecuteScalar());
+        });
 
         // Header box
         var headerTable = new Table().Border(TableBorder.Rounded);
@@ -817,14 +861,16 @@ public sealed class BuildBrowser
                     AnsiConsole.MarkupLine($"  [bold]Console Log:[/] [link={consoleUrl}]{consoleUrl}[/]");
 
                     // Show attached files if available
-                    using var filesCmd = _db.Connection.CreateCommand();
-                    filesCmd.CommandText = """
-                        SELECT files FROM helix_work_items
-                        WHERE job_name = @job AND work_item_name = @wi
-                        """;
-                    filesCmd.Parameters.AddWithValue("@job", helixJob);
-                    filesCmd.Parameters.AddWithValue("@wi", helixWorkItem);
-                    var filesJson = filesCmd.ExecuteScalar() as string;
+                    var filesJson = _db.WithCommand(cmd =>
+                    {
+                        cmd.CommandText = """
+                            SELECT files FROM helix_work_items
+                            WHERE job_name = @job AND work_item_name = @wi
+                            """;
+                        cmd.Parameters.AddWithValue("@job", helixJob);
+                        cmd.Parameters.AddWithValue("@wi", helixWorkItem);
+                        return cmd.ExecuteScalar() as string;
+                    });
                     if (!string.IsNullOrWhiteSpace(filesJson))
                     {
                         var files = System.Text.Json.JsonSerializer.Deserialize<List<HelixFileEntry>>(filesJson);
@@ -873,39 +919,41 @@ public sealed class BuildBrowser
         AnsiConsole.MarkupLine($"[bold]{Markup.Escape(shortTitle)}[/]");
         AnsiConsole.WriteLine();
 
-        var builds = new List<BuildRow>();
-        using var cmd = _db.Connection.CreateCommand();
-        cmd.CommandText = """
-            SELECT DISTINCT b.organization, b.project, b.build_id, b.build_number,
-                   b.definition_name, b.result, b.source_branch, b.pr_number, b.finish_time,
-                   b.definition_id, b.repository_name
-            FROM test_results tr
-            JOIN test_runs r ON tr.organization = r.organization AND tr.run_id = r.run_id
-            JOIN builds b ON r.organization = b.organization AND r.build_id = b.build_id
-            WHERE tr.organization = @org AND tr.project = @proj
-                  AND tr.test_case_title = @testName AND tr.outcome = 'Failed'
-            ORDER BY b.finish_time DESC
-            LIMIT 30
-            """;
-        cmd.Parameters.AddWithValue("@org", page.Org);
-        cmd.Parameters.AddWithValue("@proj", page.Project);
-        cmd.Parameters.AddWithValue("@testName", page.TestName);
-
-        using var reader = cmd.ExecuteReader();
-        while (reader.Read())
+        var builds = _db.WithCommand(cmd =>
         {
-            builds.Add(new BuildRow(
-                reader.GetString(0), reader.GetString(1), reader.GetInt32(2),
-                reader.GetString(3), reader.GetString(4),
-                reader.IsDBNull(5) ? null : reader.GetString(5),
-                reader.GetString(6),
-                reader.IsDBNull(7) ? null : reader.GetInt32(7),
-                reader.IsDBNull(8) ? null : reader.GetString(8),
-                "complete",
-                reader.GetInt32(9),
-                reader.IsDBNull(10) ? null : reader.GetString(10)));
-        }
-        reader.Close();
+            var builds = new List<BuildRow>();
+            cmd.CommandText = """
+                SELECT DISTINCT b.organization, b.project, b.build_id, b.build_number,
+                       b.definition_name, b.result, b.source_branch, b.pr_number, b.finish_time,
+                       b.definition_id, b.repository_name
+                FROM test_results tr
+                JOIN test_runs r ON tr.organization = r.organization AND tr.run_id = r.run_id
+                JOIN builds b ON r.organization = b.organization AND r.build_id = b.build_id
+                WHERE tr.organization = @org AND tr.project = @proj
+                      AND tr.test_case_title = @testName AND tr.outcome = 'Failed'
+                ORDER BY b.finish_time DESC
+                LIMIT 30
+                """;
+            cmd.Parameters.AddWithValue("@org", page.Org);
+            cmd.Parameters.AddWithValue("@proj", page.Project);
+            cmd.Parameters.AddWithValue("@testName", page.TestName);
+
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+            {
+                builds.Add(new BuildRow(
+                    reader.GetString(0), reader.GetString(1), reader.GetInt32(2),
+                    reader.GetString(3), reader.GetString(4),
+                    reader.IsDBNull(5) ? null : reader.GetString(5),
+                    reader.GetString(6),
+                    reader.IsDBNull(7) ? null : reader.GetInt32(7),
+                    reader.IsDBNull(8) ? null : reader.GetString(8),
+                    "complete",
+                    reader.GetInt32(9),
+                    reader.IsDBNull(10) ? null : reader.GetString(10)));
+            }
+            return builds;
+        });
 
         if (builds.Count == 0)
         {
@@ -943,37 +991,39 @@ public sealed class BuildBrowser
     private NavAction RenderJobList(JobListPage page)
     {
         // Read timeline issues from DB
-        using var cmd = _db.Connection.CreateCommand();
-        cmd.CommandText = """
-            SELECT parent_name, record_name, record_type, record_result, issue_type, issue_message
-            FROM build_timeline_issues
-            WHERE organization = @org AND build_id = @buildId
-            ORDER BY parent_name, record_name, issue_type
-            """;
-        cmd.Parameters.AddWithValue("@org", page.Org);
-        cmd.Parameters.AddWithValue("@proj", page.Project);
-        cmd.Parameters.AddWithValue("@buildId", page.BuildId);
-
-        var jobIssues = new Dictionary<string, List<(string Type, string Message)>>();
-        using var reader = cmd.ExecuteReader();
-        while (reader.Read())
+        var jobIssues = _db.WithCommand(cmd =>
         {
-            var parentName = reader.IsDBNull(0) ? null : reader.GetString(0);
-            var recordName = reader.GetString(1);
-            var recordType = reader.GetString(2);
-            var issueType = reader.GetString(4);
-            var message = reader.GetString(5);
+            cmd.CommandText = """
+                SELECT parent_name, record_name, record_type, record_result, issue_type, issue_message
+                FROM build_timeline_issues
+                WHERE organization = @org AND build_id = @buildId
+                ORDER BY parent_name, record_name, issue_type
+                """;
+            cmd.Parameters.AddWithValue("@org", page.Org);
+            cmd.Parameters.AddWithValue("@proj", page.Project);
+            cmd.Parameters.AddWithValue("@buildId", page.BuildId);
 
-            var jobName = recordType == "Job" ? recordName : (parentName ?? recordName);
-
-            if (!jobIssues.TryGetValue(jobName, out var list))
+            var jobIssues = new Dictionary<string, List<(string Type, string Message)>>();
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
             {
-                list = [];
-                jobIssues[jobName] = list;
+                var parentName = reader.IsDBNull(0) ? null : reader.GetString(0);
+                var recordName = reader.GetString(1);
+                var recordType = reader.GetString(2);
+                var issueType = reader.GetString(4);
+                var message = reader.GetString(5);
+
+                var jobName = recordType == "Job" ? recordName : (parentName ?? recordName);
+
+                if (!jobIssues.TryGetValue(jobName, out var list))
+                {
+                    list = [];
+                    jobIssues[jobName] = list;
+                }
+                list.Add((issueType, message));
             }
-            list.Add((issueType, message));
-        }
-        reader.Close();
+            return jobIssues;
+        });
 
         if (jobIssues.Count == 0)
         {
@@ -1076,34 +1126,42 @@ public sealed class BuildBrowser
         AnsiConsole.MarkupLine($"[bold underline]Helix Work Items — Build #{page.BuildId}[/]");
         AnsiConsole.WriteLine();
 
-        using var cmd = _db.Connection.CreateCommand();
-        cmd.CommandText = """
-            SELECT DISTINCT tr.helix_job_name, tr.helix_work_item_name, hw.state, hw.exit_code, hw.console_output_uri
-            FROM test_results tr
-            JOIN test_runs r ON tr.organization = r.organization AND tr.run_id = r.run_id
-            LEFT JOIN helix_work_items hw ON tr.helix_job_name = hw.job_name
-                AND tr.helix_work_item_name = hw.work_item_name
-            WHERE r.organization = @org AND r.project = @proj AND r.build_id = @buildId
-                  AND tr.outcome = 'Failed'
-                  AND tr.helix_job_name IS NOT NULL
-            ORDER BY tr.helix_job_name, tr.helix_work_item_name
-            LIMIT 30
-            """;
-        cmd.Parameters.AddWithValue("@org", page.Org);
-        cmd.Parameters.AddWithValue("@proj", page.Project);
-        cmd.Parameters.AddWithValue("@buildId", page.BuildId);
+        var helixItems = _db.WithCommand(cmd =>
+        {
+            cmd.CommandText = """
+                SELECT DISTINCT tr.helix_job_name, tr.helix_work_item_name, hw.state, hw.exit_code, hw.console_output_uri
+                FROM test_results tr
+                JOIN test_runs r ON tr.organization = r.organization AND tr.run_id = r.run_id
+                LEFT JOIN helix_work_items hw ON tr.helix_job_name = hw.job_name
+                    AND tr.helix_work_item_name = hw.work_item_name
+                WHERE r.organization = @org AND r.project = @proj AND r.build_id = @buildId
+                      AND tr.outcome = 'Failed'
+                      AND tr.helix_job_name IS NOT NULL
+                ORDER BY tr.helix_job_name, tr.helix_work_item_name
+                LIMIT 30
+                """;
+            cmd.Parameters.AddWithValue("@org", page.Org);
+            cmd.Parameters.AddWithValue("@proj", page.Project);
+            cmd.Parameters.AddWithValue("@buildId", page.BuildId);
 
-        using var reader = cmd.ExecuteReader();
+            var helixItems = new List<(string Job, string WorkItem, string? State, int? ExitCode, string? ConsoleUri)>();
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+            {
+                helixItems.Add((
+                    reader.GetString(0),
+                    reader.GetString(1),
+                    reader.IsDBNull(2) ? null : reader.GetString(2),
+                    reader.IsDBNull(3) ? (int?)null : reader.GetInt32(3),
+                    reader.IsDBNull(4) ? null : reader.GetString(4)));
+            }
+            return helixItems;
+        });
+
         var hasHelix = false;
-        while (reader.Read())
+        foreach (var (job, wi, state, exitCode, consoleUri) in helixItems)
         {
             hasHelix = true;
-            var job = reader.GetString(0);
-            var wi = reader.GetString(1);
-            var state = reader.IsDBNull(2) ? null : reader.GetString(2);
-            var exitCode = reader.IsDBNull(3) ? (int?)null : reader.GetInt32(3);
-            var consoleUri = reader.IsDBNull(4) ? null : reader.GetString(4);
-
             var stateInfo = state is not null ? $" [{(exitCode == 0 ? "green" : "red")}]{state} (exit {exitCode})[/]" : "";
             AnsiConsole.MarkupLine($"  [blue]{Markup.Escape(job)}[/] / [bold]{Markup.Escape(wi)}[/]{stateInfo}");
 
@@ -1120,7 +1178,9 @@ public sealed class BuildBrowser
         }
 
         if (!hasHelix)
+        {
             AnsiConsole.MarkupLine("[yellow]No Helix work items found for failed tests in this build.[/]");
+        }
 
         AnsiConsole.WriteLine();
         AnsiConsole.MarkupLine("[dim]Press any key to go back...[/]");
@@ -1132,20 +1192,24 @@ public sealed class BuildBrowser
     private List<(string TaskType, string Status, int Attempts)> GetIngestionTaskStatuses(
         string org, string project, int buildId)
     {
-        var tasks = new List<(string, string, int)>();
-        using var cmd = _db.Connection.CreateCommand();
-        cmd.CommandText = """
-            SELECT task_type, status, attempts
-            FROM build_ingestion_tasks
-            WHERE organization = @org AND build_id = @buildId
-            ORDER BY task_type
-            """;
-        cmd.Parameters.AddWithValue("@org", org);
-        cmd.Parameters.AddWithValue("@buildId", buildId);
-        using var reader = cmd.ExecuteReader();
-        while (reader.Read())
-            tasks.Add((reader.GetString(0), reader.GetString(1), reader.GetInt32(2)));
-        return tasks;
+        return _db.WithCommand(cmd =>
+        {
+            var tasks = new List<(string, string, int)>();
+            cmd.CommandText = """
+                SELECT task_type, status, attempts
+                FROM build_ingestion_tasks
+                WHERE organization = @org AND build_id = @buildId
+                ORDER BY task_type
+                """;
+            cmd.Parameters.AddWithValue("@org", org);
+            cmd.Parameters.AddWithValue("@buildId", buildId);
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+            {
+                tasks.Add((reader.GetString(0), reader.GetString(1), reader.GetInt32(2)));
+            }
+            return tasks;
+        });
     }
 
     // ── Page and Navigation Types ───────────────────────────────────

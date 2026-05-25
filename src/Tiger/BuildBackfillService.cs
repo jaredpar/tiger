@@ -221,62 +221,74 @@ public sealed class BuildBackfillService : IDisposable
 
     private DateTime? GetLastPollTime(string organization, string project)
     {
-        using var cmd = _db.Connection.CreateCommand();
-        cmd.CommandText = """
-            SELECT last_poll_time FROM poll_watermarks
-            WHERE organization = @org AND project = @proj
-            """;
-        cmd.Parameters.AddWithValue("@org", organization);
-        cmd.Parameters.AddWithValue("@proj", project);
-        var result = cmd.ExecuteScalar();
-        if (result is string s && DateTime.TryParse(s, null, System.Globalization.DateTimeStyles.AssumeUniversal | System.Globalization.DateTimeStyles.AdjustToUniversal, out var dt))
-            return dt;
-        return null;
+        return _db.WithCommand(cmd =>
+        {
+            cmd.CommandText = """
+                SELECT last_poll_time FROM poll_watermarks
+                WHERE organization = @org AND project = @proj
+                """;
+            cmd.Parameters.AddWithValue("@org", organization);
+            cmd.Parameters.AddWithValue("@proj", project);
+            var result = cmd.ExecuteScalar();
+            if (result is string s && DateTime.TryParse(s, null, System.Globalization.DateTimeStyles.AssumeUniversal | System.Globalization.DateTimeStyles.AdjustToUniversal, out var dt))
+            {
+                return (DateTime?)dt;
+            }
+            return null;
+        });
     }
 
     private HashSet<int> GetExistingBuildIds(string organization, string project)
     {
-        var ids = new HashSet<int>();
-        using var cmd = _db.Connection.CreateCommand();
-        cmd.CommandText = """
-            SELECT build_id FROM builds
-            WHERE organization = @org AND project = @proj
-            """;
-        cmd.Parameters.AddWithValue("@org", organization);
-        cmd.Parameters.AddWithValue("@proj", project);
-        using var reader = cmd.ExecuteReader();
-        while (reader.Read())
-            ids.Add(reader.GetInt32(0));
-        return ids;
+        return _db.WithCommand(cmd =>
+        {
+            var ids = new HashSet<int>();
+            cmd.CommandText = """
+                SELECT build_id FROM builds
+                WHERE organization = @org AND project = @proj
+                """;
+            cmd.Parameters.AddWithValue("@org", organization);
+            cmd.Parameters.AddWithValue("@proj", project);
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+            {
+                ids.Add(reader.GetInt32(0));
+            }
+            return ids;
+        });
     }
 
     private int GetWatermark(string organization, string project)
     {
-        using var cmd = _db.Connection.CreateCommand();
-        cmd.CommandText = """
-            SELECT last_build_id FROM poll_watermarks
-            WHERE organization = @org AND project = @proj
-            """;
-        cmd.Parameters.AddWithValue("@org", organization);
-        cmd.Parameters.AddWithValue("@proj", project);
-        var result = cmd.ExecuteScalar();
-        return result is not null ? Convert.ToInt32(result) : 0;
+        return _db.WithCommand(cmd =>
+        {
+            cmd.CommandText = """
+                SELECT last_build_id FROM poll_watermarks
+                WHERE organization = @org AND project = @proj
+                """;
+            cmd.Parameters.AddWithValue("@org", organization);
+            cmd.Parameters.AddWithValue("@proj", project);
+            var result = cmd.ExecuteScalar();
+            return result is not null ? Convert.ToInt32(result) : 0;
+        });
     }
 
     private void SetWatermark(string organization, string project, int buildId)
     {
-        using var cmd = _db.Connection.CreateCommand();
-        cmd.CommandText = """
-            INSERT INTO poll_watermarks (organization, project, last_build_id, last_poll_time)
-            VALUES (@org, @proj, @buildId, datetime('now'))
-            ON CONFLICT (organization, project) DO UPDATE SET
-                last_build_id = MAX(last_build_id, @buildId),
-                last_poll_time = datetime('now')
-            """;
-        cmd.Parameters.AddWithValue("@org", organization);
-        cmd.Parameters.AddWithValue("@proj", project);
-        cmd.Parameters.AddWithValue("@buildId", buildId);
-        cmd.ExecuteNonQuery();
+        _db.WithCommand(cmd =>
+        {
+            cmd.CommandText = """
+                INSERT INTO poll_watermarks (organization, project, last_build_id, last_poll_time)
+                VALUES (@org, @proj, @buildId, datetime('now'))
+                ON CONFLICT (organization, project) DO UPDATE SET
+                    last_build_id = MAX(last_build_id, @buildId),
+                    last_poll_time = datetime('now')
+                """;
+            cmd.Parameters.AddWithValue("@org", organization);
+            cmd.Parameters.AddWithValue("@proj", project);
+            cmd.Parameters.AddWithValue("@buildId", buildId);
+            cmd.ExecuteNonQuery();
+        });
     }
 
     private static List<List<T>> Batch<T>(List<T> items, int batchSize)

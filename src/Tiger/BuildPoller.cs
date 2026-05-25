@@ -133,31 +133,35 @@ public sealed class BuildPoller : IDisposable
 
     internal int GetWatermark(string organization, string project)
     {
-        using var cmd = _db.Connection.CreateCommand();
-        cmd.CommandText = """
-            SELECT last_build_id FROM poll_watermarks
-            WHERE organization = @org AND project = @proj
-            """;
-        cmd.Parameters.AddWithValue("@org", organization);
-        cmd.Parameters.AddWithValue("@proj", project);
-        var result = cmd.ExecuteScalar();
-        return result is not null ? Convert.ToInt32(result) : 0;
+        return _db.WithCommand(cmd =>
+        {
+            cmd.CommandText = """
+                SELECT last_build_id FROM poll_watermarks
+                WHERE organization = @org AND project = @proj
+                """;
+            cmd.Parameters.AddWithValue("@org", organization);
+            cmd.Parameters.AddWithValue("@proj", project);
+            var result = cmd.ExecuteScalar();
+            return result is not null ? Convert.ToInt32(result) : 0;
+        });
     }
 
     internal void SetWatermark(string organization, string project, int buildId)
     {
-        using var cmd = _db.Connection.CreateCommand();
-        cmd.CommandText = """
-            INSERT INTO poll_watermarks (organization, project, last_build_id, last_poll_time)
-            VALUES (@org, @proj, @buildId, datetime('now'))
-            ON CONFLICT (organization, project) DO UPDATE SET
-                last_build_id = @buildId,
-                last_poll_time = datetime('now')
-            """;
-        cmd.Parameters.AddWithValue("@org", organization);
-        cmd.Parameters.AddWithValue("@proj", project);
-        cmd.Parameters.AddWithValue("@buildId", buildId);
-        cmd.ExecuteNonQuery();
+        _db.WithCommand(cmd =>
+        {
+            cmd.CommandText = """
+                INSERT INTO poll_watermarks (organization, project, last_build_id, last_poll_time)
+                VALUES (@org, @proj, @buildId, datetime('now'))
+                ON CONFLICT (organization, project) DO UPDATE SET
+                    last_build_id = @buildId,
+                    last_poll_time = datetime('now')
+                """;
+            cmd.Parameters.AddWithValue("@org", organization);
+            cmd.Parameters.AddWithValue("@proj", project);
+            cmd.Parameters.AddWithValue("@buildId", buildId);
+            cmd.ExecuteNonQuery();
+        });
     }
 
     public void Dispose()

@@ -309,48 +309,60 @@ public static class BrowserUI
     /// </summary>
     public static TestDetailInfo? LoadTestDetail(TigerDatabase db, string org, string project, string testName)
     {
-        // Get most recent failure
-        using var cmd = db.Connection.CreateCommand();
-        cmd.CommandText = """
-            SELECT tr.error_message, tr.stack_trace, tr.helix_job_name, tr.helix_work_item_name,
-                   r.build_id, r.run_name
-            FROM test_results tr
-            JOIN test_runs r ON tr.organization = r.organization AND tr.run_id = r.run_id
-            WHERE tr.organization = @org AND tr.project = @proj
-                  AND tr.test_case_title = @testName AND tr.outcome = 'Failed'
-            ORDER BY r.build_id DESC
-            LIMIT 1
-            """;
-        cmd.Parameters.AddWithValue("@org", org);
-        cmd.Parameters.AddWithValue("@proj", project);
-        cmd.Parameters.AddWithValue("@testName", testName);
+        var detail = db.WithCommand(cmd =>
+        {
+            cmd.CommandText = """
+                SELECT tr.error_message, tr.stack_trace, tr.helix_job_name, tr.helix_work_item_name,
+                       r.build_id, r.run_name
+                FROM test_results tr
+                JOIN test_runs r ON tr.organization = r.organization AND tr.run_id = r.run_id
+                WHERE tr.organization = @org AND tr.project = @proj
+                      AND tr.test_case_title = @testName AND tr.outcome = 'Failed'
+                ORDER BY r.build_id DESC
+                LIMIT 1
+                """;
+            cmd.Parameters.AddWithValue("@org", org);
+            cmd.Parameters.AddWithValue("@proj", project);
+            cmd.Parameters.AddWithValue("@testName", testName);
 
-        using var reader = cmd.ExecuteReader();
-        if (!reader.Read()) return null;
+            using var reader = cmd.ExecuteReader();
+            if (!reader.Read())
+            {
+                return (Found: false, ErrorMessage: (string?)null, StackTrace: (string?)null,
+                    HelixJob: (string?)null, HelixWorkItem: (string?)null, BuildId: 0, RunName: string.Empty);
+            }
 
-        var errorMessage = reader.IsDBNull(0) ? null : reader.GetString(0);
-        var stackTrace = reader.IsDBNull(1) ? null : reader.GetString(1);
-        var helixJob = reader.IsDBNull(2) ? null : reader.GetString(2);
-        var helixWorkItem = reader.IsDBNull(3) ? null : reader.GetString(3);
-        var buildId = reader.GetInt32(4);
-        var runName = reader.GetString(5);
-        reader.Close();
+            return (
+                Found: true,
+                ErrorMessage: reader.IsDBNull(0) ? null : reader.GetString(0),
+                StackTrace: reader.IsDBNull(1) ? null : reader.GetString(1),
+                HelixJob: reader.IsDBNull(2) ? null : reader.GetString(2),
+                HelixWorkItem: reader.IsDBNull(3) ? null : reader.GetString(3),
+                BuildId: reader.GetInt32(4),
+                RunName: reader.GetString(5));
+        });
 
-        // Count builds with this failure
-        using var countCmd = db.Connection.CreateCommand();
-        countCmd.CommandText = """
-            SELECT COUNT(DISTINCT r.build_id)
-            FROM test_results tr
-            JOIN test_runs r ON tr.organization = r.organization AND tr.run_id = r.run_id
-            WHERE tr.organization = @org AND tr.project = @proj
-                  AND tr.test_case_title = @testName AND tr.outcome = 'Failed'
-            """;
-        countCmd.Parameters.AddWithValue("@org", org);
-        countCmd.Parameters.AddWithValue("@proj", project);
-        countCmd.Parameters.AddWithValue("@testName", testName);
-        var buildCount = Convert.ToInt32(countCmd.ExecuteScalar());
+        if (!detail.Found)
+        {
+            return null;
+        }
 
-        return new TestDetailInfo(testName, org, project, buildId, runName, buildCount,
-            errorMessage, stackTrace, helixJob, helixWorkItem);
+        var buildCount = db.WithCommand(cmd =>
+        {
+            cmd.CommandText = """
+                SELECT COUNT(DISTINCT r.build_id)
+                FROM test_results tr
+                JOIN test_runs r ON tr.organization = r.organization AND tr.run_id = r.run_id
+                WHERE tr.organization = @org AND tr.project = @proj
+                      AND tr.test_case_title = @testName AND tr.outcome = 'Failed'
+                """;
+            cmd.Parameters.AddWithValue("@org", org);
+            cmd.Parameters.AddWithValue("@proj", project);
+            cmd.Parameters.AddWithValue("@testName", testName);
+            return Convert.ToInt32(cmd.ExecuteScalar());
+        });
+
+        return new TestDetailInfo(testName, org, project, detail.BuildId, detail.RunName, buildCount,
+            detail.ErrorMessage, detail.StackTrace, detail.HelixJob, detail.HelixWorkItem);
     }
 }

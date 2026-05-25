@@ -43,15 +43,17 @@ public class BuildIngestionServiceTests : IDisposable
 
         _service.InsertBuild("org", "proj", build);
 
-        using var cmd = _db.Connection.CreateCommand();
-        cmd.CommandText = "SELECT build_number, definition_name, definition_id, result, repository_name FROM builds WHERE build_id = 1;";
-        using var reader = cmd.ExecuteReader();
-        Assert.True(reader.Read());
-        Assert.Equal("20250101.1", reader.GetString(0));
-        Assert.Equal("runtime", reader.GetString(1));
-        Assert.Equal(42, reader.GetInt32(2));
-        Assert.Equal("failed", reader.GetString(3));
-        Assert.Equal("dotnet/runtime", reader.GetString(4));
+        _db.WithCommand(cmd =>
+        {
+            cmd.CommandText = "SELECT build_number, definition_name, definition_id, result, repository_name FROM builds WHERE build_id = 1;";
+            using var reader = cmd.ExecuteReader();
+            Assert.True(reader.Read());
+            Assert.Equal("20250101.1", reader.GetString(0));
+            Assert.Equal("runtime", reader.GetString(1));
+            Assert.Equal(42, reader.GetInt32(2));
+            Assert.Equal("failed", reader.GetString(3));
+            Assert.Equal("dotnet/runtime", reader.GetString(4));
+        });
     }
 
     [Fact]
@@ -72,9 +74,12 @@ public class BuildIngestionServiceTests : IDisposable
 
         _service.InsertBuild("org", "proj", build);
 
-        using var cmd = _db.Connection.CreateCommand();
-        cmd.CommandText = "SELECT pr_number FROM builds WHERE build_id = 2;";
-        Assert.Equal(99L, cmd.ExecuteScalar());
+        var prNumber = _db.WithCommand(cmd =>
+        {
+            cmd.CommandText = "SELECT pr_number FROM builds WHERE build_id = 2;";
+            return cmd.ExecuteScalar();
+        });
+        Assert.Equal(99L, prNumber);
     }
 
     [Fact]
@@ -101,13 +106,15 @@ public class BuildIngestionServiceTests : IDisposable
         InsertSampleBuild(10);
         _service.InsertTestRun("org", "proj", 10, 500, "Test Run A", 100, 95, 4, 1);
 
-        using var cmd = _db.Connection.CreateCommand();
-        cmd.CommandText = "SELECT run_name, total_tests, failed_tests FROM test_runs WHERE run_id = 500;";
-        using var reader = cmd.ExecuteReader();
-        Assert.True(reader.Read());
-        Assert.Equal("Test Run A", reader.GetString(0));
-        Assert.Equal(100, reader.GetInt32(1));
-        Assert.Equal(4, reader.GetInt32(2));
+        _db.WithCommand(cmd =>
+        {
+            cmd.CommandText = "SELECT run_name, total_tests, failed_tests FROM test_runs WHERE run_id = 500;";
+            using var reader = cmd.ExecuteReader();
+            Assert.True(reader.Read());
+            Assert.Equal("Test Run A", reader.GetString(0));
+            Assert.Equal(100, reader.GetInt32(1));
+            Assert.Equal(4, reader.GetInt32(2));
+        });
     }
 
     [Fact]
@@ -132,14 +139,16 @@ public class BuildIngestionServiceTests : IDisposable
 
         _service.InsertTestResult("org", "proj", 600, result);
 
-        using var cmd = _db.Connection.CreateCommand();
-        cmd.CommandText = "SELECT test_case_title, outcome, error_message, helix_job_name FROM test_results WHERE result_id = 1 AND run_id = 600;";
-        using var reader = cmd.ExecuteReader();
-        Assert.True(reader.Read());
-        Assert.Equal("MyNamespace.MyTest", reader.GetString(0));
-        Assert.Equal("Failed", reader.GetString(1));
-        Assert.Equal("Assert.Equal failed", reader.GetString(2));
-        Assert.Equal("helix-job", reader.GetString(3));
+        _db.WithCommand(cmd =>
+        {
+            cmd.CommandText = "SELECT test_case_title, outcome, error_message, helix_job_name FROM test_results WHERE result_id = 1 AND run_id = 600;";
+            using var reader = cmd.ExecuteReader();
+            Assert.True(reader.Read());
+            Assert.Equal("MyNamespace.MyTest", reader.GetString(0));
+            Assert.Equal("Failed", reader.GetString(1));
+            Assert.Equal("Assert.Equal failed", reader.GetString(2));
+            Assert.Equal("helix-job", reader.GetString(3));
+        });
     }
 
     [Fact]
@@ -159,12 +168,14 @@ public class BuildIngestionServiceTests : IDisposable
 
         _service.InsertTestResult("org", "proj", 700, result);
 
-        using var cmd = _db.Connection.CreateCommand();
-        cmd.CommandText = "SELECT helix_job_name, helix_work_item_name FROM test_results WHERE result_id = 1 AND run_id = 700;";
-        using var reader = cmd.ExecuteReader();
-        Assert.True(reader.Read());
-        Assert.True(reader.IsDBNull(0));
-        Assert.True(reader.IsDBNull(1));
+        _db.WithCommand(cmd =>
+        {
+            cmd.CommandText = "SELECT helix_job_name, helix_work_item_name FROM test_results WHERE result_id = 1 AND run_id = 700;";
+            using var reader = cmd.ExecuteReader();
+            Assert.True(reader.Read());
+            Assert.True(reader.IsDBNull(0));
+            Assert.True(reader.IsDBNull(1));
+        });
     }
 
     [Fact]
@@ -215,33 +226,35 @@ public class BuildIngestionServiceTests : IDisposable
 
         _service.IngestTimelineIssues("org", "proj", 40, timeline);
 
-        using var cmd = _db.Connection.CreateCommand();
-        cmd.CommandText = "SELECT record_name, record_type, parent_name, issue_type, issue_message FROM build_timeline_issues WHERE build_id = 40 ORDER BY record_name, issue_type;";
-        using var reader = cmd.ExecuteReader();
+        _db.WithCommand(cmd =>
+        {
+            cmd.CommandText = "SELECT record_name, record_type, parent_name, issue_type, issue_message FROM build_timeline_issues WHERE build_id = 40 ORDER BY record_name, issue_type;";
+            using var reader = cmd.ExecuteReader();
 
-        // First: Build_Windows job error
-        Assert.True(reader.Read());
-        Assert.Equal("Build_Windows", reader.GetString(0));
-        Assert.Equal("Job", reader.GetString(1));
-        Assert.True(reader.IsDBNull(2)); // no parent
-        Assert.Equal("error", reader.GetString(3));
-        Assert.Equal("Build failed", reader.GetString(4));
+            // First: Build_Windows job error
+            Assert.True(reader.Read());
+            Assert.Equal("Build_Windows", reader.GetString(0));
+            Assert.Equal("Job", reader.GetString(1));
+            Assert.True(reader.IsDBNull(2)); // no parent
+            Assert.Equal("error", reader.GetString(3));
+            Assert.Equal("Build failed", reader.GetString(4));
 
-        // Second: Compile task error
-        Assert.True(reader.Read());
-        Assert.Equal("Compile", reader.GetString(0));
-        Assert.Equal("Task", reader.GetString(1));
-        Assert.Equal("Build_Windows", reader.GetString(2)); // parent is the job
-        Assert.Equal("error", reader.GetString(3));
-        Assert.Equal("CS0001: Compilation error", reader.GetString(4));
+            // Second: Compile task error
+            Assert.True(reader.Read());
+            Assert.Equal("Compile", reader.GetString(0));
+            Assert.Equal("Task", reader.GetString(1));
+            Assert.Equal("Build_Windows", reader.GetString(2)); // parent is the job
+            Assert.Equal("error", reader.GetString(3));
+            Assert.Equal("CS0001: Compilation error", reader.GetString(4));
 
-        // Third: Compile task warning
-        Assert.True(reader.Read());
-        Assert.Equal("Compile", reader.GetString(0));
-        Assert.Equal("warning", reader.GetString(3));
+            // Third: Compile task warning
+            Assert.True(reader.Read());
+            Assert.Equal("Compile", reader.GetString(0));
+            Assert.Equal("warning", reader.GetString(3));
 
-        // No more rows (Build_Linux had no issues)
-        Assert.False(reader.Read());
+            // No more rows (Build_Linux had no issues)
+            Assert.False(reader.Read());
+        });
     }
 
     [Fact]
@@ -263,11 +276,11 @@ public class BuildIngestionServiceTests : IDisposable
 
         _service.IngestTimelineIssues("org", "proj", 50, timeline1);
 
-        using (var cmd = _db.Connection.CreateCommand())
+        _db.WithCommand(cmd =>
         {
             cmd.CommandText = "SELECT COUNT(*) FROM build_timeline_issues WHERE build_id = 50;";
             Assert.Equal(1L, cmd.ExecuteScalar());
-        }
+        });
 
         // Re-ingest with different data
         var timeline2 = new AzdoTimeline
@@ -288,14 +301,14 @@ public class BuildIngestionServiceTests : IDisposable
 
         _service.IngestTimelineIssues("org", "proj", 50, timeline2);
 
-        using (var cmd = _db.Connection.CreateCommand())
+        _db.WithCommand(cmd =>
         {
             cmd.CommandText = "SELECT COUNT(*) FROM build_timeline_issues WHERE build_id = 50;";
             Assert.Equal(2L, cmd.ExecuteScalar());
 
             cmd.CommandText = "SELECT issue_message FROM build_timeline_issues WHERE build_id = 50 AND issue_type = 'error';";
             Assert.Equal("New error 1", cmd.ExecuteScalar());
-        }
+        });
     }
 
     private void InsertSampleBuild(int buildId)
