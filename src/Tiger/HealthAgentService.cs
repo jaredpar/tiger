@@ -121,7 +121,7 @@ public sealed class HealthAgentService : IDisposable
             cmd.CommandText = $"""
                 SELECT
                     COUNT(DISTINCT b.build_id) as total,
-                    COUNT(DISTINCT CASE WHEN t.status != 'pending' AND t.status != 'running' THEN b.build_id END) as ready
+                    COUNT(DISTINCT CASE WHEN t.status IS NULL OR t.status IN ('complete', 'failed') THEN b.build_id END) as ready
                 FROM builds b
                 LEFT JOIN build_ingestion_tasks t
                     ON b.organization = t.organization AND b.build_id = t.build_id
@@ -611,7 +611,7 @@ public sealed class HealthAgentService : IDisposable
                 SELECT ti.record_name, ti.issue_type, ti.issue_message
                 FROM build_timeline_issues ti
                 JOIN builds b ON ti.organization = b.organization
-                    AND ti.project = b.project AND ti.build_id = b.build_id
+                    AND ti.build_id = b.build_id
                 WHERE b.repository_name = @repo AND b.definition_name = @def
                   AND b.finish_time >= @since AND ti.issue_type = 'error'
                 ORDER BY b.finish_time DESC LIMIT 15
