@@ -42,6 +42,12 @@ public sealed class HelixClient
         Task.FromResult(Create(bearerToken));
 
     /// <summary>
+    /// Returns the URL to the console output for a specific work item.
+    /// </summary>
+    public static string GetConsoleUrl(string jobName, string workItemName) =>
+        $"{BaseUrl}api/{ApiVersion}/jobs/{Uri.EscapeDataString(jobName)}/workitems/{Uri.EscapeDataString(workItemName)}/console";
+
+    /// <summary>
     /// Get summary information about a single job.
     /// </summary>
     public async Task<HelixJob> GetJobAsync(string jobName)

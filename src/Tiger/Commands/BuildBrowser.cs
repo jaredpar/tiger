@@ -498,7 +498,7 @@ public sealed class BuildBrowser
             {
                 headerTable.AddRow("[bold]PR Info[/]", $"#{prNumber}");
             }
-            headerTable.AddRow("[bold]PR Url[/]", $"[link={prUrl}]{prUrl}[/]");
+            headerTable.AddRow("[bold]PR Url[/]", BrowserUI.FormatLink(prUrl, $"PR #{prNumber}"));
         }
         else if (prNumber is not null)
         {
@@ -510,7 +510,7 @@ public sealed class BuildBrowser
         }
         if (finishTime is not null)
             headerTable.AddRow("[bold]Finished[/]", BrowserUI.FormatTime(finishTime));
-        headerTable.AddRow("[bold]URL[/]", $"[link={url}]{url}[/]");
+        headerTable.AddRow("[bold]URL[/]", BrowserUI.FormatLink(url, "AzDO Build"));
 
         // Ingestion status line: Timeline, Tests, Helix with status icons
         var taskStatuses = GetIngestionTaskStatuses(page.Org, page.Project, page.BuildId);
@@ -812,7 +812,7 @@ public sealed class BuildBrowser
         if (buildId is not null)
         {
             var buildUrl = $"https://dev.azure.com/{Uri.EscapeDataString(page.Org)}/{Uri.EscapeDataString(page.Project)}/_build/results?buildId={buildId}";
-            headerTable.AddRow("[bold]Last Failed Build[/]", $"[link={buildUrl}]{Markup.Escape(buildUrl)}[/]");
+            headerTable.AddRow("[bold]Last Failed Build[/]", BrowserUI.FormatLink(buildUrl, $"Build #{buildId}"));
         }
         headerTable.AddRow("[bold]Failed In[/]", $"{buildCount} build(s)");
         AnsiConsole.Write(headerTable);
@@ -857,8 +857,8 @@ public sealed class BuildBrowser
                 if (helixWorkItem is not null)
                 {
                     AnsiConsole.MarkupLine($"  [bold]Work Item:[/] {Markup.Escape(helixWorkItem)}");
-                    var consoleUrl = $"https://helix.dot.net/api/2019-06-17/jobs/{Uri.EscapeDataString(helixJob)}/workitems/{Uri.EscapeDataString(helixWorkItem)}/console";
-                    AnsiConsole.MarkupLine($"  [bold]Console Log:[/] [link={consoleUrl}]{consoleUrl}[/]");
+                    var consoleUrl = HelixClient.GetConsoleUrl(helixJob, helixWorkItem);
+                    AnsiConsole.MarkupLine($"  [bold]Console:[/] {BrowserUI.FormatLink(consoleUrl, "Console Log")}");
 
                     // Show attached files if available
                     var filesJson = _db.WithCommand(cmd =>
@@ -871,6 +871,7 @@ public sealed class BuildBrowser
                         cmd.Parameters.AddWithValue("@wi", helixWorkItem);
                         return cmd.ExecuteScalar() as string;
                     });
+
                     if (!string.IsNullOrWhiteSpace(filesJson))
                     {
                         var files = System.Text.Json.JsonSerializer.Deserialize<List<HelixFileEntry>>(filesJson);
@@ -879,9 +880,15 @@ public sealed class BuildBrowser
                             AnsiConsole.MarkupLine($"  [bold]Files ({files.Count}):[/]");
                             foreach (var f in files)
                             {
-                                AnsiConsole.MarkupLine($"    {Markup.Escape(f.FileName ?? "unknown")}");
+                                var name = f.FileName ?? "unknown";
                                 if (f.Uri is not null)
-                                    AnsiConsole.MarkupLine($"      [dim]{Markup.Escape(f.Uri)}[/]");
+                                {
+                                    AnsiConsole.MarkupLine($"    {BrowserUI.FormatLink(f.Uri, name)}");
+                                }
+                                else
+                                {
+                                    AnsiConsole.MarkupLine($"    {Markup.Escape(name)}");
+                                }
                             }
                         }
                     }
@@ -1163,18 +1170,10 @@ public sealed class BuildBrowser
         {
             hasHelix = true;
             var stateInfo = state is not null ? $" [{(exitCode == 0 ? "green" : "red")}]{state} (exit {exitCode})[/]" : "";
-            AnsiConsole.MarkupLine($"  [blue]{Markup.Escape(job)}[/] / [bold]{Markup.Escape(wi)}[/]{stateInfo}");
+            AnsiConsole.MarkupLine($"  [bold]{Markup.Escape(wi)}[/]{stateInfo}");
 
-            if (consoleUri is not null)
-            {
-                AnsiConsole.MarkupLine($"    [link={consoleUri}]{consoleUri}[/]");
-            }
-            else
-            {
-                // Construct the URL from the job/work item names
-                var url = $"https://helix.dot.net/api/2019-06-17/jobs/{Uri.EscapeDataString(job)}/workitems/{Uri.EscapeDataString(wi)}/console";
-                AnsiConsole.MarkupLine($"    [link={url}]{url}[/]");
-            }
+            var url = consoleUri ?? HelixClient.GetConsoleUrl(job, wi);
+            AnsiConsole.MarkupLine($"    {BrowserUI.FormatLink(url, "Console Log")}");
         }
 
         if (!hasHelix)

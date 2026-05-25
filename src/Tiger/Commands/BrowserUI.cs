@@ -268,8 +268,8 @@ public static class BrowserUI
             if (info.HelixWorkItemName is not null)
             {
                 AnsiConsole.MarkupLine($"  [bold]Work Item:[/] {Markup.Escape(info.HelixWorkItemName)}");
-                var consoleUrl = $"https://helix.dot.net/api/2019-06-17/jobs/{Uri.EscapeDataString(info.HelixJobName)}/workitems/{Uri.EscapeDataString(info.HelixWorkItemName)}/console";
-                AnsiConsole.MarkupLine($"  [bold]Console Log:[/] [link={consoleUrl}]{consoleUrl}[/]");
+                var consoleUrl = HelixClient.GetConsoleUrl(info.HelixJobName, info.HelixWorkItemName);
+                AnsiConsole.MarkupLine($"  [bold]Console:[/] {FormatLink(consoleUrl, "Console Log")}");
             }
         }
         else
@@ -294,6 +294,14 @@ public static class BrowserUI
             pattern = $"%{pattern}%";
         return (pattern, false);
     }
+
+    /// <summary>
+    /// Formats a clickable link for terminal display. Uses OSC 8 link markup
+    /// for terminals that support it, and blue underline styling so the link
+    /// is visually recognizable in all terminals.
+    /// </summary>
+    public static string FormatLink(string url, string displayText) =>
+        $"[link={url}][blue underline]{Markup.Escape(displayText)}[/][/]";
 
     /// <summary>
     /// Data model for test failure detail rendering.
