@@ -10,7 +10,7 @@ public sealed class IngestionWorker : IDisposable
 {
     private readonly TigerDatabase _db;
     private readonly BuildIngestionService _ingestion;
-    private readonly Func<string, string, AzdoClient> _clientFactory;
+    private readonly AzdoClientFactory _clientFactory;
     private readonly ServiceLog? _log;
     private CancellationTokenSource? _cts;
     private Task? _workerTask;
@@ -30,7 +30,7 @@ public sealed class IngestionWorker : IDisposable
     public IngestionWorker(
         TigerDatabase db,
         BuildIngestionService ingestion,
-        Func<string, string, AzdoClient> clientFactory,
+        AzdoClientFactory clientFactory,
         ServiceLog? log = null)
     {
         _db = db;
@@ -155,7 +155,7 @@ public sealed class IngestionWorker : IDisposable
 
     private async Task ProcessTaskAsync(IngestionTask task, CancellationToken ct)
     {
-        var client = _clientFactory(task.Organization, task.Project);
+        var client = _clientFactory.Create(task.Organization, task.Project);
 
         switch (task.TaskType)
         {

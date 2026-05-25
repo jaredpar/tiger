@@ -22,8 +22,8 @@ public sealed class PollStartCommand : AsyncCommand
         }
 
         var ingestion = new BuildIngestionService(db);
-        var poller = new BuildPoller(config, db, (org, proj) =>
-            AzdoClient.Create(tigerContext.AzureCredential, org, proj));
+        var clientFactory = new AzdoClientFactory(tigerContext.AzureCredential);
+        var poller = new BuildPoller(config, db, clientFactory);
 
         poller.OnNewBuilds = ingestion.IngestBuildsAsync;
 

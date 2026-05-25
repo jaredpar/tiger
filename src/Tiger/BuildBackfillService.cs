@@ -14,7 +14,7 @@ public sealed class BuildBackfillService : IDisposable
     private readonly TigerConfig _config;
     private readonly TigerDatabase _db;
     private readonly BuildIngestionService _ingestion;
-    private readonly Func<string, string, AzdoClient> _clientFactory;
+    private readonly AzdoClientFactory _clientFactory;
     private readonly ServiceLog _log;
     private readonly Channel<BackfillMode> _channel = Channel.CreateUnbounded<BackfillMode>();
     private CancellationTokenSource? _cts;
@@ -26,7 +26,7 @@ public sealed class BuildBackfillService : IDisposable
         TigerConfig config,
         TigerDatabase db,
         BuildIngestionService ingestion,
-        Func<string, string, AzdoClient> clientFactory,
+        AzdoClientFactory clientFactory,
         ServiceLog log)
     {
         _config = config;
@@ -163,7 +163,7 @@ public sealed class BuildBackfillService : IDisposable
         _log.Info("Backfill",
             $"{source.Organization}/{source.Project} — fetching builds since {TigerUtils.FormatLocalTime(since)}");
 
-        var client = _clientFactory(source.Organization, source.Project);
+        var client = _clientFactory.Create(source.Organization, source.Project);
 
         // If repositories are configured, query per-repo; otherwise query all
         List<AzdoBuild> builds;

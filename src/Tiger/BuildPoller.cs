@@ -11,7 +11,7 @@ public sealed class BuildPoller : IDisposable
 {
     private readonly TigerConfig _config;
     private readonly TigerDatabase _db;
-    private readonly Func<string, string, AzdoClient> _clientFactory;
+    private readonly AzdoClientFactory _clientFactory;
     private readonly ServiceLog? _log;
     private CancellationTokenSource? _cts;
     private Task? _pollingTask;
@@ -27,7 +27,7 @@ public sealed class BuildPoller : IDisposable
     public BuildPoller(
         TigerConfig config,
         TigerDatabase db,
-        Func<string, string, AzdoClient> clientFactory,
+        AzdoClientFactory clientFactory,
         ServiceLog? log = null)
     {
         _config = config;
@@ -90,7 +90,7 @@ public sealed class BuildPoller : IDisposable
     private async Task PollSourceAsync(AzdoSource source, CancellationToken ct)
     {
         var watermark = GetWatermark(source.Organization, source.Project);
-        var client = _clientFactory(source.Organization, source.Project);
+        var client = _clientFactory.Create(source.Organization, source.Project);
 
         // Fetch recent completed builds, filtered by repository if configured
         List<AzdoBuild> builds;

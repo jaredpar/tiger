@@ -26,8 +26,7 @@ public sealed class DashboardCommand : AsyncCommand
         // Ensure skills are registered for Copilot CLI
         SkillsRegistration.EnsureSkillsRegistered();
 
-        Func<string, string, AzdoClient> clientFactory = (org, proj) =>
-            AzdoClient.Create(tigerContext.AzureCredential, org, proj);
+        var clientFactory = new AzdoClientFactory(tigerContext.AzureCredential);
 
         // Start all background services unconditionally — they no-op if no sources configured
         var ingestion = new BuildIngestionService(db, serviceLog);
@@ -72,7 +71,7 @@ public sealed class DashboardCommand : AsyncCommand
 
     private static async Task RunMenuLoopAsync(
         TigerContext tigerContext, TigerDatabase db,
-        Func<string, string, AzdoClient> clientFactory,
+        AzdoClientFactory clientFactory,
         BuildBackfillService backfill,
         ServiceLog serviceLog, CancellationToken ct)
     {

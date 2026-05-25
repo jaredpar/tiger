@@ -9,7 +9,7 @@ namespace Tiger.Commands;
 public sealed class BuildBrowser
 {
     private readonly TigerDatabase _db;
-    private readonly Func<string, string, AzdoClient> _clientFactory;
+    private readonly AzdoClientFactory _clientFactory;
     private readonly string _configDirectory;
     private readonly List<Page> _history = [];
     private readonly BuildFilter _filter;
@@ -17,7 +17,7 @@ public sealed class BuildBrowser
     private int _selectedBuildIndex;
     private List<BuildRow> _lastBuilds = [];
 
-    public BuildBrowser(TigerDatabase db, Func<string, string, AzdoClient> clientFactory, string configDirectory)
+    public BuildBrowser(TigerDatabase db, AzdoClientFactory clientFactory, string configDirectory)
     {
         _db = db;
         _clientFactory = clientFactory;

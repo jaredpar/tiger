@@ -63,7 +63,7 @@ public class BuildPollerTests : IDisposable
             PollIntervalSeconds = 3600, // long interval so it doesn't actually poll
             Sources = [],               // no sources to poll
         };
-        var poller = new BuildPoller(config, _db, (org, proj) => throw new NotImplementedException());
+        var poller = new BuildPoller(config, _db, new AzdoClientFactory((org, proj) => throw new NotImplementedException()));
 
         Assert.False(poller.IsRunning);
         poller.Start();
@@ -90,7 +90,7 @@ public class BuildPollerTests : IDisposable
         };
 
         var captured = new List<(string org, string proj, List<AzdoBuild> builds)>();
-        var poller = new BuildPoller(config, _db, (org, proj) => throw new NotImplementedException())
+        var poller = new BuildPoller(config, _db, new AzdoClientFactory((org, proj) => throw new NotImplementedException()))
         {
             OnNewBuilds = (client, org, proj, newBuilds) =>
             {
@@ -110,6 +110,6 @@ public class BuildPollerTests : IDisposable
     private BuildPoller CreatePoller()
     {
         var config = new TigerConfig { Sources = [] };
-        return new BuildPoller(config, _db, (org, proj) => throw new NotImplementedException());
+        return new BuildPoller(config, _db, new AzdoClientFactory((org, proj) => throw new NotImplementedException()));
     }
 }
