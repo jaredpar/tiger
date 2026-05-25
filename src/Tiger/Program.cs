@@ -83,7 +83,15 @@ app.Configure(config =>
         .WithDescription("Interactive agent session for CI health reporting");
 });
 
-return await app.RunAsync(args);
+try
+{
+    return await app.RunAsync(args);
+}
+catch (Exception ex)
+{
+    AnsiConsole.WriteException(ex, ExceptionFormats.ShortenEverything);
+    return 1;
+}
 
 static void CheckRequiredTools()
 {

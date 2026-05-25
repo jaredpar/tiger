@@ -10,7 +10,7 @@ namespace Tiger;
 /// </summary>
 public sealed class TigerDatabase : IDisposable
 {
-    public const int CurrentSchemaVersion = 5;
+    public const int CurrentSchemaVersion = 6;
 
     public string DatabasePath { get; }
     private string ConnectionString { get; }
@@ -338,6 +338,26 @@ public sealed class TigerDatabase : IDisposable
             """;
             cmd.ExecuteNonQuery();
         });
+
+        WithCommand(cmd =>
+        {
+            cmd.CommandText = """
+            CREATE TABLE IF NOT EXISTS build_analyses (
+                organization TEXT NOT NULL,
+                build_id INTEGER NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                category TEXT,
+                confidence TEXT,
+                diagnosis_summary TEXT,
+                log_path TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                completed_at TEXT,
+                PRIMARY KEY (organization, build_id),
+                FOREIGN KEY (organization, build_id) REFERENCES builds (organization, build_id)
+            );
+            """;
+            cmd.ExecuteNonQuery();
+        });
     }
 
     /// <summary>
@@ -423,6 +443,19 @@ public sealed class TigerDatabase : IDisposable
                 cmd.ExecuteNonQuery();
             }
 
+            // Delete build analyses
+            using (var cmd = conn.CreateCommand())
+            {
+                cmd.Transaction = tx;
+                cmd.CommandText = """
+                    DELETE FROM build_analyses
+                    WHERE organization = @org AND build_id = @buildId
+                    """;
+                cmd.Parameters.AddWithValue("@org", organization);
+                cmd.Parameters.AddWithValue("@buildId", buildId);
+                cmd.ExecuteNonQuery();
+            }
+
             // Delete the build itself
             using (var cmd = conn.CreateCommand())
             {
@@ -438,9 +471,138 @@ public sealed class TigerDatabase : IDisposable
         });
     }
 
+    /// <summary>
+    /// Inserts a new build analysis row with status 'pending'.
+    /// </summary>
+    public void InsertBuildAnalysis(string organization, int buildId)
+    {
+        WithCommand(cmd =>
+        {
+            cmd.CommandText = """
+                INSERT OR IGNORE INTO build_analyses (organization, build_id, status)
+                VALUES (@org, @buildId, 'pending')
+                """;
+            cmd.Parameters.AddWithValue("@org", organization);
+            cmd.Parameters.AddWithValue("@buildId", buildId);
+            cmd.ExecuteNonQuery();
+        });
+    }
+
+    /// <summary>
+    /// Updates an existing build analysis row.
+    /// </summary>
+    public void UpdateBuildAnalysis(
+        string organization,
+        int buildId,
+        string status,
+        string? category = null,
+        string? confidence = null,
+        string? diagnosisSummary = null,
+        string? logPath = null)
+    {
+        WithCommand(cmd =>
+        {
+            cmd.CommandText = """
+                UPDATE build_analyses
+                SET status = @status,
+                    category = @category,
+                    confidence = @confidence,
+                    diagnosis_summary = @diagnosisSummary,
+                    log_path = @logPath,
+                    completed_at = CASE WHEN @status IN ('complete', 'failed', 'skipped') THEN datetime('now') ELSE completed_at END
+                WHERE organization = @org AND build_id = @buildId
+                """;
+            cmd.Parameters.AddWithValue("@org", organization);
+            cmd.Parameters.AddWithValue("@buildId", buildId);
+            cmd.Parameters.AddWithValue("@status", status);
+            cmd.Parameters.AddWithValue("@category", (object?)category ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@confidence", (object?)confidence ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@diagnosisSummary", (object?)diagnosisSummary ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@logPath", (object?)logPath ?? DBNull.Value);
+            cmd.ExecuteNonQuery();
+        });
+    }
+
+    /// <summary>
+    /// Deletes a build analysis row so it can be re-queued.
+    /// </summary>
+    public void DeleteBuildAnalysis(string organization, int buildId)
+    {
+        WithCommand(cmd =>
+        {
+            cmd.CommandText = """
+                DELETE FROM build_analyses
+                WHERE organization = @org AND build_id = @buildId
+                """;
+            cmd.Parameters.AddWithValue("@org", organization);
+            cmd.Parameters.AddWithValue("@buildId", buildId);
+            cmd.ExecuteNonQuery();
+        });
+    }
+
+    /// <summary>
+    /// Returns recent build analyses joined with build info.
+    /// </summary>
+    public List<BuildAnalysisInfo> GetRecentAnalyses(int limit = 50)
+    {
+        return WithCommand(cmd =>
+        {
+            cmd.CommandText = """
+                SELECT ba.organization, ba.build_id, ba.status, ba.category, ba.confidence,
+                       ba.diagnosis_summary, ba.log_path, ba.created_at, ba.completed_at,
+                       b.project, b.definition_name, b.build_number, b.source_branch
+                FROM build_analyses ba
+                JOIN builds b ON ba.organization = b.organization AND ba.build_id = b.build_id
+                ORDER BY ba.created_at DESC
+                LIMIT @limit
+                """;
+            cmd.Parameters.AddWithValue("@limit", limit);
+
+            var results = new List<BuildAnalysisInfo>();
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+            {
+                results.Add(new BuildAnalysisInfo
+                {
+                    Organization = reader.GetString(0),
+                    BuildId = reader.GetInt32(1),
+                    Status = reader.GetString(2),
+                    Category = reader.IsDBNull(3) ? null : reader.GetString(3),
+                    Confidence = reader.IsDBNull(4) ? null : reader.GetString(4),
+                    DiagnosisSummary = reader.IsDBNull(5) ? null : reader.GetString(5),
+                    LogPath = reader.IsDBNull(6) ? null : reader.GetString(6),
+                    CreatedAt = reader.GetString(7),
+                    CompletedAt = reader.IsDBNull(8) ? null : reader.GetString(8),
+                    Project = reader.GetString(9),
+                    DefinitionName = reader.GetString(10),
+                    BuildNumber = reader.GetString(11),
+                    SourceBranch = reader.GetString(12),
+                });
+            }
+            return results;
+        });
+    }
+
     public void Dispose()
     {
         // Connection pooling: no shared connection to dispose.
         // Microsoft.Data.Sqlite manages the pool internally.
     }
+}
+
+public sealed class BuildAnalysisInfo
+{
+    public required string Organization { get; init; }
+    public required int BuildId { get; init; }
+    public required string Status { get; init; }
+    public string? Category { get; init; }
+    public string? Confidence { get; init; }
+    public string? DiagnosisSummary { get; init; }
+    public string? LogPath { get; init; }
+    public required string CreatedAt { get; init; }
+    public string? CompletedAt { get; init; }
+    public required string Project { get; init; }
+    public required string DefinitionName { get; init; }
+    public required string BuildNumber { get; init; }
+    public required string SourceBranch { get; init; }
 }

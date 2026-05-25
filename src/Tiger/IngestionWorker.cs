@@ -25,6 +25,12 @@ public sealed class IngestionWorker : IDisposable
     /// </summary>
     private static readonly int[] s_backoffSeconds = [30, 120, 600, 3600];
 
+    /// <summary>
+    /// Raised when all ingestion tasks for a build have completed (or been abandoned).
+    /// Subscribers receive the organization and build ID.
+    /// </summary>
+    public event Action<string, int>? OnBuildIngested;
+
     public bool IsRunning => _workerTask is not null && !_workerTask.IsCompleted;
 
     public IngestionWorker(
@@ -103,6 +109,7 @@ public sealed class IngestionWorker : IDisposable
                     {
                         await ProcessTaskAsync(task, ct);
                         MarkTaskComplete(task);
+                        NotifyIfBuildFullyIngested(task);
                         Interlocked.Exchange(ref consecutiveFailures, 0);
                     }
                     catch (Exception ex) when (ex is not OperationCanceledException)
@@ -487,6 +494,35 @@ public sealed class IngestionWorker : IDisposable
             cmd.Parameters.AddWithValue("@type", task.TaskType);
             cmd.ExecuteNonQuery();
         });
+    }
+
+    /// <summary>
+    /// After a task completes, check if all tasks for the build are terminal.
+    /// If so, raise the OnBuildIngested event.
+    /// </summary>
+    private void NotifyIfBuildFullyIngested(IngestionTask task)
+    {
+        var allDone = _db.WithCommand(cmd =>
+        {
+            cmd.CommandText = """
+                SELECT 1
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM build_ingestion_tasks t
+                    WHERE t.organization = @org AND t.build_id = @buildId
+                      AND t.status NOT IN ('complete', 'abandoned')
+                )
+                """;
+            cmd.Parameters.AddWithValue("@org", task.Organization);
+            cmd.Parameters.AddWithValue("@buildId", task.BuildId);
+            using var reader = cmd.ExecuteReader();
+            return reader.Read();
+        });
+
+        if (allDone)
+        {
+            _log?.Info("Worker", $"Build #{task.BuildId} fully ingested, notifying subscribers.");
+            OnBuildIngested?.Invoke(task.Organization, task.BuildId);
+        }
     }
 
     private void MarkTaskFailed(IngestionTask task, string error, int retryDelaySecs)

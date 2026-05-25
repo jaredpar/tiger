@@ -13,6 +13,7 @@ public sealed class DashboardCommand : AsyncCommand
     private const string MenuBuilds = "Builds";
     private const string MenuTests = "Tests";
     private const string MenuHealth = "Health";
+    private const string MenuAnalysis = "Analysis";
     private const string MenuConfig = "Configuration";
     private const string MenuQuit = "Quit";
 
@@ -31,15 +32,20 @@ public sealed class DashboardCommand : AsyncCommand
         // Start all background services unconditionally — they no-op if no sources configured
         var ingestion = new BuildIngestionService(db, serviceLog);
 
+        var knownIssues = new KnownIssueService(config, db, serviceLog);
+        knownIssues.Start();
+
         var worker = new IngestionWorker(db, ingestion, clientFactory, serviceLog);
+
+        var analysisAgent = new BuildAnalysisService(db, clientFactory, knownIssues, serviceLog);
+        worker.OnBuildIngested += analysisAgent.OnBuildIngested;
+
         worker.Start();
+        analysisAgent.Start();
 
         var poller = new BuildPoller(config, db, clientFactory, serviceLog);
         poller.OnNewBuilds = ingestion.IngestBuildsAsync;
         poller.Start();
-
-        var knownIssues = new KnownIssueService(config, db, serviceLog);
-        knownIssues.Start();
 
         var healthAgent = new HealthAgentService(config, db, serviceLog);
         healthAgent.Start();
@@ -49,7 +55,7 @@ public sealed class DashboardCommand : AsyncCommand
 
         try
         {
-            await RunMenuLoopAsync(tigerContext, db, clientFactory, backfill, serviceLog, ct);
+            await RunMenuLoopAsync(tigerContext, db, clientFactory, backfill, analysisAgent, serviceLog, ct);
         }
         finally
         {
@@ -57,6 +63,7 @@ public sealed class DashboardCommand : AsyncCommand
             await worker.StopAsync();
             await poller.StopAsync();
             await backfill.StopAsync();
+            await analysisAgent.StopAsync();
         }
 
         return 0;
@@ -73,6 +80,7 @@ public sealed class DashboardCommand : AsyncCommand
         TigerContext tigerContext, TigerDatabase db,
         AzdoClientFactory clientFactory,
         BuildBackfillService backfill,
+        BuildAnalysisService analysisAgent,
         ServiceLog serviceLog, CancellationToken ct)
     {
         var menuLabels = new[]
@@ -80,6 +88,7 @@ public sealed class DashboardCommand : AsyncCommand
             $"[blue](B)[/] {MenuBuilds}",
             $"[blue](T)[/] {MenuTests}",
             $"[blue](H)[/] {MenuHealth}",
+            $"[blue](A)[/] {MenuAnalysis}",
             $"[blue](C)[/] {MenuConfig}",
             $"[blue](S)[/] {MenuStatus}",
             $"[blue](Q)[/] {MenuQuit}",
@@ -110,7 +119,7 @@ public sealed class DashboardCommand : AsyncCommand
             // Hotkeys
             var hotkey = char.ToUpperInvariant(key.KeyChar) switch
             {
-                'B' => 0, 'T' => 1, 'H' => 2, 'C' => 3, 'S' => 4, 'Q' => 5,
+                'B' => 0, 'T' => 1, 'H' => 2, 'A' => 3, 'C' => 4, 'S' => 5, 'Q' => 6,
                 _ => -1,
             };
             if (hotkey >= 0)
@@ -141,9 +150,10 @@ public sealed class DashboardCommand : AsyncCommand
                 0 => MenuBuilds,
                 1 => MenuTests,
                 2 => MenuHealth,
-                3 => MenuConfig,
-                4 => MenuStatus,
-                5 => MenuQuit,
+                3 => MenuAnalysis,
+                4 => MenuConfig,
+                5 => MenuStatus,
+                6 => MenuQuit,
                 _ => MenuQuit,
             };
 
@@ -163,6 +173,10 @@ public sealed class DashboardCommand : AsyncCommand
                 case MenuHealth:
                     var healthCmd = new HealthCommand();
                     await healthCmd.RunAsync(ct);
+                    break;
+                case MenuAnalysis:
+                    var analysisBrowser = new AnalysisBrowser(db, analysisAgent);
+                    analysisBrowser.Browse();
                     break;
                 case MenuConfig:
                     var configEditor = new ConfigEditor(tigerContext.Config, tigerContext.ConfigDirectory);
