@@ -50,7 +50,6 @@ public sealed class DashboardCommand : AsyncCommand
 
         try
         {
-            RenderBanner(config, tigerContext, poller, worker);
             await RunMenuLoopAsync(tigerContext, db, clientFactory, backfill, serviceLog, ct);
         }
         finally
@@ -64,25 +63,10 @@ public sealed class DashboardCommand : AsyncCommand
         return 0;
     }
 
-    private static void RenderBanner(TigerConfig config, TigerContext tigerContext, BuildPoller poller, IngestionWorker worker)
+    private static void RenderBanner()
     {
         AnsiConsole.Write(new FigletText("tiger").Color(Color.Orange1));
         AnsiConsole.MarkupLine("[dim]CI/CD Infrastructure Management[/]");
-        AnsiConsole.WriteLine();
-
-        var table = new Table().Border(TableBorder.Rounded).AddColumn("Service").AddColumn("Status");
-        table.AddRow("Poller", poller.IsRunning ? "[green]Running[/]" : "[red]Stopped[/]");
-        table.AddRow("Ingestion Worker", worker.IsRunning ? "[green]Running[/]" : "[red]Stopped[/]");
-        table.AddRow("Backfill", "[green]Running[/]");
-        table.AddRow("Database", $"[blue]{tigerContext.DatabasePath}[/]");
-        table.AddRow("Sources", $"[blue]{config.Sources.Count}[/]");
-
-        if (config.Sources.Count > 0)
-        {
-            table.AddRow("Poll interval", $"[blue]{config.PollIntervalSeconds}s[/]");
-        }
-
-        AnsiConsole.Write(table);
         AnsiConsole.WriteLine();
     }
 
@@ -92,7 +76,7 @@ public sealed class DashboardCommand : AsyncCommand
         BuildBackfillService backfill,
         ServiceLog serviceLog, CancellationToken ct)
     {
-        var menuItems = new List<string>
+        var menuLabels = new[]
         {
             $"[blue](B)[/] {MenuBuilds}",
             $"[blue](T)[/] {MenuTests}",
@@ -101,23 +85,56 @@ public sealed class DashboardCommand : AsyncCommand
             $"[blue](S)[/] {MenuStatus}",
             $"[blue](Q)[/] {MenuQuit}",
         };
-        var hotkeys = new Dictionary<ConsoleKey, int>
-        {
-            [ConsoleKey.B] = 0,
-            [ConsoleKey.T] = 1,
-            [ConsoleKey.H] = 2,
-            [ConsoleKey.C] = 3,
-            [ConsoleKey.S] = 4,
-            [ConsoleKey.Q] = 5,
-        };
 
+        var selected = 0;
         while (!ct.IsCancellationRequested)
         {
-            var selected = BrowserUI.SelectWithEscape(
-                "What would you like to do?", menuItems, extraKeys: hotkeys, useMarkup: true);
-            if (selected < 0)
+            AnsiConsole.Clear();
+            RenderBanner();
+
+            AnsiConsole.MarkupLine("[bold]What would you like to do?[/]");
+            for (var i = 0; i < menuLabels.Length; i++)
             {
-                return;
+                if (i == selected)
+                {
+                    AnsiConsole.MarkupLine($"  [blue]>[/] {menuLabels[i]}");
+                }
+                else
+                {
+                    AnsiConsole.MarkupLine($"    {menuLabels[i]}");
+                }
+            }
+            AnsiConsole.MarkupLine("[dim]  ↑↓ navigate  Enter select[/]");
+
+            var key = Console.ReadKey(true);
+
+            // Hotkeys
+            var hotkey = char.ToUpperInvariant(key.KeyChar) switch
+            {
+                'B' => 0, 'T' => 1, 'H' => 2, 'C' => 3, 'S' => 4, 'Q' => 5,
+                _ => -1,
+            };
+            if (hotkey >= 0)
+            {
+                selected = hotkey;
+            }
+            else
+            {
+                switch (key.Key)
+                {
+                    case ConsoleKey.UpArrow:
+                        selected = (selected - 1 + menuLabels.Length) % menuLabels.Length;
+                        continue;
+                    case ConsoleKey.DownArrow:
+                        selected = (selected + 1) % menuLabels.Length;
+                        continue;
+                    case ConsoleKey.Enter:
+                        break;
+                    case ConsoleKey.Escape:
+                        return;
+                    default:
+                        continue;
+                }
             }
 
             var choice = selected switch
@@ -161,8 +178,6 @@ public sealed class DashboardCommand : AsyncCommand
                 case MenuQuit:
                     return;
             }
-
-            AnsiConsole.WriteLine();
         }
     }
 
