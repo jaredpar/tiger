@@ -1335,7 +1335,10 @@ public sealed class BuildBrowser
 
     private sealed class HelixFileEntry
     {
+        [System.Text.Json.Serialization.JsonPropertyName("fileName")]
         public string? FileName { get; set; }
+
+        [System.Text.Json.Serialization.JsonPropertyName("uri")]
         public string? Uri { get; set; }
     }
 }
