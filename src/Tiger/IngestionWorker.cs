@@ -1,6 +1,20 @@
 namespace Tiger;
 
 /// <summary>
+/// Information about a build whose ingestion has completed.
+/// </summary>
+public sealed class BuildIngestedEvent
+{
+    public required string Organization { get; init; }
+    public required string Project { get; init; }
+    public required int BuildId { get; init; }
+    public required string DefinitionName { get; init; }
+    public required string Result { get; init; }
+    public required string SourceBranch { get; init; }
+    public string? FinishTime { get; init; }
+}
+
+/// <summary>
 /// Background worker that processes build ingestion tasks (tests, timeline, helix).
 /// Picks up pending/failed tasks from the DB and processes them independently.
 /// Uses exponential backoff for retries and a circuit breaker to avoid hammering
@@ -27,9 +41,8 @@ public sealed class IngestionWorker : IDisposable
 
     /// <summary>
     /// Raised when all ingestion tasks for a build have completed (or been abandoned).
-    /// Subscribers receive the organization and build ID.
     /// </summary>
-    public event Action<string, int>? OnBuildIngested;
+    public event Action<BuildIngestedEvent>? OnBuildIngested;
 
     public bool IsRunning => _workerTask is not null && !_workerTask.IsCompleted;
 
@@ -518,10 +531,43 @@ public sealed class IngestionWorker : IDisposable
             return reader.Read();
         });
 
-        if (allDone)
+        if (!allDone)
         {
-            _log?.Info("Worker", $"Build #{task.BuildId} fully ingested, notifying subscribers.");
-            OnBuildIngested?.Invoke(task.Organization, task.BuildId);
+            return;
+        }
+
+        _log?.Info("Worker", $"Build #{task.BuildId} fully ingested, notifying subscribers.");
+
+        var buildEvent = _db.WithCommand(cmd =>
+        {
+            cmd.CommandText = """
+                SELECT project, definition_name, result, source_branch, finish_time
+                FROM builds
+                WHERE organization = @org AND build_id = @buildId
+                """;
+            cmd.Parameters.AddWithValue("@org", task.Organization);
+            cmd.Parameters.AddWithValue("@buildId", task.BuildId);
+            using var reader = cmd.ExecuteReader();
+            if (!reader.Read())
+            {
+                return null;
+            }
+
+            return new BuildIngestedEvent
+            {
+                Organization = task.Organization,
+                Project = reader.GetString(0),
+                BuildId = task.BuildId,
+                DefinitionName = reader.GetString(1),
+                Result = reader.IsDBNull(2) ? "unknown" : reader.GetString(2),
+                SourceBranch = reader.GetString(3),
+                FinishTime = reader.IsDBNull(4) ? null : reader.GetString(4),
+            };
+        });
+
+        if (buildEvent is not null)
+        {
+            OnBuildIngested?.Invoke(buildEvent);
         }
     }
 

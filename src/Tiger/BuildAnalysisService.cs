@@ -85,13 +85,23 @@ public sealed class BuildAnalysisService : IDisposable
     }
 
     /// <summary>
-    /// Event handler for IngestionWorker.OnBuildIngested. Writes to the internal
-    /// channel so the worker loop picks it up.
+    /// Event handler for IngestionWorker.OnBuildIngested. Only queues recent
+    /// builds (finished within the last 4 hours) to avoid bulk analysis during
+    /// backfill. Use <see cref="RequestAnalysis"/> for on-demand analysis of
+    /// any build regardless of age.
     /// </summary>
-    public void OnBuildIngested(string organization, int buildId)
+    public void OnBuildIngested(BuildIngestedEvent buildEvent)
     {
-        _log?.Info("AnalysisAgent", $"Build ingestion complete for #{buildId}, queuing for analysis check.");
-        _channel.Writer.TryWrite((organization, buildId));
+        if (buildEvent.FinishTime is not null &&
+            DateTime.TryParse(buildEvent.FinishTime, out var finishTime) &&
+            DateTime.UtcNow - finishTime > TimeSpan.FromHours(4))
+        {
+            _log?.Info("AnalysisAgent", $"Build #{buildEvent.BuildId} is too old for auto-analysis, skipping.");
+            return;
+        }
+
+        _log?.Info("AnalysisAgent", $"Build ingestion complete for #{buildEvent.BuildId}, queuing for analysis check.");
+        _channel.Writer.TryWrite((buildEvent.Organization, buildEvent.BuildId));
     }
 
     private async Task ProcessBuildAsync(string org, int buildId, CancellationToken ct)
@@ -677,6 +687,7 @@ public sealed class BuildAnalysisService : IDisposable
 
     /// <summary>
     /// Manually queue a build for analysis. Deletes any existing analysis and re-inserts as pending.
+    /// Bypasses the recency filter — any build can be analyzed on demand.
     /// </summary>
     public void RequestAnalysis(string organization, int buildId)
     {
