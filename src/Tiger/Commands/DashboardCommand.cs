@@ -195,20 +195,44 @@ public sealed class DashboardCommand : AsyncCommand
     }
 
     /// <summary>
-    /// Live tail view of background service log. Auto-refreshes when new entries arrive.
-    /// Press any key to return to the menu.
+    /// Live tail view of background service log with filtering and scrolling.
+    /// Hotkeys: E = toggle errors only, Escape = return to menu,
+    /// Up/Down = scroll, End = jump to latest (live tail).
     /// </summary>
     private static async Task ShowLiveStatusAsync(ServiceLog serviceLog, CancellationToken ct)
     {
-        AnsiConsole.Clear();
-        AnsiConsole.MarkupLine("[bold underline]Service Log (live)[/]");
-        AnsiConsole.MarkupLine("[dim]Press any key to return to menu...[/]");
-        AnsiConsole.WriteLine();
+        var errorsOnly = false;
+        var scrollOffset = 0; // 0 = live tail (showing latest), >0 = scrolled back N entries
+        var maxVisible = Math.Max(Console.WindowHeight - 5, 10);
 
-        // Show existing entries
-        RenderLogEntries(serviceLog.GetRecent(30));
+        void Render()
+        {
+            AnsiConsole.Clear();
+            var filterLabel = errorsOnly ? " [yellow](errors only)[/]" : "";
+            var scrollLabel = scrollOffset > 0 ? $" [dim](scrolled back {scrollOffset})[/]" : " [dim](live)[/]";
+            AnsiConsole.MarkupLine($"[bold underline]Service Log[/]{filterLabel}{scrollLabel}");
+            AnsiConsole.MarkupLine("[dim](E) toggle errors | (↑/↓) scroll | (End) latest | (Esc) back[/]");
+            AnsiConsole.WriteLine();
 
-        // Set up auto-refresh on new entries
+            var all = serviceLog.GetRecent(500);
+            var filtered = errorsOnly
+                ? all.Where(e => e.Level is ServiceLogLevel.Error or ServiceLogLevel.Warning).ToList()
+                : all;
+
+            // Apply scroll offset from the end
+            var end = filtered.Count - scrollOffset;
+            if (end < 0)
+            {
+                end = 0;
+            }
+            var start = Math.Max(0, end - maxVisible);
+            var visible = filtered.Skip(start).Take(end - start).ToList();
+
+            RenderLogEntries(visible);
+        }
+
+        Render();
+
         using var refreshCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         var newEntryEvent = new ManualResetEventSlim(false);
         void OnEntry()
@@ -219,26 +243,50 @@ public sealed class DashboardCommand : AsyncCommand
         serviceLog.EntryAdded += OnEntry;
         try
         {
-            // Wait for either a keypress or new log entries
             while (!refreshCts.Token.IsCancellationRequested)
             {
-                // Check for keypress (non-blocking)
                 if (Console.KeyAvailable)
                 {
-                    Console.ReadKey(true);
-                    return;
+                    var key = Console.ReadKey(true);
+                    if (key.Key == ConsoleKey.Escape)
+                    {
+                        return;
+                    }
+
+                    switch (key.Key)
+                    {
+                        case ConsoleKey.E:
+                            errorsOnly = !errorsOnly;
+                            scrollOffset = 0;
+                            break;
+                        case ConsoleKey.UpArrow:
+                            scrollOffset += 3;
+                            break;
+                        case ConsoleKey.DownArrow:
+                            scrollOffset = Math.Max(0, scrollOffset - 3);
+                            break;
+                        case ConsoleKey.PageUp:
+                            scrollOffset += maxVisible;
+                            break;
+                        case ConsoleKey.PageDown:
+                            scrollOffset = Math.Max(0, scrollOffset - maxVisible);
+                            break;
+                        case ConsoleKey.End:
+                            scrollOffset = 0;
+                            break;
+                    }
+
+                    Render();
+                    continue;
                 }
 
-                // Wait briefly for new entries
                 if (newEntryEvent.Wait(500, refreshCts.Token))
                 {
                     newEntryEvent.Reset();
-                    // Re-render
-                    AnsiConsole.Clear();
-                    AnsiConsole.MarkupLine("[bold underline]Service Log (live)[/]");
-                    AnsiConsole.MarkupLine("[dim]Press any key to return to menu...[/]");
-                    AnsiConsole.WriteLine();
-                    RenderLogEntries(serviceLog.GetRecent(30));
+                    if (scrollOffset == 0)
+                    {
+                        Render();
+                    }
                 }
             }
         }
