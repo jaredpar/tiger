@@ -223,7 +223,7 @@ public sealed class IngestionWorker : IDisposable
 
         if (failures.Count > 0)
         {
-            _log?.Warning("Worker",
+            _log?.Info("Worker",
                 $"  Build #{task.BuildId} — {failures.Count} test failure(s) across {runGroups.Count()} run(s)");
         }
         else
@@ -512,6 +512,12 @@ public sealed class IngestionWorker : IDisposable
     /// <summary>
     /// After a task completes, check if all tasks for the build are terminal.
     /// If so, raise the OnBuildIngested event.
+    ///
+    /// Invariant: a build is fully ingested when every row in build_ingestion_tasks
+    /// for that (organization, build_id) has status 'complete' or 'abandoned'.
+    /// Tasks that should be skipped (e.g., timeline for canceled builds) are
+    /// inserted with status 'complete' at creation time so they don't block this check.
+    /// See <see cref="BuildIngestionService.CreateIngestionTasks"/> for task creation.
     /// </summary>
     private void NotifyIfBuildFullyIngested(IngestionTask task)
     {

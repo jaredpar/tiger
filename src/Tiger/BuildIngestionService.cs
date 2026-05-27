@@ -1,3 +1,5 @@
+using Microsoft.Data.Sqlite;
+
 namespace Tiger;
 
 /// <summary>
@@ -17,52 +19,81 @@ public sealed class BuildIngestionService
     }
 
     /// <summary>
-    /// Inserts build rows and creates ingestion tasks for async processing.
+    /// Inserts build rows and creates ingestion tasks for processing.
     /// </summary>
-    public Task IngestBuildsAsync(AzdoClient client, string organization, string project, List<AzdoBuild> builds)
+    public void IngestBuilds(string organization, string project, List<AzdoBuild> builds)
     {
         foreach (var build in builds)
         {
-            var result = build.Result ?? "unknown";
-            _log?.Info("Ingestion",
-                $"#{build.Id} {build.DefinitionName} {build.BuildNumber} [{result}] {build.RepositoryName ?? ""}");
-
             InsertBuild(organization, project, build);
-            CreateIngestionTasks(organization, project, build);
         }
+    }
+
+    /// <summary>
+    /// Async wrapper for <see cref="IngestBuilds"/> to satisfy delegate signatures.
+    /// </summary>
+    public Task IngestBuildsAsync(AzdoClient client, string organization, string project, List<AzdoBuild> builds)
+    {
+        IngestBuilds(organization, project, builds);
         return Task.CompletedTask;
     }
 
+    /// <summary>
+    /// Inserts a build row and creates its ingestion tasks atomically.
+    /// </summary>
     internal void InsertBuild(string organization, string project, AzdoBuild build)
     {
-        _db.WithCommand(cmd =>
+        var result = build.Result ?? "unknown";
+        _log?.Info("Ingestion",
+            $"#{build.Id} {build.DefinitionName} {build.BuildNumber} [{result}] {build.RepositoryName ?? ""}");
+
+        _db.WithTransaction((conn, tx) =>
         {
-            cmd.CommandText = """
-                INSERT OR REPLACE INTO builds
-                    (organization, project, build_id, build_number, definition_name, definition_id,
-                     status, result, source_branch, source_version, repository_name, pr_number, finish_time)
-                VALUES
-                    (@org, @proj, @buildId, @buildNumber, @defName, @defId,
-                     @status, @result, @branch, @sourceVersion, @repoName, @prNumber, @finishTime)
-                """;
-            cmd.Parameters.AddWithValue("@org", organization);
-            cmd.Parameters.AddWithValue("@proj", project);
-            cmd.Parameters.AddWithValue("@buildId", build.Id);
-            cmd.Parameters.AddWithValue("@buildNumber", build.BuildNumber);
-            cmd.Parameters.AddWithValue("@defName", build.DefinitionName);
-            cmd.Parameters.AddWithValue("@defId", build.DefinitionId);
-            cmd.Parameters.AddWithValue("@status", build.Status);
-            cmd.Parameters.AddWithValue("@result", (object?)build.Result ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("@branch", build.SourceBranch);
-            cmd.Parameters.AddWithValue("@sourceVersion", (object?)build.SourceVersion ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("@repoName", (object?)build.RepositoryName ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("@prNumber", build.PrNumber.HasValue ? build.PrNumber.Value : DBNull.Value);
-            cmd.Parameters.AddWithValue("@finishTime", build.FinishTime?.ToString("o") ?? (object)DBNull.Value);
-            cmd.ExecuteNonQuery();
+            InsertBuildRow(conn, tx, organization, project, build);
+            CreateIngestionTasks(conn, tx, organization, build);
         });
     }
 
-    internal void CreateIngestionTasks(string organization, string project, AzdoBuild build)
+    private static void InsertBuildRow(SqliteConnection conn, SqliteTransaction tx,
+        string organization, string project, AzdoBuild build)
+    {
+        using var cmd = conn.CreateCommand();
+        cmd.Transaction = tx;
+        cmd.CommandText = """
+            INSERT OR REPLACE INTO builds
+                (organization, project, build_id, build_number, definition_name, definition_id,
+                 status, result, source_branch, source_version, repository_name, pr_number, finish_time)
+            VALUES
+                (@org, @proj, @buildId, @buildNumber, @defName, @defId,
+                 @status, @result, @branch, @sourceVersion, @repoName, @prNumber, @finishTime)
+            """;
+        cmd.Parameters.AddWithValue("@org", organization);
+        cmd.Parameters.AddWithValue("@proj", project);
+        cmd.Parameters.AddWithValue("@buildId", build.Id);
+        cmd.Parameters.AddWithValue("@buildNumber", build.BuildNumber);
+        cmd.Parameters.AddWithValue("@defName", build.DefinitionName);
+        cmd.Parameters.AddWithValue("@defId", build.DefinitionId);
+        cmd.Parameters.AddWithValue("@status", build.Status);
+        cmd.Parameters.AddWithValue("@result", (object?)build.Result ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("@branch", build.SourceBranch);
+        cmd.Parameters.AddWithValue("@sourceVersion", (object?)build.SourceVersion ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("@repoName", (object?)build.RepositoryName ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("@prNumber", build.PrNumber.HasValue ? build.PrNumber.Value : DBNull.Value);
+        cmd.Parameters.AddWithValue("@finishTime", build.FinishTime?.ToString("o") ?? (object)DBNull.Value);
+        cmd.ExecuteNonQuery();
+    }
+
+    /// <summary>
+    /// Creates ingestion task rows for a build. Every build must have a task row for
+    /// each expected task type. A build is considered fully ingested when all its task
+    /// rows reach a terminal status ('complete' or 'abandoned'). See
+    /// <see cref="IngestionWorker.NotifyIfBuildFullyIngested"/>.
+    ///
+    /// Tasks that should be skipped (e.g., timeline for canceled builds) must still
+    /// be inserted with status 'complete' so they don't block the completion check.
+    /// </summary>
+    internal void CreateIngestionTasks(SqliteConnection conn, SqliteTransaction tx,
+        string organization, AzdoBuild build)
     {
         var taskTypes = new List<string> { "tests", "timeline", "helix" };
 
@@ -75,21 +106,25 @@ public sealed class BuildIngestionService
             }
         }
 
+        // Canceled builds have no useful timeline data — mark it complete immediately
+        var isCanceled = string.Equals(build.Result, "canceled", StringComparison.OrdinalIgnoreCase);
+
         foreach (var taskType in taskTypes)
         {
-            _db.WithCommand(cmd =>
-            {
-                cmd.CommandText = """
-                    INSERT OR IGNORE INTO build_ingestion_tasks
-                        (organization, build_id, task_type, status)
-                    VALUES
-                        (@org, @buildId, @type, 'pending')
-                    """;
-                cmd.Parameters.AddWithValue("@org", organization);
-                cmd.Parameters.AddWithValue("@buildId", build.Id);
-                cmd.Parameters.AddWithValue("@type", taskType);
-                cmd.ExecuteNonQuery();
-            });
+            var status = (isCanceled && taskType == "timeline") ? "complete" : "pending";
+            using var cmd = conn.CreateCommand();
+            cmd.Transaction = tx;
+            cmd.CommandText = """
+                INSERT OR IGNORE INTO build_ingestion_tasks
+                    (organization, build_id, task_type, status)
+                VALUES
+                    (@org, @buildId, @type, @status)
+                """;
+            cmd.Parameters.AddWithValue("@org", organization);
+            cmd.Parameters.AddWithValue("@buildId", build.Id);
+            cmd.Parameters.AddWithValue("@type", taskType);
+            cmd.Parameters.AddWithValue("@status", status);
+            cmd.ExecuteNonQuery();
         }
     }
 
