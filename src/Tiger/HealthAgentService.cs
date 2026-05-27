@@ -22,6 +22,7 @@ public sealed class HealthAgentService : IDisposable
     private const int PollIntervalMinutes = 15;
     private const int MaxLogsPerCombo = 10;
     private const int LookbackDays = 3;
+    private static readonly double[] FallbackLookbackDays = [3, 2, 1, 0.5, 0.25, 0.125];
 
     public bool IsRunning => _pollingTask is not null && !_pollingTask.IsCompleted;
 
@@ -93,7 +94,8 @@ public sealed class HealthAgentService : IDisposable
             if (ct.IsCancellationRequested)
                 break;
 
-            if (!IsDataReady(repo, definition))
+            var lookbackDays = SelectLookbackWindow(repo, definition);
+            if (lookbackDays is null)
             {
                 _log?.Info("HealthAgent", $"Skipping {repo} / {definition} — ingestion not ready yet.");
                 continue;
@@ -101,7 +103,7 @@ public sealed class HealthAgentService : IDisposable
 
             try
             {
-                await EvaluateHealthAsync(repo, definition, ct);
+                await EvaluateHealthAsync(repo, definition, lookbackDays.Value, ct);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -111,10 +113,31 @@ public sealed class HealthAgentService : IDisposable
     }
 
     /// <summary>
+    /// Selects the lookback window to use. Tries progressively smaller windows
+    /// (3d → 2d → 1d → 12h) until one has enough ingested data.
+    /// </summary>
+    private double? SelectLookbackWindow(string repository, string definition)
+    {
+        foreach (var window in FallbackLookbackDays)
+        {
+            if (IsDataReady(repository, definition, window))
+            {
+                if (window < LookbackDays)
+                {
+                    _log?.Info("HealthAgent", $"  {repository} / {definition}: using {window}d lookback (insufficient data for full window).");
+                }
+                return window;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
     /// Returns true if at least 90% of builds in the lookback window for this
     /// repo/definition have non-pending ingestion status.
     /// </summary>
-    private bool IsDataReady(string repository, string definition)
+    private bool IsDataReady(string repository, string definition, double lookbackDays)
     {
         return _db.WithCommand(cmd =>
         {
@@ -128,7 +151,7 @@ public sealed class HealthAgentService : IDisposable
                     AND t.task_type = 'tests'
                 WHERE b.repository_name = @repo
                   AND b.definition_name = @def
-                  AND b.finish_time >= datetime('now', '-{LookbackDays} days')
+                  AND b.finish_time >= datetime('now', '-{lookbackDays * 24} hours')
                 """;
             cmd.Parameters.AddWithValue("@repo", repository);
             cmd.Parameters.AddWithValue("@def", definition);
@@ -153,7 +176,7 @@ public sealed class HealthAgentService : IDisposable
         });
     }
 
-    private async Task EvaluateHealthAsync(string repository, string definition, CancellationToken ct)
+    private async Task EvaluateHealthAsync(string repository, string definition, double lookbackDays, CancellationToken ct)
     {
         // Skip if no new builds since last health run
         if (!HasNewBuildsSinceLastRun(repository, definition))
@@ -164,9 +187,9 @@ public sealed class HealthAgentService : IDisposable
 
         _log?.Info("HealthAgent", $"Evaluating {repository} / {definition}...");
 
-        var buildData = GatherBuildData(repository, definition);
+        var buildData = GatherBuildData(repository, definition, lookbackDays);
         var previousState = LoadState(repository, definition);
-        var prompt = BuildPrompt(repository, definition, buildData, previousState);
+        var prompt = BuildPrompt(repository, definition, buildData, previousState, lookbackDays);
 
         // Invoke the LLM
         var result = await InvokeLlmAsync(prompt, ct);
@@ -190,7 +213,7 @@ public sealed class HealthAgentService : IDisposable
         _log?.Info("HealthAgent", $"  {repository} / {definition} — complete, log: {Path.GetFileName(logPath)}");
     }
 
-    private string BuildPrompt(string repository, string definition, BuildHealthData data, string? previousState)
+    private string BuildPrompt(string repository, string definition, BuildHealthData data, string? previousState, double lookbackDays)
     {
         var sb = new System.Text.StringBuilder();
         var tz = TimeZoneInfo.Local;
@@ -210,7 +233,8 @@ public sealed class HealthAgentService : IDisposable
             }
         }
         sb.AppendLine();
-        sb.AppendLine($"Analyze the last {LookbackDays} days of CI builds for this repository and pipeline.");
+        var windowDesc = lookbackDays >= 1 ? $"{lookbackDays:G} days" : $"{lookbackDays * 24:G} hours";
+        sb.AppendLine($"Analyze the last {windowDesc} of CI builds for this repository and pipeline.");
         sb.AppendLine($"All times are in local time ({tz.DisplayName}).");
         sb.AppendLine($"Current time: {DateTime.Now:yyyy-MM-dd HH:mm}");
         sb.AppendLine();
@@ -493,9 +517,9 @@ public sealed class HealthAgentService : IDisposable
 
     // ── Data gathering ──────────────────────────────────────────────
 
-    private BuildHealthData GatherBuildData(string repository, string definition)
+    private BuildHealthData GatherBuildData(string repository, string definition, double lookbackDays)
     {
-        var since = DateTime.UtcNow.AddDays(-LookbackDays).ToString("o");
+        var since = DateTime.UtcNow.AddDays(-lookbackDays).ToString("o");
         var data = new BuildHealthData();
 
         // Pipeline identity (org, project, definition_id)
