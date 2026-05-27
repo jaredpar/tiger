@@ -170,6 +170,14 @@ static bool CheckDatabaseSchema()
             File.Delete(file);
     }
 
-    AnsiConsole.MarkupLine("[green]Database deleted. It will be recreated on next use.[/]");
+    // Delete health and analysis artifacts — they reference DB data that no longer exists
+    foreach (var subDir in new[] { TigerUtils.HealthDirectoryName, TigerUtils.AnalysisLogsDirectoryName })
+    {
+        var dir = Path.Combine(configDir, subDir);
+        if (Directory.Exists(dir))
+            Directory.Delete(dir, recursive: true);
+    }
+
+    AnsiConsole.MarkupLine("[green]Database and artifacts deleted. They will be recreated on next use.[/]");
     return true;
 }

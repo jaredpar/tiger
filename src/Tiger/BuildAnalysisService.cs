@@ -37,7 +37,7 @@ public sealed class BuildAnalysisService : IDisposable
         _clientFactory = clientFactory;
         _knownIssues = knownIssues;
         _log = log;
-        _logDir = Path.Combine(TigerUtils.GetConfigDirectory(), "analysis-logs");
+        _logDir = Path.Combine(TigerUtils.GetConfigDirectory(), TigerUtils.AnalysisLogsDirectoryName);
     }
 
     public void Start()

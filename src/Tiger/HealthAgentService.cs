@@ -30,7 +30,7 @@ public sealed class HealthAgentService : IDisposable
         _config = config;
         _db = db;
         _log = log;
-        _healthDir = Path.Combine(TigerUtils.GetConfigDirectory(), "health");
+        _healthDir = Path.Combine(TigerUtils.GetConfigDirectory(), TigerUtils.HealthDirectoryName);
     }
 
     public void Start()

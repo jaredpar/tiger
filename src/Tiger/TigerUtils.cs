@@ -55,6 +55,8 @@ public sealed class TigerContext
 public static class TigerUtils
 {
     private const string ConfigDirectoryName = ".tiger";
+    public const string HealthDirectoryName = "health";
+    public const string AnalysisLogsDirectoryName = "analysis-logs";
 
     public static DefaultAzureCredential CreateCredential() =>
         new DefaultAzureCredential(new DefaultAzureCredentialOptions()
