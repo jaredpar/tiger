@@ -105,17 +105,19 @@ public sealed class AnalysisBrowser
                 AnsiConsole.WriteLine();
             }
 
-            // Menu: View Log, Re-run, Back
+            // Menu: View Log, Re-run, Force full analysis, Back
             var menuItems = new List<string>
             {
                 $"[blue](R)[/] Re-run analysis",
+                $"[blue](F)[/] Force full analysis (skip known issue check)",
                 $"[blue](L)[/] View full log",
             };
 
             var extraKeys = new Dictionary<ConsoleKey, int>
             {
                 [ConsoleKey.R] = 0,
-                [ConsoleKey.L] = 1,
+                [ConsoleKey.F] = 1,
+                [ConsoleKey.L] = 2,
             };
 
             var menuChoice = BrowserUI.SelectWithEscape("", menuItems, useMarkup: true, extraKeys: extraKeys);
@@ -124,7 +126,7 @@ public sealed class AnalysisBrowser
             {
                 case 0: // Re-run
                     _analysisService.RequestAnalysis(analysis.Organization, analysis.BuildId);
-                    AnsiConsole.MarkupLine("[green]Analysis re-queued. It will run on the next poll cycle.[/]");
+                    AnsiConsole.MarkupLine("[green]Analysis queued.[/]");
                     Console.ReadKey(true);
                     // Refresh the analysis info
                     var refreshed = _db.GetRecentAnalyses(50)
@@ -134,7 +136,18 @@ public sealed class AnalysisBrowser
                         analysis = refreshed;
                     }
                     continue;
-                case 1: // View log
+                case 1: // Force full (skip known issues)
+                    _analysisService.RequestAnalysis(analysis.Organization, analysis.BuildId, fullAnalysisCheck: true);
+                    AnsiConsole.MarkupLine("[green]Full analysis queued (skipping known issue check).[/]");
+                    Console.ReadKey(true);
+                    var refreshedFull = _db.GetRecentAnalyses(50)
+                        .FirstOrDefault(a => a.Organization == analysis.Organization && a.BuildId == analysis.BuildId);
+                    if (refreshedFull is not null)
+                    {
+                        analysis = refreshedFull;
+                    }
+                    continue;
+                case 2: // View log
                     ShowFullLog(analysis);
                     continue;
                 default: // Escape

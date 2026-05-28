@@ -10,6 +10,7 @@ public sealed class BuildBrowser
 {
     private readonly TigerDatabase _db;
     private readonly AzdoClientFactory _clientFactory;
+    private readonly BuildAnalysisService? _analysisService;
     private readonly string _configDirectory;
     private readonly List<Page> _history = [];
     private readonly BuildFilter _filter;
@@ -17,11 +18,12 @@ public sealed class BuildBrowser
     private int _selectedBuildIndex;
     private List<BuildRow> _lastBuilds = [];
 
-    public BuildBrowser(TigerDatabase db, AzdoClientFactory clientFactory, string configDirectory)
+    public BuildBrowser(TigerDatabase db, AzdoClientFactory clientFactory, string configDirectory, BuildAnalysisService? analysisService = null)
     {
         _db = db;
         _clientFactory = clientFactory;
         _configDirectory = configDirectory;
+        _analysisService = analysisService;
         _filter = BuildFilter.Load(configDirectory);
     }
 
@@ -663,7 +665,7 @@ public sealed class BuildBrowser
         var canNext = buildIndex >= 0 && buildIndex < _lastBuilds.Count - 1;
         var canPrev = buildIndex > 0;
         AnsiConsole.MarkupLine("[bold]Navigation:[/]");
-        AnsiConsole.MarkupLine("  [blue]T[/] Tests   [blue]J[/] Jobs   [blue]H[/] Helix   [blue]B[/] Back" +
+        AnsiConsole.MarkupLine("  [blue]T[/] Tests   [blue]J[/] Jobs   [blue]H[/] Helix   [blue]A[/] Analysis   [blue]B[/] Back" +
             (canForward ? "   [blue]F[/] Forward" : "") +
             (canNext ? "   [blue]N[/] Next" : "") +
             (canPrev ? "   [blue]P[/] Prev" : ""));
@@ -1096,6 +1098,9 @@ public sealed class BuildBrowser
                 case ConsoleKey.H:
                     ShowHelixInfo(page);
                     return new NavAction.Push(page); // re-render after showing helix
+                case ConsoleKey.A:
+                    ShowAnalysis(page);
+                    return new NavAction.Push(page); // re-render after showing analysis
                 case ConsoleKey.N:
                     var nextIdx = _lastBuilds.FindIndex(b => b.BuildId == page.BuildId && b.Org == page.Org && b.Project == page.Project);
                     if (nextIdx >= 0 && nextIdx < _lastBuilds.Count - 1)
@@ -1181,6 +1186,75 @@ public sealed class BuildBrowser
         AnsiConsole.MarkupLine("[dim]Press any key to go back...[/]");
         Console.ReadKey(true);
     }
+
+    private void ShowAnalysis(BuildDetailPage page)
+    {
+        var analysis = _db.GetBuildAnalysis(page.Org, page.BuildId);
+
+        if (analysis is null)
+        {
+            // No analysis exists — offer to queue one
+            if (_analysisService is null)
+            {
+                AnsiConsole.MarkupLine("[yellow]No analysis available and analysis service is not running.[/]");
+                AnsiConsole.MarkupLine("[dim]Press any key to go back...[/]");
+                Console.ReadKey(true);
+                return;
+            }
+
+            AnsiConsole.MarkupLine("[dim]No analysis exists for this build.[/]");
+            if (AnsiConsole.Confirm("Queue analysis for this build?", defaultValue: true))
+            {
+                _analysisService.RequestAnalysis(page.Org, page.BuildId);
+                AnsiConsole.MarkupLine("[green]Analysis queued.[/]");
+            }
+            AnsiConsole.MarkupLine("[dim]Press any key to go back...[/]");
+            Console.ReadKey(true);
+            return;
+        }
+
+        // Show analysis detail inline
+        AnsiConsole.Clear();
+        AnsiConsole.MarkupLine($"[bold underline]Analysis — Build #{page.BuildId}[/]");
+        AnsiConsole.WriteLine();
+
+        var table = new Table().NoBorder().HideHeaders().AddColumn("Key").AddColumn("Value");
+        table.AddRow("[bold]Status[/]", FormatAnalysisStatus(analysis.Status));
+        if (analysis.Category is not null)
+        {
+            table.AddRow("[bold]Category[/]", Markup.Escape(analysis.Category));
+        }
+        if (analysis.Confidence is not null)
+        {
+            table.AddRow("[bold]Confidence[/]", Markup.Escape(analysis.Confidence));
+        }
+        if (analysis.CompletedAt is not null)
+        {
+            table.AddRow("[bold]Completed[/]", Markup.Escape(analysis.CompletedAt));
+        }
+        AnsiConsole.Write(table);
+        AnsiConsole.WriteLine();
+
+        if (analysis.DiagnosisSummary is not null)
+        {
+            AnsiConsole.MarkupLine("[bold]Diagnosis:[/]");
+            AnsiConsole.WriteLine(analysis.DiagnosisSummary);
+            AnsiConsole.WriteLine();
+        }
+
+        AnsiConsole.MarkupLine("[dim]Press any key to go back...[/]");
+        Console.ReadKey(true);
+    }
+
+    private static string FormatAnalysisStatus(string status) => status switch
+    {
+        "complete" => "[green]Complete[/]",
+        "running" => "[yellow]Running[/]",
+        "pending" => "[dim]Pending[/]",
+        "skipped" => "[blue]Skipped[/]",
+        "failed" => "[red]Failed[/]",
+        _ => Markup.Escape(status),
+    };
 
     // ── Helpers ──────────────────────────────────────────────────────
 

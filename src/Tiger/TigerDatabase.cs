@@ -585,6 +585,46 @@ public sealed class TigerDatabase : IDisposable
         });
     }
 
+    public BuildAnalysisInfo? GetBuildAnalysis(string organization, int buildId)
+    {
+        return WithCommand(cmd =>
+        {
+            cmd.CommandText = """
+                SELECT ba.organization, ba.build_id, ba.status, ba.category, ba.confidence,
+                       ba.diagnosis_summary, ba.log_path, ba.created_at, ba.completed_at,
+                       b.project, b.definition_name, b.build_number, b.source_branch
+                FROM build_analyses ba
+                JOIN builds b ON ba.organization = b.organization AND ba.build_id = b.build_id
+                WHERE ba.organization = @org AND ba.build_id = @buildId
+                """;
+            cmd.Parameters.AddWithValue("@org", organization);
+            cmd.Parameters.AddWithValue("@buildId", buildId);
+
+            using var reader = cmd.ExecuteReader();
+            if (!reader.Read())
+            {
+                return null;
+            }
+
+            return new BuildAnalysisInfo
+            {
+                Organization = reader.GetString(0),
+                BuildId = reader.GetInt32(1),
+                Status = reader.GetString(2),
+                Category = reader.IsDBNull(3) ? null : reader.GetString(3),
+                Confidence = reader.IsDBNull(4) ? null : reader.GetString(4),
+                DiagnosisSummary = reader.IsDBNull(5) ? null : reader.GetString(5),
+                LogPath = reader.IsDBNull(6) ? null : reader.GetString(6),
+                CreatedAt = reader.GetString(7),
+                CompletedAt = reader.IsDBNull(8) ? null : reader.GetString(8),
+                Project = reader.GetString(9),
+                DefinitionName = reader.GetString(10),
+                BuildNumber = reader.GetString(11),
+                SourceBranch = reader.GetString(12),
+            };
+        });
+    }
+
     public void Dispose()
     {
         // Connection pooling: no shared connection to dispose.

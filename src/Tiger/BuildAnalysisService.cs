@@ -18,8 +18,8 @@ public sealed class BuildAnalysisService : IDisposable
     private readonly TigerDatabase _db;
     private readonly AzdoClientFactory _clientFactory;
     private readonly KnownIssueService _knownIssues;
-    private readonly Channel<(string Organization, int BuildId)> _channel =
-        Channel.CreateUnbounded<(string, int)>();
+    private readonly Channel<AnalysisRequest> _channel =
+        Channel.CreateUnbounded<AnalysisRequest>();
     private readonly ServiceLog? _log;
     private readonly string _logDir;
     private CancellationTokenSource? _cts;
@@ -71,15 +71,15 @@ public sealed class BuildAnalysisService : IDisposable
 
     private async Task ProcessLoopAsync(CancellationToken ct)
     {
-        await foreach (var (org, buildId) in _channel.Reader.ReadAllAsync(ct))
+        await foreach (var request in _channel.Reader.ReadAllAsync(ct))
         {
             try
             {
-                await ProcessBuildAsync(org, buildId, ct);
+                await ProcessBuildAsync(request.Organization, request.BuildId, request.FullAnalysisCheck, ct);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                _log?.Error("AnalysisAgent", $"Unexpected error analyzing build #{buildId}: {ex.Message}");
+                _log?.Error("AnalysisAgent", $"Unexpected error analyzing build #{request.BuildId}: {ex.Message}");
             }
         }
     }
@@ -101,10 +101,10 @@ public sealed class BuildAnalysisService : IDisposable
         }
 
         _log?.Info("AnalysisAgent", $"Build ingestion complete for #{buildEvent.BuildId}, queuing for analysis check.");
-        _channel.Writer.TryWrite((buildEvent.Organization, buildEvent.BuildId));
+        _channel.Writer.TryWrite(new AnalysisRequest(buildEvent.Organization, buildEvent.BuildId));
     }
 
-    private async Task ProcessBuildAsync(string org, int buildId, CancellationToken ct)
+    private async Task ProcessBuildAsync(string org, int buildId, bool fullAnalysisCheck, CancellationToken ct)
     {
         // Look up build info and filter — only analyze failed/partiallySucceeded non-PR builds
         var buildInfo = _db.WithCommand(cmd =>
@@ -153,7 +153,7 @@ public sealed class BuildAnalysisService : IDisposable
         try
         {
             _db.UpdateBuildAnalysis(org, buildId, "running");
-            await AnalyzeBuildAsync(org, buildId, project, definitionName, ct);
+            await AnalyzeBuildAsync(org, buildId, project, definitionName, fullAnalysisCheck, ct);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -164,18 +164,21 @@ public sealed class BuildAnalysisService : IDisposable
 
     private async Task AnalyzeBuildAsync(
         string org, int buildId, string project, string definitionName,
-        CancellationToken ct)
+        bool fullAnalysisCheck, CancellationToken ct)
     {
-        // Step 1: Check known issues
-        var knownIssueMatches = CheckKnownIssues(org, buildId);
-        if (knownIssueMatches.Count > 0)
+        // Step 1: Check known issues (unless skipped)
+        if (!fullAnalysisCheck)
         {
-            var summary = string.Join(", ", knownIssueMatches.Select(m => $"#{m.IssueNumber}: {m.Title}"));
-            _log?.Info("AnalysisAgent", $"  Build #{buildId} matches known issue(s): {summary}");
-            _db.UpdateBuildAnalysis(org, buildId, "skipped",
-                category: "known-issue",
-                diagnosisSummary: $"Matches known issue(s): {summary}");
-            return;
+            var knownIssueMatches = CheckKnownIssues(org, buildId);
+            if (knownIssueMatches.Count > 0)
+            {
+                var summary = string.Join(", ", knownIssueMatches.Select(m => $"#{m.IssueNumber}: {m.Title}"));
+                _log?.Info("AnalysisAgent", $"  Build #{buildId} matches known issue(s): {summary}");
+                _db.UpdateBuildAnalysis(org, buildId, "skipped",
+                    category: "known-issue",
+                    diagnosisSummary: $"Matches known issue(s): {summary}");
+                return;
+            }
         }
 
         // Step 2: Gather context
@@ -689,10 +692,10 @@ public sealed class BuildAnalysisService : IDisposable
     /// Manually queue a build for analysis. Deletes any existing analysis and re-inserts as pending.
     /// Bypasses the recency filter — any build can be analyzed on demand.
     /// </summary>
-    public void RequestAnalysis(string organization, int buildId)
+    public void RequestAnalysis(string organization, int buildId, bool fullAnalysisCheck = false)
     {
         _db.DeleteBuildAnalysis(organization, buildId);
-        _channel.Writer.TryWrite((organization, buildId));
+        _channel.Writer.TryWrite(new AnalysisRequest(organization, buildId, fullAnalysisCheck));
         _log?.Info("AnalysisAgent", $"Re-queued build #{buildId} for analysis.");
     }
 
@@ -736,3 +739,5 @@ internal class AnalysisParsedResponse
     public string? Confidence { get; set; }
     public string? DiagnosisSummary { get; set; }
 }
+
+internal record AnalysisRequest(string Organization, int BuildId, bool FullAnalysisCheck = false);

@@ -163,7 +163,7 @@ public sealed class DashboardCommand : AsyncCommand
                     await ShowLiveStatusAsync(serviceLog, ct);
                     break;
                 case MenuBuilds:
-                    var browser = new BuildBrowser(db, clientFactory, tigerContext.ConfigDirectory);
+                    var browser = new BuildBrowser(db, clientFactory, tigerContext.ConfigDirectory, analysisAgent);
                     browser.Browse();
                     break;
                 case MenuTests:
