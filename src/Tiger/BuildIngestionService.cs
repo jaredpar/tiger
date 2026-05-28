@@ -5,7 +5,7 @@ namespace Tiger;
 /// <summary>
 /// Ingests build and test data from AzDO into the SQLite database.
 /// Build rows are inserted immediately; detailed data (tests, timeline, helix)
-/// is handled via ingestion tasks processed by <see cref="IngestionWorker"/>.
+/// is handled via ingestion tasks processed by <see cref="TaskIngestionService"/>.
 /// </summary>
 public sealed class BuildIngestionService
 {
@@ -86,11 +86,10 @@ public sealed class BuildIngestionService
     /// <summary>
     /// Creates ingestion task rows for a build. Every build must have a task row for
     /// each expected task type. A build is considered fully ingested when all its task
-    /// rows reach a terminal status ('complete' or 'abandoned'). See
-    /// <see cref="IngestionWorker.NotifyIfBuildFullyIngested"/>.
+    /// rows have is_complete = 1. See <see cref="TaskIngestionService.NotifyIfBuildFullyIngested"/>.
     ///
     /// Tasks that should be skipped (e.g., timeline for canceled builds) must still
-    /// be inserted with status 'complete' so they don't block the completion check.
+    /// be inserted with is_complete = 1 so they don't block the completion check.
     /// </summary>
     internal void CreateIngestionTasks(SqliteConnection conn, SqliteTransaction tx,
         string organization, AzdoBuild build)
@@ -111,19 +110,22 @@ public sealed class BuildIngestionService
 
         foreach (var taskType in taskTypes)
         {
-            var status = (isCanceled && taskType == "timeline") ? "complete" : "pending";
+            var isSkipped = isCanceled && taskType == "timeline";
+            var status = isSkipped ? "complete" : "pending";
+            var isComplete = isSkipped ? 1 : 0;
             using var cmd = conn.CreateCommand();
             cmd.Transaction = tx;
             cmd.CommandText = """
                 INSERT OR IGNORE INTO build_ingestion_tasks
-                    (organization, build_id, task_type, status)
+                    (organization, build_id, task_type, status, is_complete)
                 VALUES
-                    (@org, @buildId, @type, @status)
+                    (@org, @buildId, @type, @status, @isComplete)
                 """;
             cmd.Parameters.AddWithValue("@org", organization);
             cmd.Parameters.AddWithValue("@buildId", build.Id);
             cmd.Parameters.AddWithValue("@type", taskType);
             cmd.Parameters.AddWithValue("@status", status);
+            cmd.Parameters.AddWithValue("@isComplete", isComplete);
             cmd.ExecuteNonQuery();
         }
     }

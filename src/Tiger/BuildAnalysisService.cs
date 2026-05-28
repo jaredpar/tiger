@@ -85,7 +85,7 @@ public sealed class BuildAnalysisService : IDisposable
     }
 
     /// <summary>
-    /// Event handler for IngestionWorker.OnBuildIngested. Only queues recent
+    /// Event handler for TaskIngestionService.OnBuildIngested. Only queues recent
     /// builds (finished within the last 4 hours) to avoid bulk analysis during
     /// backfill. Use <see cref="RequestAnalysis"/> for on-demand analysis of
     /// any build regardless of age.

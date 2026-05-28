@@ -248,11 +248,7 @@ public sealed class BuildBrowser
             cmd.CommandText = $"""
                 SELECT b.organization, b.project, b.build_id, b.build_number, b.definition_name,
                        b.result, b.source_branch, b.pr_number, b.finish_time,
-                       CASE WHEN EXISTS (
-                           SELECT 1 FROM build_ingestion_tasks t
-                           WHERE t.organization = b.organization
-                             AND t.build_id = b.build_id AND t.status != 'complete'
-                       ) THEN 'pending' ELSE 'complete' END as ingestion_status,
+                       CASE WHEN b.ingestion_tasks_complete = 1 THEN 'complete' ELSE 'pending' END as ingestion_status,
                        b.definition_id, b.repository_name
                 FROM builds b
                 {whereClause}

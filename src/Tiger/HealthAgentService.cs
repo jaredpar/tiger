@@ -135,7 +135,7 @@ public sealed class HealthAgentService : IDisposable
 
     /// <summary>
     /// Returns true if at least 90% of builds in the lookback window for this
-    /// repo/definition have non-pending ingestion status.
+    /// repo/definition are fully ingested.
     /// </summary>
     private bool IsDataReady(string repository, string definition, double lookbackDays)
     {
@@ -143,12 +143,9 @@ public sealed class HealthAgentService : IDisposable
         {
             cmd.CommandText = $"""
                 SELECT
-                    COUNT(DISTINCT b.build_id) as total,
-                    COUNT(DISTINCT CASE WHEN t.status IS NULL OR t.status IN ('complete', 'failed') THEN b.build_id END) as ready
+                    COUNT(*) as total,
+                    COUNT(CASE WHEN b.ingestion_tasks_complete = 1 THEN 1 END) as ready
                 FROM builds b
-                LEFT JOIN build_ingestion_tasks t
-                    ON b.organization = t.organization AND b.build_id = t.build_id
-                    AND t.task_type = 'tests'
                 WHERE b.repository_name = @repo
                   AND b.definition_name = @def
                   AND b.finish_time >= datetime('now', '-{lookbackDays * 24} hours')

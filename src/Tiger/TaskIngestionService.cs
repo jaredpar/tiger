@@ -20,7 +20,7 @@ public sealed class BuildIngestedEvent
 /// Uses exponential backoff for retries and a circuit breaker to avoid hammering
 /// a broken API.
 /// </summary>
-public sealed class IngestionWorker : IDisposable
+public sealed class TaskIngestionService : IDisposable
 {
     private readonly TigerDatabase _db;
     private readonly BuildIngestionService _ingestion;
@@ -46,7 +46,7 @@ public sealed class IngestionWorker : IDisposable
 
     public bool IsRunning => _workerTask is not null && !_workerTask.IsCompleted;
 
-    public IngestionWorker(
+    public TaskIngestionService(
         TigerDatabase db,
         BuildIngestionService ingestion,
         AzdoClientFactory clientFactory,
@@ -122,7 +122,6 @@ public sealed class IngestionWorker : IDisposable
                     {
                         await ProcessTaskAsync(task, ct);
                         MarkTaskComplete(task);
-                        NotifyIfBuildFullyIngested(task);
                         Interlocked.Exchange(ref consecutiveFailures, 0);
                     }
                     catch (Exception ex) when (ex is not OperationCanceledException)
@@ -147,6 +146,7 @@ public sealed class IngestionWorker : IDisposable
                     }
                     finally
                     {
+                        NotifyIfBuildFullyIngested(task);
                         semaphore.Release();
                     }
                 }).ToList();
@@ -447,14 +447,15 @@ public sealed class IngestionWorker : IDisposable
                 SELECT t.organization, b.project, t.build_id, t.task_type, t.status, t.attempts
                 FROM build_ingestion_tasks t
                 JOIN builds b ON t.organization = b.organization AND t.build_id = b.build_id
-                WHERE t.status IN ('pending', 'failed')
+                WHERE t.is_complete = 0
+                  AND t.status IN ('pending', 'failed')
                   AND (t.next_retry_time IS NULL OR t.next_retry_time <= datetime('now'))
                   AND (t.task_type != 'helix' OR EXISTS (
                       SELECT 1 FROM build_ingestion_tasks dep
                       WHERE dep.organization = t.organization
                         AND dep.build_id = t.build_id
                         AND dep.task_type = 'tests'
-                        AND dep.status = 'complete'
+                        AND dep.is_complete = 1
                   ))
                 ORDER BY t.build_id DESC, t.task_type ASC
                 LIMIT 20
@@ -499,7 +500,7 @@ public sealed class IngestionWorker : IDisposable
         {
             cmd.CommandText = """
                 UPDATE build_ingestion_tasks
-                SET status = 'complete', completed_time = datetime('now'), last_error = NULL
+                SET status = 'complete', is_complete = 1, completed_time = datetime('now'), last_error = NULL
                 WHERE organization = @org AND build_id = @buildId AND task_type = @type
                 """;
             cmd.Parameters.AddWithValue("@org", task.Organization);
@@ -514,9 +515,9 @@ public sealed class IngestionWorker : IDisposable
     /// If so, raise the OnBuildIngested event.
     ///
     /// Invariant: a build is fully ingested when every row in build_ingestion_tasks
-    /// for that (organization, build_id) has status 'complete' or 'abandoned'.
+    /// for that (organization, build_id) has is_complete = 1.
     /// Tasks that should be skipped (e.g., timeline for canceled builds) are
-    /// inserted with status 'complete' at creation time so they don't block this check.
+    /// inserted with is_complete = 1 at creation time so they don't block this check.
     /// See <see cref="BuildIngestionService.CreateIngestionTasks"/> for task creation.
     /// </summary>
     private void NotifyIfBuildFullyIngested(IngestionTask task)
@@ -528,7 +529,7 @@ public sealed class IngestionWorker : IDisposable
                 WHERE NOT EXISTS (
                     SELECT 1 FROM build_ingestion_tasks t
                     WHERE t.organization = @org AND t.build_id = @buildId
-                      AND t.status NOT IN ('complete', 'abandoned')
+                      AND t.is_complete = 0
                 )
                 """;
             cmd.Parameters.AddWithValue("@org", task.Organization);
@@ -541,6 +542,18 @@ public sealed class IngestionWorker : IDisposable
         {
             return;
         }
+
+        // Mark the build itself as fully ingested
+        _db.WithCommand(cmd =>
+        {
+            cmd.CommandText = """
+                UPDATE builds SET ingestion_tasks_complete = 1
+                WHERE organization = @org AND build_id = @buildId
+                """;
+            cmd.Parameters.AddWithValue("@org", task.Organization);
+            cmd.Parameters.AddWithValue("@buildId", task.BuildId);
+            cmd.ExecuteNonQuery();
+        });
 
         _log?.Info("Worker", $"Build #{task.BuildId} fully ingested, notifying subscribers.");
 
@@ -605,6 +618,7 @@ public sealed class IngestionWorker : IDisposable
             cmd.CommandText = """
                 UPDATE build_ingestion_tasks
                 SET status = 'abandoned',
+                    is_complete = 1,
                     attempts = attempts + 1,
                     last_error = @error,
                     last_attempt_time = datetime('now')
@@ -625,9 +639,19 @@ public sealed class IngestionWorker : IDisposable
     {
         return _db.WithCommand(cmd =>
         {
+            // Reset the ingestion_tasks_complete flag on affected builds
+            cmd.CommandText = """
+                UPDATE builds SET ingestion_tasks_complete = 0
+                WHERE (organization, build_id) IN (
+                    SELECT organization, build_id FROM build_ingestion_tasks
+                    WHERE status = 'abandoned'
+                )
+                """;
+            cmd.ExecuteNonQuery();
+
             cmd.CommandText = """
                 UPDATE build_ingestion_tasks
-                SET status = 'pending', attempts = 0, last_error = NULL, next_retry_time = NULL
+                SET status = 'pending', is_complete = 0, attempts = 0, last_error = NULL, next_retry_time = NULL
                 WHERE status = 'abandoned'
                 """;
             return cmd.ExecuteNonQuery();

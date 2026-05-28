@@ -35,7 +35,7 @@ public sealed class DashboardCommand : AsyncCommand
         var knownIssues = new KnownIssueService(config, db, serviceLog);
         knownIssues.Start();
 
-        var worker = new IngestionWorker(db, ingestion, clientFactory, serviceLog);
+        var worker = new TaskIngestionService(db, ingestion, clientFactory, serviceLog);
 
         var analysisAgent = new BuildAnalysisService(db, clientFactory, knownIssues, serviceLog);
         worker.OnBuildIngested += analysisAgent.OnBuildIngested;

@@ -10,7 +10,7 @@ namespace Tiger;
 /// </summary>
 public sealed class TigerDatabase : IDisposable
 {
-    public const int CurrentSchemaVersion = 6;
+    public const int CurrentSchemaVersion = 8;
 
     public string DatabasePath { get; }
     private string ConnectionString { get; }
@@ -189,6 +189,7 @@ public sealed class TigerDatabase : IDisposable
                 pr_number INTEGER,
                 finish_time TEXT,
                 ingested_at TEXT NOT NULL DEFAULT (datetime('now')),
+                ingestion_tasks_complete INTEGER NOT NULL DEFAULT 0,
                 PRIMARY KEY (organization, build_id)
             );
 
@@ -286,6 +287,7 @@ public sealed class TigerDatabase : IDisposable
                 build_id INTEGER NOT NULL,
                 task_type TEXT NOT NULL,
                 status TEXT NOT NULL DEFAULT 'pending',
+                is_complete INTEGER NOT NULL DEFAULT 0,
                 attempts INTEGER NOT NULL DEFAULT 0,
                 last_error TEXT,
                 last_attempt_time TEXT,
@@ -295,7 +297,7 @@ public sealed class TigerDatabase : IDisposable
             );
 
             CREATE INDEX IF NOT EXISTS ix_ingestion_tasks_status
-                ON build_ingestion_tasks (status, next_retry_time);
+                ON build_ingestion_tasks (is_complete, next_retry_time);
 
             CREATE TABLE IF NOT EXISTS pull_requests (
                 repository TEXT NOT NULL,
