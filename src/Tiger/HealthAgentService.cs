@@ -201,8 +201,10 @@ public sealed class HealthAgentService : IDisposable
         // Save the full log to disk (interleaved reasoning + messages)
         var logPath = SaveLog(repository, definition, prompt, transcript);
 
-        // Update state on disk
-        SaveState(repository, definition, newState ?? response);
+        // Update state on disk with metadata header
+        var windowDesc = lookbackDays >= 1 ? $"{lookbackDays:G} days" : $"{lookbackDays * 24:G} hours";
+        var header = $"> Generated: {DateTime.Now:yyyy-MM-dd HH:mm} | Window: {windowDesc}\n\n";
+        SaveState(repository, definition, header + (newState ?? response));
 
         // Prune old logs
         PruneOldLogs(repository, definition);
