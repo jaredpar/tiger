@@ -94,7 +94,7 @@ public sealed class BuildAnalysisService : IDisposable
     {
         if (buildEvent.FinishTime is not null &&
             DateTimeOffset.TryParse(buildEvent.FinishTime, out var finishTime) &&
-            DateTimeOffset.UtcNow - finishTime > TimeSpan.FromHours(12))
+            DateTimeOffset.UtcNow - finishTime > TimeSpan.FromHours(48))
         {
             _log?.Info("AnalysisAgent", $"Build #{buildEvent.BuildId} is too old for auto-analysis, skipping.");
             return;

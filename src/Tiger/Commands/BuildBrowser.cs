@@ -506,7 +506,7 @@ public sealed class BuildBrowser
         }
         if (finishTime is not null)
             headerTable.AddRow("[bold]Finished[/]", BrowserUI.FormatTime(finishTime));
-        headerTable.AddRow("[bold]URL[/]", BrowserUI.FormatLink(url, "AzDO Build"));
+        headerTable.AddRow("[bold]URL[/]", BrowserUI.FormatLink(url, url));
 
         // Ingestion status line: Timeline, Tests, Helix with status icons
         var taskStatuses = GetIngestionTaskStatuses(page.Org, page.Project, page.BuildId);
