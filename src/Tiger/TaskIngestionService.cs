@@ -146,7 +146,7 @@ public sealed class TaskIngestionService : IDisposable
                     }
                     finally
                     {
-                        NotifyIfBuildFullyIngested(task);
+                        NotifyIfBuildFullyIngested(task.Organization, task.BuildId);
                         semaphore.Release();
                     }
                 }).ToList();
@@ -520,7 +520,7 @@ public sealed class TaskIngestionService : IDisposable
     /// inserted with is_complete = 1 at creation time so they don't block this check.
     /// See <see cref="BuildIngestionService.CreateIngestionTasks"/> for task creation.
     /// </summary>
-    private void NotifyIfBuildFullyIngested(IngestionTask task)
+    private void NotifyIfBuildFullyIngested(string organization, int buildId)
     {
         var allDone = _db.WithCommand(cmd =>
         {
@@ -532,8 +532,8 @@ public sealed class TaskIngestionService : IDisposable
                       AND t.is_complete = 0
                 )
                 """;
-            cmd.Parameters.AddWithValue("@org", task.Organization);
-            cmd.Parameters.AddWithValue("@buildId", task.BuildId);
+            cmd.Parameters.AddWithValue("@org", organization);
+            cmd.Parameters.AddWithValue("@buildId", buildId);
             using var reader = cmd.ExecuteReader();
             return reader.Read();
         });
@@ -550,12 +550,12 @@ public sealed class TaskIngestionService : IDisposable
                 UPDATE builds SET ingestion_tasks_complete = 1
                 WHERE organization = @org AND build_id = @buildId
                 """;
-            cmd.Parameters.AddWithValue("@org", task.Organization);
-            cmd.Parameters.AddWithValue("@buildId", task.BuildId);
+            cmd.Parameters.AddWithValue("@org", organization);
+            cmd.Parameters.AddWithValue("@buildId", buildId);
             cmd.ExecuteNonQuery();
         });
 
-        _log?.Info("Worker", $"Build #{task.BuildId} fully ingested, notifying subscribers.");
+        _log?.Info("Worker", $"Build #{buildId} fully ingested, notifying subscribers.");
 
         var buildEvent = _db.WithCommand(cmd =>
         {
@@ -564,8 +564,8 @@ public sealed class TaskIngestionService : IDisposable
                 FROM builds
                 WHERE organization = @org AND build_id = @buildId
                 """;
-            cmd.Parameters.AddWithValue("@org", task.Organization);
-            cmd.Parameters.AddWithValue("@buildId", task.BuildId);
+            cmd.Parameters.AddWithValue("@org", organization);
+            cmd.Parameters.AddWithValue("@buildId", buildId);
             using var reader = cmd.ExecuteReader();
             if (!reader.Read())
             {
@@ -574,9 +574,9 @@ public sealed class TaskIngestionService : IDisposable
 
             return new BuildIngestedEvent
             {
-                Organization = task.Organization,
+                Organization = organization,
                 Project = reader.GetString(0),
-                BuildId = task.BuildId,
+                BuildId = buildId,
                 DefinitionName = reader.GetString(1),
                 Result = reader.IsDBNull(2) ? "unknown" : reader.GetString(2),
                 SourceBranch = reader.GetString(3),
