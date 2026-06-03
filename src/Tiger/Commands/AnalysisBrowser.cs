@@ -46,7 +46,7 @@ public sealed class AnalysisBrowser
                     _ => "[dim]?[/]",
                 };
                 var category = a.Category is not null ? $"[dim]({a.Category})[/]" : "";
-                var confidence = a.Confidence is not null ? $"[dim][{a.Confidence}][/]" : "";
+                var confidence = a.Confidence is not null ? $"[dim]({Markup.Escape(a.Confidence)})[/]" : "";
                 return $"{statusIcon} {Markup.Escape(a.DefinitionName)} #{a.BuildId} {category} {confidence}";
             }).ToList();
 
