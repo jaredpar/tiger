@@ -164,7 +164,8 @@ public sealed class BuildBrowser
                 var pr = b.PrNumber is not null ? $" PR#{b.PrNumber}" : "";
                 var pending = b.IngestionStatus != "complete" ? " ..." : "";
                 var time = BrowserUI.FormatTime(b.FinishTime);
-                return $"{resultIcon} {b.BuildId} {Markup.Escape(b.DefinitionName)} {time}{pr}{pending}";
+                var branch = $"[dim]{Markup.Escape(SimplifyBranch(b.Branch))}[/]";
+                return $"{resultIcon} {b.BuildId} {Markup.Escape(b.DefinitionName)} {branch} {time}{pr}{pending}";
             }).ToList();
 
             _lastBuilds = builds;
@@ -243,6 +244,12 @@ public sealed class BuildBrowser
             if (_filter.KindPattern is not null)
             {
                 BrowserUI.ApplyKindFilter(_filter.KindPattern, where);
+            }
+            if (_filter.BranchPattern is not null)
+            {
+                var (pattern, isExact) = BrowserUI.ToSqlPattern(_filter.BranchPattern);
+                where.Add(isExact ? "b.source_branch = @branch" : "b.source_branch LIKE @branch");
+                cmd.Parameters.AddWithValue("@branch", pattern);
             }
 
             var whereClause = where.Count > 0 ? "WHERE " + string.Join(" AND ", where) : "";
@@ -335,6 +342,7 @@ public sealed class BuildBrowser
         AnsiConsole.MarkupLine("  [blue]I[/] Filter by build ID");
         AnsiConsole.MarkupLine("  [blue]O[/] Filter by outcome (failed, succeeded, partiallySucceeded)");
         AnsiConsole.MarkupLine("  [blue]K[/] Filter by kind (pr, ci)");
+        AnsiConsole.MarkupLine("  [blue]B[/] Filter by branch");
         AnsiConsole.MarkupLine("  [blue]C[/] Clear all filters");
         AnsiConsole.MarkupLine("  [blue]Esc[/] Cancel");
 
@@ -355,6 +363,9 @@ public sealed class BuildBrowser
                 break;
             case ConsoleKey.K:
                 _filter.KindPattern = BrowserUI.PromptKindFilter();
+                break;
+            case ConsoleKey.B:
+                _filter.BranchPattern = BrowserUI.PromptPattern("Branch pattern (e.g. main, release/*):");
                 break;
             case ConsoleKey.C:
                 _filter.Clear();
@@ -398,6 +409,7 @@ public sealed class BuildBrowser
         AnsiConsole.MarkupLine("  [blue]id:[/]      Build ID (e.g. 1423*, 142333)");
         AnsiConsole.MarkupLine("  [blue]result:[/]  Outcome (failed, succeeded, partiallySucceeded)");
         AnsiConsole.MarkupLine("  [blue]kind:[/]    Build kind (pr, ci)");
+        AnsiConsole.MarkupLine("  [blue]branch:[/]  Source branch (e.g. main, release/*)");
         AnsiConsole.WriteLine();
         AnsiConsole.MarkupLine("[bold]Multiple filters combine with AND.[/]");
         AnsiConsole.MarkupLine("[dim]Press any key to continue...[/]");
@@ -1258,6 +1270,15 @@ public sealed class BuildBrowser
 
     // ── Helpers ──────────────────────────────────────────────────────
 
+    private static string SimplifyBranch(string branch)
+    {
+        if (branch.StartsWith("refs/heads/", StringComparison.Ordinal))
+            return branch["refs/heads/".Length..];
+        if (branch.StartsWith("refs/pull/", StringComparison.Ordinal))
+            return branch["refs/pull/".Length..];
+        return branch;
+    }
+
     private List<(string TaskType, string Status, int Attempts)> GetIngestionTaskStatuses(
         string org, string project, int buildId)
     {
@@ -1309,9 +1330,11 @@ public sealed class BuildBrowser
         public string? ResultPattern { get; set; }
         public string? IdPattern { get; set; }
         public string? KindPattern { get; set; }
+        public string? BranchPattern { get; set; }
 
         public bool IsActive => RepoPattern is not null || DefinitionPattern is not null
-            || ResultPattern is not null || IdPattern is not null || KindPattern is not null;
+            || ResultPattern is not null || IdPattern is not null || KindPattern is not null
+            || BranchPattern is not null;
 
         public void Clear()
         {
@@ -1320,6 +1343,7 @@ public sealed class BuildBrowser
             ResultPattern = null;
             IdPattern = null;
             KindPattern = null;
+            BranchPattern = null;
         }
 
         public static BuildFilter Load(string configDirectory)
@@ -1366,6 +1390,8 @@ public sealed class BuildBrowser
                     IdPattern = part[3..];
                 else if (part.StartsWith("kind:", StringComparison.OrdinalIgnoreCase))
                     KindPattern = part[5..];
+                else if (part.StartsWith("branch:", StringComparison.OrdinalIgnoreCase))
+                    BranchPattern = part[7..];
             }
         }
 
@@ -1376,6 +1402,7 @@ public sealed class BuildBrowser
             if (DefinitionPattern is not null) parts.Add($"def:{DefinitionPattern}");
             if (ResultPattern is not null) parts.Add($"result:{ResultPattern}");
             if (KindPattern is not null) parts.Add($"kind:{KindPattern}");
+            if (BranchPattern is not null) parts.Add($"branch:{BranchPattern}");
             if (IdPattern is not null) parts.Add($"id:{IdPattern}");
             return parts.Count > 0 ? string.Join(" ", parts) : "(none)";
         }
