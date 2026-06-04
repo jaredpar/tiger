@@ -59,13 +59,74 @@ public class AzdoTimelineCommand : AsyncCommand<AzdoBuildSettings>
     }
 }
 
-public class AzdoArtifactsCommand : AsyncCommand<AzdoBuildSettings>
+public class AzdoArtifactsCommand : AsyncCommand<AzdoArtifactsCommand.Settings>
 {
-    protected override async Task<int> ExecuteAsync(CommandContext context, AzdoBuildSettings settings, CancellationToken ct)
+    public class Settings : AzdoBuildSettings
+    {
+        [CommandOption("--files")]
+        [Description("List individual files within artifacts")]
+        public bool ListFiles { get; set; }
+
+        [CommandOption("--artifact")]
+        [Description("Filter to a specific artifact name (substring match)")]
+        public string? ArtifactFilter { get; set; }
+
+        [CommandOption("--filter")]
+        [Description("Filter files by path pattern (substring match, e.g. '.dmp')")]
+        public string? FileFilter { get; set; }
+    }
+
+    protected override async Task<int> ExecuteAsync(CommandContext context, Settings settings, CancellationToken ct)
     {
         var client = settings.CreateClient();
         var artifacts = await client.GetArtifactsAsync(settings.BuildId);
-        Console.WriteLine(JsonSerializer.Serialize(artifacts, JsonOptions.Indented));
+
+        if (settings.ArtifactFilter is not null)
+        {
+            artifacts = artifacts
+                .Where(a => a.Name.Contains(settings.ArtifactFilter, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+        }
+
+        if (!settings.ListFiles)
+        {
+            Console.WriteLine(JsonSerializer.Serialize(artifacts, JsonOptions.Indented));
+            return 0;
+        }
+
+        foreach (var artifact in artifacts)
+        {
+            List<ArtifactFileEntry> files;
+            try
+            {
+                files = await client.GetArtifactFilesAsync(settings.BuildId, artifact);
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"  Warning: could not list files in '{artifact.Name}': {ex.Message}");
+                continue;
+            }
+
+            if (settings.FileFilter is not null)
+            {
+                files = files
+                    .Where(f => f.Path.Contains(settings.FileFilter, StringComparison.OrdinalIgnoreCase))
+                    .ToList();
+            }
+
+            if (files.Count == 0)
+            {
+                continue;
+            }
+
+            Console.WriteLine($"{artifact.Name} ({artifact.ResourceType}, {files.Count} file(s)):");
+            foreach (var file in files)
+            {
+                Console.WriteLine($"  {file.Path} ({file.Size:N0} bytes)");
+            }
+            Console.WriteLine();
+        }
+
         return 0;
     }
 }
