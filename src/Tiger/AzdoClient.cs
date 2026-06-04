@@ -339,6 +339,8 @@ public sealed class AzdoClient
             Name = a.Name,
             DownloadUrl = a.Resource?.DownloadUrl,
             ResourceType = a.Resource?.Type,
+            ResourceData = a.Resource?.Data,
+            ResourceUrl = a.Resource?.Url,
         }).ToList();
     }
 
@@ -356,6 +358,115 @@ public sealed class AzdoClient
 
         using var fileStream = File.Create(outputPath);
         await response.Content.CopyToAsync(fileStream);
+    }
+
+    /// <summary>
+    /// Lists files within an artifact. Supports both Container and PipelineArtifact types.
+    /// </summary>
+    public async Task<List<ArtifactFileEntry>> GetArtifactFilesAsync(int buildId, AzdoArtifact artifact)
+    {
+        if (artifact.ResourceType == "Container")
+        {
+            return await GetContainerFilesAsync(artifact);
+        }
+        else if (artifact.ResourceType == "PipelineArtifact")
+        {
+            return await GetPipelineArtifactFilesAsync(buildId, artifact);
+        }
+        else
+        {
+            throw new InvalidOperationException($"Unsupported artifact resource type '{artifact.ResourceType}' for artifact '{artifact.Name}'");
+        }
+    }
+
+    /// <summary>
+    /// Downloads a single file from an artifact to the specified output path.
+    /// </summary>
+    public async Task DownloadArtifactFileAsync(int buildId, AzdoArtifact artifact, ArtifactFileEntry file, string outputPath)
+    {
+        string downloadUrl;
+        if (artifact.ResourceType == "Container")
+        {
+            downloadUrl = file.DownloadUrl
+                ?? throw new InvalidOperationException($"No download URL for file '{file.Path}'");
+        }
+        else
+        {
+            // PipelineArtifact — use the file ID to download
+            downloadUrl = $"_apis/build/builds/{buildId}/artifacts?artifactName={Uri.EscapeDataString(artifact.Name)}&fileId={file.BlobId}&fileName={Uri.EscapeDataString(Path.GetFileName(file.Path))}&api-version=7.1";
+        }
+
+        using var response = await HttpClient.GetAsync(downloadUrl, HttpCompletionOption.ResponseHeadersRead);
+        response.EnsureSuccessStatusCode();
+
+        var dir = Path.GetDirectoryName(outputPath);
+        if (dir is not null)
+        {
+            Directory.CreateDirectory(dir);
+        }
+
+        using var fileStream = File.Create(outputPath);
+        await response.Content.CopyToAsync(fileStream);
+    }
+
+    private async Task<List<ArtifactFileEntry>> GetContainerFilesAsync(AzdoArtifact artifact)
+    {
+        // resource.data is "#/{containerId}/{artifactName}"
+        var data = artifact.ResourceData
+            ?? throw new InvalidOperationException($"Artifact '{artifact.Name}' has no resource data");
+
+        // Use the resource URL directly — it's a pre-built container query URL
+        var url = artifact.ResourceUrl
+            ?? throw new InvalidOperationException($"Artifact '{artifact.Name}' has no resource URL");
+
+        // The resource URL points to the container. Append $format=json if not present
+        var listUrl = url.Contains("?") ? $"{url}&$format=json" : $"{url}?$format=json";
+
+        using var response = await HttpClient.GetAsync(listUrl);
+        response.EnsureSuccessStatusCode();
+
+        var json = await response.Content.ReadAsStringAsync();
+        var container = JsonSerializer.Deserialize<ContainerItemsResponse>(json, s_jsonOptions);
+        if (container?.Value is null)
+        {
+            return [];
+        }
+
+        return container.Value
+            .Where(i => i.ItemType == "file")
+            .Select(i => new ArtifactFileEntry
+            {
+                Path = i.Path ?? "",
+                Size = i.FileLength ?? 0,
+                DownloadUrl = i.ContentLocation,
+            }).ToList();
+    }
+
+    private async Task<List<ArtifactFileEntry>> GetPipelineArtifactFilesAsync(int buildId, AzdoArtifact artifact)
+    {
+        var fileId = artifact.ResourceData
+            ?? throw new InvalidOperationException($"Artifact '{artifact.Name}' has no resource data (file ID)");
+
+        var url = $"_apis/build/builds/{buildId}/artifacts?artifactName={Uri.EscapeDataString(artifact.Name)}&fileId={fileId}&fileName=manifest.json&api-version=7.1";
+
+        using var response = await HttpClient.GetAsync(url);
+        response.EnsureSuccessStatusCode();
+
+        var json = await response.Content.ReadAsStringAsync();
+        var manifest = JsonSerializer.Deserialize<PipelineArtifactManifest>(json, s_jsonOptions);
+        if (manifest?.Items is null)
+        {
+            return [];
+        }
+
+        return manifest.Items
+            .Where(i => i.Blob is not null)
+            .Select(i => new ArtifactFileEntry
+            {
+                Path = i.Path ?? "",
+                Size = i.Blob!.Size,
+                BlobId = i.Blob.Id,
+            }).ToList();
     }
 
     // Internal types for JSON deserialization of raw API responses
@@ -529,6 +640,59 @@ public sealed class AzdoClient
 
         [JsonPropertyName("type")]
         public string? Type { get; init; }
+
+        [JsonPropertyName("data")]
+        public string? Data { get; init; }
+
+        [JsonPropertyName("url")]
+        public string? Url { get; init; }
+    }
+
+    // Container artifact file listing types
+    private class ContainerItemsResponse
+    {
+        [JsonPropertyName("value")]
+        public List<ContainerItem>? Value { get; init; }
+    }
+
+    private class ContainerItem
+    {
+        [JsonPropertyName("path")]
+        public string? Path { get; init; }
+
+        [JsonPropertyName("itemType")]
+        public string? ItemType { get; init; }
+
+        [JsonPropertyName("fileLength")]
+        public long? FileLength { get; init; }
+
+        [JsonPropertyName("contentLocation")]
+        public string? ContentLocation { get; init; }
+    }
+
+    // Pipeline artifact manifest types
+    private class PipelineArtifactManifest
+    {
+        [JsonPropertyName("items")]
+        public List<PipelineArtifactItem>? Items { get; init; }
+    }
+
+    private class PipelineArtifactItem
+    {
+        [JsonPropertyName("path")]
+        public string? Path { get; init; }
+
+        [JsonPropertyName("blob")]
+        public PipelineArtifactBlob? Blob { get; init; }
+    }
+
+    private class PipelineArtifactBlob
+    {
+        [JsonPropertyName("id")]
+        public string? Id { get; init; }
+
+        [JsonPropertyName("size")]
+        public long Size { get; init; }
     }
 
     private sealed class BearerTokenHandler : DelegatingHandler

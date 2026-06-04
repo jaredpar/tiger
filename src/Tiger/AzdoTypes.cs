@@ -90,6 +90,16 @@ public class AzdoArtifact
     public required string Name { get; init; }
     public string? DownloadUrl { get; init; }
     public string? ResourceType { get; init; }
+    public string? ResourceData { get; init; }
+    public string? ResourceUrl { get; init; }
+}
+
+public class ArtifactFileEntry
+{
+    public required string Path { get; init; }
+    public long Size { get; init; }
+    public string? DownloadUrl { get; init; }
+    public string? BlobId { get; init; }
 }
 
 public class AzdoJobTestSummary

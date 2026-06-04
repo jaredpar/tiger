@@ -34,6 +34,8 @@ app.Configure(config =>
             .WithDescription("Get job records from a build timeline");
         azdo.AddCommand<AzdoDownloadCommand>("download")
             .WithDescription("Download an artifact from a build");
+        azdo.AddCommand<AzdoDownloadDumpsCommand>("download-dumps")
+            .WithDescription("Download crash dump files from build artifacts");
         azdo.AddCommand<AzdoPrBuildsCommand>("pr-builds")
             .WithDescription("Get builds for a pull request");
         azdo.AddCommand<AzdoRepoBuildsCommand>("repo-builds")

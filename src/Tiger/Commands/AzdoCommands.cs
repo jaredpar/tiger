@@ -107,6 +107,109 @@ public class AzdoDownloadCommand : AsyncCommand<AzdoDownloadCommand.Settings>
     }
 }
 
+public class AzdoDownloadDumpsCommand : AsyncCommand<AzdoDownloadDumpsCommand.Settings>
+{
+    public class Settings : AzdoBuildSettings
+    {
+        [CommandOption("--run-id")]
+        [Description("Optional test run ID to filter which artifacts to search")]
+        public int? RunId { get; set; }
+
+        [CommandOption("--output")]
+        [Description("Output directory (default: current directory)")]
+        public string OutputDirectory { get; set; } = ".";
+    }
+
+    protected override async Task<int> ExecuteAsync(CommandContext context, Settings settings, CancellationToken ct)
+    {
+        var client = settings.CreateClient();
+        var artifacts = await client.GetArtifactsAsync(settings.BuildId);
+
+        // If a run ID is specified, find the matching test run name to filter artifacts
+        string? runNameFilter = null;
+        if (settings.RunId is not null)
+        {
+            var dbPath = Path.Combine(TigerUtils.GetConfigDirectory(), "tiger.db");
+            using var db = TigerDatabase.Open(dbPath);
+            runNameFilter = db.WithCommand(cmd =>
+            {
+                cmd.CommandText = "SELECT run_name FROM test_runs WHERE run_id = @runId";
+                cmd.Parameters.AddWithValue("@runId", settings.RunId.Value);
+                return cmd.ExecuteScalar() as string;
+            });
+
+            if (runNameFilter is null)
+            {
+                Console.Error.WriteLine($"Test run {settings.RunId} not found in the database.");
+                return 1;
+            }
+
+            Console.WriteLine($"Filtering to test run: {runNameFilter}");
+        }
+
+        var downloaded = 0;
+        foreach (var artifact in artifacts)
+        {
+            // If filtering by run name, only check artifacts that match
+            if (runNameFilter is not null)
+            {
+                var normalizedRunName = runNameFilter.Replace(' ', '_');
+                if (!artifact.Name.StartsWith(normalizedRunName, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+            }
+
+            List<ArtifactFileEntry> files;
+            try
+            {
+                files = await client.GetArtifactFilesAsync(settings.BuildId, artifact);
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"  Warning: could not list files in '{artifact.Name}': {ex.Message}");
+                continue;
+            }
+
+            var dumpFiles = files.Where(f => f.Path.EndsWith(".dmp", StringComparison.OrdinalIgnoreCase)).ToList();
+            if (dumpFiles.Count == 0)
+            {
+                continue;
+            }
+
+            Console.WriteLine($"Found {dumpFiles.Count} dump(s) in artifact '{artifact.Name}':");
+            foreach (var dumpFile in dumpFiles)
+            {
+                var fileName = Path.GetFileName(dumpFile.Path);
+                var outputPath = Path.Combine(settings.OutputDirectory, fileName);
+                Console.WriteLine($"  Downloading {fileName} ({dumpFile.Size:N0} bytes)...");
+
+                try
+                {
+                    await client.DownloadArtifactFileAsync(settings.BuildId, artifact, dumpFile, outputPath);
+                    Console.WriteLine($"  Saved to {outputPath}");
+                    downloaded++;
+                }
+                catch (Exception ex)
+                {
+                    Console.Error.WriteLine($"  Error downloading {fileName}: {ex.Message}");
+                }
+            }
+        }
+
+        if (downloaded == 0)
+        {
+            Console.WriteLine("No dump files found in build artifacts.");
+        }
+        else
+        {
+            Console.WriteLine($"Downloaded {downloaded} dump file(s).");
+        }
+
+        return 0;
+    }
+}
+
 public class AzdoPrBuildsCommand : AsyncCommand<AzdoPrBuildsCommand.Settings>
 {
     public class Settings : AzdoSettings
