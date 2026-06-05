@@ -278,11 +278,15 @@ public sealed class AzdoClient
 
         return runs.Value.Select(r => new AzdoJobTestSummary
         {
+            RunId = r.Id,
             JobName = r.Name,
             TotalCount = r.TotalTests,
             PassedCount = r.PassedTests,
             FailedCount = r.TotalTests - r.PassedTests - r.NotApplicableTests,
             SkippedCount = r.NotApplicableTests,
+            Duration = r.StartedDate is not null && r.CompletedDate is not null
+                ? r.CompletedDate.Value - r.StartedDate.Value
+                : null,
         }).ToList();
     }
 
@@ -550,6 +554,12 @@ public sealed class AzdoClient
 
         [JsonPropertyName("notApplicableTests")]
         public int NotApplicableTests { get; init; }
+
+        [JsonPropertyName("startedDate")]
+        public DateTime? StartedDate { get; init; }
+
+        [JsonPropertyName("completedDate")]
+        public DateTime? CompletedDate { get; init; }
     }
 
     private class AzdoTimelineRaw

@@ -204,16 +204,25 @@ public sealed class TaskIngestionService : IDisposable
         var testSummary = await client.GetTestSummaryByJobAsync(task.BuildId);
         var failures = await client.GetTestFailuresAsync(task.BuildId, subResultCount: 50);
 
+        // Insert test runs for ALL runs from the summary, not just those with failures
+        foreach (var summary in testSummary)
+        {
+            _ingestion.InsertTestRun(task.Organization, task.Project, task.BuildId, summary.RunId, summary.JobName,
+                summary.TotalCount, summary.PassedCount, summary.FailedCount, summary.SkippedCount);
+        }
+
+        // Insert individual failure results
         var runGroups = failures.GroupBy(f => f.TestRunId);
         foreach (var group in runGroups)
         {
             var first = group.First();
-            var summary = testSummary.FirstOrDefault(s => s.JobName == first.TestRunName);
-            _ingestion.InsertTestRun(task.Organization, task.Project, task.BuildId, group.Key, first.TestRunName,
-                summary?.TotalCount ?? group.Count(),
-                summary?.PassedCount ?? 0,
-                summary?.FailedCount ?? group.Count(),
-                summary?.SkippedCount ?? 0);
+
+            // If this run wasn't in the summary (unlikely but defensive), insert it now
+            if (!testSummary.Any(s => s.RunId == group.Key))
+            {
+                _ingestion.InsertTestRun(task.Organization, task.Project, task.BuildId, group.Key, first.TestRunName,
+                    group.Count(), 0, group.Count(), 0);
+            }
 
             foreach (var r in group)
             {

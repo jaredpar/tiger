@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Text.Json;
+using Spectre.Console;
 using Spectre.Console.Cli;
 
 namespace Tiger.Commands;
@@ -43,7 +44,47 @@ public class AzdoTestSummaryCommand : AsyncCommand<AzdoBuildSettings>
     {
         var client = settings.CreateClient();
         var summaries = await client.GetTestSummaryByJobAsync(settings.BuildId);
-        Console.WriteLine(JsonSerializer.Serialize(summaries, JsonOptions.Indented));
+
+        if (summaries.Count == 0)
+        {
+            Console.WriteLine("No test runs found.");
+            return 0;
+        }
+
+        var table = new Table();
+        table.AddColumn("Run ID");
+        table.AddColumn("Job Name");
+        table.AddColumn(new TableColumn("Total").RightAligned());
+        table.AddColumn(new TableColumn("Passed").RightAligned());
+        table.AddColumn(new TableColumn("Failed").RightAligned());
+        table.AddColumn(new TableColumn("Skipped").RightAligned());
+        table.AddColumn(new TableColumn("Duration").RightAligned());
+
+        foreach (var s in summaries)
+        {
+            var duration = s.Duration is not null
+                ? s.Duration.Value.TotalSeconds < 60
+                    ? $"{s.Duration.Value.TotalSeconds:F1}s"
+                    : $"{(int)s.Duration.Value.TotalMinutes}m {s.Duration.Value.Seconds}s"
+                : "-";
+
+            table.AddRow(
+                s.RunId.ToString(),
+                s.JobName,
+                s.TotalCount.ToString(),
+                s.PassedCount.ToString(),
+                s.FailedCount.ToString(),
+                s.SkippedCount.ToString(),
+                duration);
+        }
+
+        AnsiConsole.Write(table);
+
+        var totalTests = summaries.Sum(s => s.TotalCount);
+        var totalPassed = summaries.Sum(s => s.PassedCount);
+        var totalFailed = summaries.Sum(s => s.FailedCount);
+        Console.WriteLine($"\n{summaries.Count} run(s), {totalTests} total tests ({totalPassed} passed, {totalFailed} failed)");
+
         return 0;
     }
 }

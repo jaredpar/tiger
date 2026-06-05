@@ -104,11 +104,13 @@ public class ArtifactFileEntry
 
 public class AzdoJobTestSummary
 {
+    public int RunId { get; init; }
     public required string JobName { get; init; }
     public int TotalCount { get; init; }
     public int PassedCount { get; init; }
     public int FailedCount { get; init; }
     public int SkippedCount { get; init; }
+    public TimeSpan? Duration { get; init; }
 }
 
 [JsonConverter(typeof(AzdoTestResultConverter))]
