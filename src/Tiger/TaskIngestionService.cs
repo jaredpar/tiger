@@ -208,7 +208,8 @@ public sealed class TaskIngestionService : IDisposable
         foreach (var summary in testSummary)
         {
             _ingestion.InsertTestRun(task.Organization, task.Project, task.BuildId, summary.RunId, summary.JobName,
-                summary.TotalCount, summary.PassedCount, summary.FailedCount, summary.SkippedCount);
+                summary.TotalCount, summary.PassedCount, summary.FailedCount, summary.SkippedCount,
+                summary.Duration?.TotalSeconds);
         }
 
         // Insert individual failure results

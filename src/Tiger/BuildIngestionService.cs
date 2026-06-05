@@ -142,15 +142,15 @@ public sealed class BuildIngestionService
     }
 
     internal void InsertTestRun(string organization, string project, int buildId, int runId,
-        string runName, int total, int passed, int failed, int skipped)
+        string runName, int total, int passed, int failed, int skipped, double? durationSeconds = null)
     {
         _db.WithCommand(cmd =>
         {
             cmd.CommandText = """
                 INSERT OR IGNORE INTO test_runs
-                    (organization, project, build_id, run_id, run_name, total_tests, passed_tests, failed_tests, skipped_tests)
+                    (organization, project, build_id, run_id, run_name, total_tests, passed_tests, failed_tests, skipped_tests, duration_seconds)
                 VALUES
-                    (@org, @proj, @buildId, @runId, @runName, @total, @passed, @failed, @skipped)
+                    (@org, @proj, @buildId, @runId, @runName, @total, @passed, @failed, @skipped, @duration)
                 """;
             cmd.Parameters.AddWithValue("@org", organization);
             cmd.Parameters.AddWithValue("@proj", project);
@@ -161,6 +161,7 @@ public sealed class BuildIngestionService
             cmd.Parameters.AddWithValue("@passed", passed);
             cmd.Parameters.AddWithValue("@failed", failed);
             cmd.Parameters.AddWithValue("@skipped", skipped);
+            cmd.Parameters.AddWithValue("@duration", durationSeconds.HasValue ? (object)durationSeconds.Value : DBNull.Value);
             cmd.ExecuteNonQuery();
         });
     }

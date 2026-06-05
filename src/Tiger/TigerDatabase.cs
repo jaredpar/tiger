@@ -148,7 +148,30 @@ public sealed class TigerDatabase : IDisposable
     private void EnsureSchema()
     {
         CreateSchema();
+        MigrateSchema();
         SetSchemaVersion(CurrentSchemaVersion);
+    }
+
+    private void MigrateSchema()
+    {
+        // v9: add duration_seconds to test_runs
+        TryAddColumn("test_runs", "duration_seconds", "REAL");
+    }
+
+    private void TryAddColumn(string table, string column, string type)
+    {
+        try
+        {
+            WithCommand(cmd =>
+            {
+                cmd.CommandText = $"ALTER TABLE {table} ADD COLUMN {column} {type};";
+                cmd.ExecuteNonQuery();
+            });
+        }
+        catch (Microsoft.Data.Sqlite.SqliteException)
+        {
+            // Column already exists
+        }
     }
 
     private int GetSchemaVersion()
@@ -212,6 +235,7 @@ public sealed class TigerDatabase : IDisposable
                 passed_tests INTEGER NOT NULL DEFAULT 0,
                 failed_tests INTEGER NOT NULL DEFAULT 0,
                 skipped_tests INTEGER NOT NULL DEFAULT 0,
+                duration_seconds REAL,
                 PRIMARY KEY (organization, run_id),
                 FOREIGN KEY (organization, build_id)
                     REFERENCES builds (organization, build_id)
