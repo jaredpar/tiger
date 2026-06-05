@@ -282,7 +282,7 @@ public sealed class AzdoClient
             JobName = r.Name,
             TotalCount = r.TotalTests,
             PassedCount = r.PassedTests,
-            FailedCount = r.TotalTests - r.PassedTests - r.NotApplicableTests,
+            FailedCount = r.TotalTests - r.PassedTests - r.NotApplicableTests - r.UnanalyzedTests,
             SkippedCount = r.NotApplicableTests,
             Duration = r.StartedDate is not null && r.CompletedDate is not null
                 ? r.CompletedDate.Value - r.StartedDate.Value
