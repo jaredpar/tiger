@@ -31,9 +31,6 @@ public sealed class TestBrowser
             AnsiConsole.MarkupLine("[bold underline]Test Failures[/]");
             if (_filter.IsActive)
                 AnsiConsole.MarkupLine($"[dim]Filter: {Markup.Escape(_filter.ToString())}[/]");
-            AnsiConsole.MarkupLine(_filter.IsActive
-                ? "[dim]E edit filter  F filter menu  C clear  H help  Esc back[/]"
-                : "[dim]E edit filter  F filter menu  H help  Esc back[/]");
             AnsiConsole.WriteLine();
 
             var tests = QueryTests();
@@ -43,7 +40,7 @@ public sealed class TestBrowser
                 AnsiConsole.MarkupLine(_filter.IsActive
                     ? "[yellow]No test failures match the current filter.[/]"
                     : "[yellow]No test failures recorded yet.[/]");
-                AnsiConsole.MarkupLine("[dim]Press E to edit filter, F for filter menu, Esc to go back...[/]");
+                AnsiConsole.MarkupLine("  [blue]E[/] Edit filter   [blue]F[/] Filter menu   [blue]Esc[/] Back");
 
                 var emptyKey = Console.ReadKey(true);
                 if (emptyKey.Key == ConsoleKey.E) { EditFilter(); continue; }
@@ -62,6 +59,10 @@ public sealed class TestBrowser
                 return $"[red]✗[/] {Markup.Escape(title)}  [dim]({t.FailCount} build(s))[/]";
             }).ToList();
 
+            var hotkeys = _filter.IsActive
+                ? "[blue]E[/] Edit filter   [blue]F[/] Filter menu   [blue]C[/] Clear   [blue]H[/] Help"
+                : "[blue]E[/] Edit filter   [blue]F[/] Filter menu   [blue]H[/] Help";
+
             var selected = BrowserUI.SelectWithEscape("Select a test:", choices,
                 extraKeys: new Dictionary<ConsoleKey, int> {
                     { ConsoleKey.E, -5 },
@@ -69,7 +70,8 @@ public sealed class TestBrowser
                     { ConsoleKey.H, -3 },
                     { ConsoleKey.C, -4 },
                 },
-                useMarkup: true);
+                useMarkup: true,
+                hotkeys: hotkeys);
 
             if (selected == -5) { EditFilter(); continue; }
             if (selected == -2) { ShowFilterMenu(); continue; }

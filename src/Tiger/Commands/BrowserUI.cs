@@ -15,7 +15,7 @@ public static class BrowserUI
     /// </summary>
     public static int SelectWithEscape(string title, List<string> items, int pageSize = 20,
         Dictionary<ConsoleKey, int>? extraKeys = null, bool useMarkup = false,
-        int startIndex = 0, HashSet<int>? skipIndices = null)
+        int startIndex = 0, HashSet<int>? skipIndices = null, string? hotkeys = null)
     {
         if (items.Count == 0) return -1;
 
@@ -66,7 +66,11 @@ public static class BrowserUI
 
             Console.Write(new string(' ', Console.WindowWidth));
             Console.SetCursorPosition(0, Console.CursorTop);
-            AnsiConsole.MarkupLine("[dim]  ↑↓ navigate  Enter select  Esc back[/]");
+            var builtIn = "[blue]↑↓[/] Navigate  [blue]Enter[/] Select  [blue]Esc[/] Back";
+            var footer = hotkeys is not null
+                ? $"  {hotkeys}   {builtIn}"
+                : $"  {builtIn}";
+            AnsiConsole.MarkupLine(footer);
 
             var key = Console.ReadKey(true);
             switch (key.Key)

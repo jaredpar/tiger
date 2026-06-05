@@ -109,9 +109,6 @@ public sealed class BuildBrowser
             AnsiConsole.MarkupLine("[bold underline]Builds[/]");
             if (_filter.IsActive)
                 AnsiConsole.MarkupLine($"[dim]Filter: {Markup.Escape(_filter.ToString())}[/]");
-            AnsiConsole.MarkupLine(_filter.IsActive
-                ? "[dim]E edit filter  F filter menu  C clear  H help  Esc back[/]"
-                : "[dim]E edit filter  F filter menu  H help  Esc back[/]");
             AnsiConsole.WriteLine();
 
             var builds = QueryBuilds();
@@ -121,7 +118,7 @@ public sealed class BuildBrowser
                 AnsiConsole.MarkupLine(_filter.IsActive
                     ? "[yellow]No builds match the current filter.[/]"
                     : "[yellow]No builds ingested yet.[/]");
-                AnsiConsole.MarkupLine("[dim]Press E to edit filter, F for filter menu, Esc to go back...[/]");
+                AnsiConsole.MarkupLine("  [blue]E[/] Edit filter   [blue]F[/] Filter menu   [blue]Esc[/] Back");
 
                 var emptyKey = Console.ReadKey(true);
                 if (emptyKey.Key == ConsoleKey.E)
@@ -170,6 +167,10 @@ public sealed class BuildBrowser
 
             _lastBuilds = builds;
 
+            var hotkeys = _filter.IsActive
+                ? "[blue]E[/] Edit filter   [blue]F[/] Filter menu   [blue]C[/] Clear   [blue]H[/] Help"
+                : "[blue]E[/] Edit filter   [blue]F[/] Filter menu   [blue]H[/] Help";
+
             var selected = BrowserUI.SelectWithEscape("Select a build:", choices,
                 extraKeys: new Dictionary<ConsoleKey, int> {
                     { ConsoleKey.E, -5 },
@@ -178,7 +179,8 @@ public sealed class BuildBrowser
                     { ConsoleKey.C, -4 },
                 },
                 useMarkup: true,
-                startIndex: _selectedBuildIndex);
+                startIndex: _selectedBuildIndex,
+                hotkeys: hotkeys);
 
             if (selected == -5) // E pressed
             {
@@ -690,7 +692,6 @@ public sealed class BuildBrowser
     private NavAction RenderTestList(TestListPage page)
     {
         AnsiConsole.MarkupLine($"[bold underline]Failed Tests — Build #{page.BuildId}[/]");
-        AnsiConsole.MarkupLine("[dim]Select a test to see its failure history, or Escape to go back[/]");
         AnsiConsole.WriteLine();
 
         var tests = _db.WithCommand(cmd =>
@@ -1051,18 +1052,25 @@ public sealed class BuildBrowser
         }
 
         var truncate = true;
+        var errorsOnly = false;
 
         while (true)
         {
             AnsiConsole.Clear();
             AnsiConsole.MarkupLine($"[bold underline]Failed Jobs — Build #{page.BuildId}[/]");
-            AnsiConsole.MarkupLine(truncate
-                ? "[dim]T full messages  Esc/B back[/]"
-                : "[dim]T truncate  Esc/B back[/]");
+            if (errorsOnly)
+                AnsiConsole.MarkupLine("[dim]Showing errors only[/]");
             AnsiConsole.WriteLine();
 
             foreach (var (jobName, issues) in jobIssues)
             {
+                var filtered = errorsOnly
+                    ? issues.Where(i => i.Type == "error").ToList()
+                    : issues;
+
+                if (filtered.Count == 0)
+                    continue;
+
                 var errorCount = issues.Count(i => i.Type == "error");
                 var warnCount = issues.Count(i => i.Type == "warning");
                 var summary = new List<string>();
@@ -1070,7 +1078,7 @@ public sealed class BuildBrowser
                 if (warnCount > 0) summary.Add($"[yellow]{warnCount} warning(s)[/]");
                 AnsiConsole.MarkupLine($"[bold]{Markup.Escape(jobName)}[/]  {string.Join(" ", summary)}");
 
-                foreach (var (type, message) in issues.Take(10))
+                foreach (var (type, message) in filtered.Take(10))
                 {
                     var icon = type == "error" ? "[red]error[/]" : "[yellow]warn[/]";
                     var msg = message.ReplaceLineEndings(" ");
@@ -1079,17 +1087,24 @@ public sealed class BuildBrowser
                     AnsiConsole.MarkupLine($"  {icon}: {Markup.Escape(msg)}");
                 }
 
-                if (issues.Count > 10)
-                    AnsiConsole.MarkupLine($"  [dim]... and {issues.Count - 10} more[/]");
+                if (filtered.Count > 10)
+                    AnsiConsole.MarkupLine($"  [dim]... and {filtered.Count - 10} more[/]");
 
                 AnsiConsole.WriteLine();
             }
+
+            // Hotkey menu at the bottom
+            var errorsLabel = errorsOnly ? "[blue]E[/] Show all" : "[blue]E[/] Errors only";
+            var truncateLabel = truncate ? "[blue]T[/] Full messages" : "[blue]T[/] Truncate";
+            AnsiConsole.MarkupLine($"  {errorsLabel}   {truncateLabel}   [blue]Esc[/] Back");
 
             var key = Console.ReadKey(true);
             if (key.Key is ConsoleKey.Escape or ConsoleKey.B)
                 return NavAction.Back.Instance;
             if (key.Key == ConsoleKey.T)
                 truncate = !truncate;
+            if (key.Key == ConsoleKey.E)
+                errorsOnly = !errorsOnly;
         }
     }
 

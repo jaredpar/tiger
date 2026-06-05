@@ -271,7 +271,7 @@ public sealed class HealthCommand : AsyncCommand
 
             Console.Write(new string(' ', Console.WindowWidth));
             Console.SetCursorPosition(0, Console.CursorTop);
-            AnsiConsole.MarkupLine("[dim]  ↑↓ navigate  Enter select  Esc/B back[/]");
+            AnsiConsole.MarkupLine("  [blue]↑↓[/] Navigate   [blue]Enter[/] Select   [blue]Esc[/] Back");
 
             var key = Console.ReadKey(true);
             switch (key.Key)

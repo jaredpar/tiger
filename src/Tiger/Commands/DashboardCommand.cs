@@ -112,7 +112,7 @@ public sealed class DashboardCommand : AsyncCommand
                     AnsiConsole.MarkupLine($"    {menuLabels[i]}");
                 }
             }
-            AnsiConsole.MarkupLine("[dim]  ↑↓ navigate  Enter select[/]");
+            AnsiConsole.MarkupLine("  [blue]↑↓[/] Navigate   [blue]Enter[/] Select");
 
             var key = Console.ReadKey(true);
 
@@ -211,7 +211,6 @@ public sealed class DashboardCommand : AsyncCommand
             var filterLabel = errorsOnly ? " [yellow](errors only)[/]" : "";
             var scrollLabel = scrollOffset > 0 ? $" [dim](scrolled back {scrollOffset})[/]" : " [dim](live)[/]";
             AnsiConsole.MarkupLine($"[bold underline]Service Log[/]{filterLabel}{scrollLabel}");
-            AnsiConsole.MarkupLine("[dim](E) toggle errors | (↑/↓) scroll | (End) latest | (Esc) back[/]");
             AnsiConsole.WriteLine();
 
             var all = serviceLog.GetRecent(500);
@@ -229,6 +228,8 @@ public sealed class DashboardCommand : AsyncCommand
             var visible = filtered.Skip(start).Take(end - start).ToList();
 
             RenderLogEntries(visible);
+            AnsiConsole.WriteLine();
+            AnsiConsole.MarkupLine("  [blue]E[/] Toggle errors   [blue]↑/↓[/] Scroll   [blue]End[/] Latest   [blue]Esc[/] Back");
         }
 
         Render();

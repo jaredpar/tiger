@@ -98,6 +98,82 @@ consumers use `AzdoClient` directly. Cached data is queried directly from SQLite
 - Kestrel (ASP.NET) for HTTP transport
 - `Azure.Identity` for AzDO auth
 
+## Interactive Browser UI
+
+The interactive browser (`BuildBrowser`, `TestBrowser`, etc.) follows a page-based
+navigation model. Each page renders content and handles input, returning a `NavAction`
+(Push, Back, or Replace).
+
+### Hotkey Menus
+
+**Hotkeys are always displayed at the bottom**, below all content. This applies to both
+selectable lists and content displays.
+
+#### Selectable Lists (Build list, Test list)
+
+Use `BrowserUI.SelectWithEscape` with `extraKeys` for hotkey dispatch and the `hotkeys`
+parameter for the bottom label:
+
+```csharp
+AnsiConsole.Clear();
+AnsiConsole.MarkupLine("[bold underline]Builds[/]");
+AnsiConsole.WriteLine();
+
+// ... render any status/filter info ...
+
+var hotkeys = "[blue]E[/] Edit filter   [blue]F[/] Filter menu   [blue]H[/] Help";
+var selected = BrowserUI.SelectWithEscape("Select a build:", choices,
+    extraKeys: new Dictionary<ConsoleKey, int> {
+        { ConsoleKey.E, -5 },
+        { ConsoleKey.F, -2 },
+        { ConsoleKey.H, -3 },
+    },
+    useMarkup: true,
+    hotkeys: hotkeys);
+
+if (selected == -5) { /* handle E */ }
+if (selected == -2) { /* handle F */ }
+if (selected < 0) return NavAction.Back.Instance; // Esc or B
+```
+
+`SelectWithEscape` renders the hotkey label at the bottom: `"{hotkeys}   [blue]↑↓[/] Navigate  [blue]Enter[/] Select  [blue]Esc[/] Back"`.
+
+#### Content Displays (Timeline/Jobs, Service Log)
+
+Use a `while (true)` loop with `Console.ReadKey(true)`. Render all content first,
+then the hotkey bar at the bottom:
+
+```csharp
+while (true)
+{
+    AnsiConsole.Clear();
+    AnsiConsole.MarkupLine("[bold underline]Title[/]");
+    AnsiConsole.WriteLine();
+
+    // ... render content ...
+
+    // Hotkey menu always at the bottom
+    AnsiConsole.MarkupLine("  [blue]E[/] Errors only   [blue]T[/] Full messages   [blue]Esc[/] Back");
+
+    var key = Console.ReadKey(true);
+    if (key.Key is ConsoleKey.Escape or ConsoleKey.B)
+        return NavAction.Back.Instance;
+    if (key.Key == ConsoleKey.E)
+        errorsOnly = !errorsOnly;
+    if (key.Key == ConsoleKey.T)
+        truncate = !truncate;
+}
+```
+
+### Conventions
+
+- **Escape** and **B** always mean "go back"
+- Toggle hotkeys show current action (e.g., `"[blue]E[/] Show all"` when errors-only is active,
+  `"[blue]E[/] Errors only"` when showing all)
+- Hotkey labels use format: `[blue]X[/] Label` separated by triple-space (`   `)
+- Hotkey bar is always the last line rendered before waiting for input
+- Indent hotkey bars with two leading spaces for visual alignment
+
 ## Current State (Before Changes)
 
 - Solution: `Pipeline.slnx` with 4 projects
