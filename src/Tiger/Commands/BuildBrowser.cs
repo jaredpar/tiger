@@ -108,7 +108,7 @@ public sealed class BuildBrowser
             AnsiConsole.Clear();
             AnsiConsole.MarkupLine("[bold underline]Builds[/]");
             if (_filter.IsActive)
-                AnsiConsole.MarkupLine($"[dim]Filter: {Markup.Escape(_filter.ToString())}[/]");
+                AnsiConsole.MarkupLine($"Filter: {Markup.Escape(_filter.ToString())}");
             AnsiConsole.WriteLine();
 
             var builds = QueryBuilds();
@@ -253,6 +253,11 @@ public sealed class BuildBrowser
                 where.Add(isExact ? "b.source_branch = @branch" : "b.source_branch LIKE @branch");
                 cmd.Parameters.AddWithValue("@branch", pattern);
             }
+            if (_filter.PrNumber is not null)
+            {
+                where.Add("b.pr_number = @pr");
+                cmd.Parameters.AddWithValue("@pr", _filter.PrNumber.Value);
+            }
 
             var whereClause = where.Count > 0 ? "WHERE " + string.Join(" AND ", where) : "";
 
@@ -292,7 +297,7 @@ public sealed class BuildBrowser
     {
         AnsiConsole.Clear();
         AnsiConsole.MarkupLine("[bold underline]Edit Filter[/]");
-        AnsiConsole.MarkupLine("[dim]Syntax: repo:VALUE def:VALUE num:VALUE result:VALUE[/]");
+        AnsiConsole.MarkupLine("[dim]Syntax: repo:VALUE def:VALUE num:VALUE result:VALUE pr:NUMBER[/]");
         AnsiConsole.MarkupLine("[dim]Examples: repo:roslyn  result:failed  repo:dotnet/* def:*-CI[/]");
         AnsiConsole.MarkupLine("[dim]Append ! for exact match: repo:dotnet/roslyn![/]");
         AnsiConsole.MarkupLine("[dim]Press Esc to cancel[/]");
@@ -345,6 +350,7 @@ public sealed class BuildBrowser
         AnsiConsole.MarkupLine("  [blue]O[/] Filter by outcome (failed, succeeded, partiallySucceeded)");
         AnsiConsole.MarkupLine("  [blue]K[/] Filter by kind (pr, ci)");
         AnsiConsole.MarkupLine("  [blue]B[/] Filter by branch");
+        AnsiConsole.MarkupLine("  [blue]P[/] Filter by PR number");
         AnsiConsole.MarkupLine("  [blue]C[/] Clear all filters");
         AnsiConsole.MarkupLine("  [blue]Esc[/] Cancel");
 
@@ -369,6 +375,9 @@ public sealed class BuildBrowser
             case ConsoleKey.B:
                 _filter.BranchPattern = BrowserUI.PromptPattern("Branch pattern (e.g. main, release/*):");
                 break;
+            case ConsoleKey.P:
+                _filter.PrNumber = PromptPrNumber();
+                break;
             case ConsoleKey.C:
                 _filter.Clear();
                 break;
@@ -386,6 +395,20 @@ public sealed class BuildBrowser
         var selected = BrowserUI.SelectWithEscape("Select outcome:", choices.ToList(), pageSize: 5);
         if (selected < 0) return null; // cancelled
         return choices[selected] == "all" ? null : choices[selected];
+    }
+
+    /// <summary>
+    /// Prompts the user to enter a PR number. Returns null if cancelled or invalid.
+    /// </summary>
+    private static int? PromptPrNumber()
+    {
+        AnsiConsole.WriteLine();
+        var raw = BrowserUI.PromptPattern("PR number (e.g. 12345):");
+        if (raw is null)
+        {
+            return null;
+        }
+        return int.TryParse(raw, out var pr) ? pr : null;
     }
 
     private static void ShowFilterHelp()
@@ -412,7 +435,7 @@ public sealed class BuildBrowser
         AnsiConsole.MarkupLine("  [blue]result:[/]  Outcome (failed, succeeded, partiallySucceeded)");
         AnsiConsole.MarkupLine("  [blue]kind:[/]    Build kind (pr, ci)");
         AnsiConsole.MarkupLine("  [blue]branch:[/]  Source branch (e.g. main, release/*)");
-        AnsiConsole.WriteLine();
+        AnsiConsole.MarkupLine("  [blue]pr:[/]      PR number (e.g. 12345)");        AnsiConsole.WriteLine();
         AnsiConsole.MarkupLine("[bold]Multiple filters combine with AND.[/]");
         AnsiConsole.MarkupLine("[dim]Press any key to continue...[/]");
         Console.ReadKey(true);
@@ -1346,10 +1369,11 @@ public sealed class BuildBrowser
         public string? IdPattern { get; set; }
         public string? KindPattern { get; set; }
         public string? BranchPattern { get; set; }
+        public int? PrNumber { get; set; }
 
         public bool IsActive => RepoPattern is not null || DefinitionPattern is not null
             || ResultPattern is not null || IdPattern is not null || KindPattern is not null
-            || BranchPattern is not null;
+            || BranchPattern is not null || PrNumber is not null;
 
         public void Clear()
         {
@@ -1359,6 +1383,7 @@ public sealed class BuildBrowser
             IdPattern = null;
             KindPattern = null;
             BranchPattern = null;
+            PrNumber = null;
         }
 
         public static BuildFilter Load(string configDirectory)
@@ -1407,6 +1432,13 @@ public sealed class BuildBrowser
                     KindPattern = part[5..];
                 else if (part.StartsWith("branch:", StringComparison.OrdinalIgnoreCase))
                     BranchPattern = part[7..];
+                else if (part.StartsWith("pr:", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (int.TryParse(part[3..], out var pr))
+                    {
+                        PrNumber = pr;
+                    }
+                }
             }
         }
 
@@ -1418,6 +1450,7 @@ public sealed class BuildBrowser
             if (ResultPattern is not null) parts.Add($"result:{ResultPattern}");
             if (KindPattern is not null) parts.Add($"kind:{KindPattern}");
             if (BranchPattern is not null) parts.Add($"branch:{BranchPattern}");
+            if (PrNumber is not null) parts.Add($"pr:{PrNumber}");
             if (IdPattern is not null) parts.Add($"id:{IdPattern}");
             return parts.Count > 0 ? string.Join(" ", parts) : "(none)";
         }

@@ -30,7 +30,7 @@ public sealed class TestBrowser
             AnsiConsole.Clear();
             AnsiConsole.MarkupLine("[bold underline]Test Failures[/]");
             if (_filter.IsActive)
-                AnsiConsole.MarkupLine($"[dim]Filter: {Markup.Escape(_filter.ToString())}[/]");
+                AnsiConsole.MarkupLine($"Filter: {Markup.Escape(_filter.ToString())}");
             AnsiConsole.WriteLine();
 
             var tests = QueryTests();
@@ -179,6 +179,11 @@ public sealed class TestBrowser
                 cmd.Parameters.AddWithValue("@def", pattern);
             }
             BrowserUI.ApplyKindFilter(_filter.KindPattern, where);
+            if (_filter.PrNumber is not null)
+            {
+                where.Add("b.pr_number = @pr");
+                cmd.Parameters.AddWithValue("@pr", _filter.PrNumber.Value);
+            }
 
             var whereClause = "WHERE " + string.Join(" AND ", where);
 
@@ -245,7 +250,7 @@ public sealed class TestBrowser
     {
         AnsiConsole.Clear();
         AnsiConsole.MarkupLine("[bold underline]Edit Filter[/]");
-        AnsiConsole.MarkupLine("[dim]Syntax: test:VALUE repo:VALUE def:VALUE[/]");
+        AnsiConsole.MarkupLine("[dim]Syntax: test:VALUE repo:VALUE def:VALUE pr:NUMBER[/]");
         AnsiConsole.MarkupLine("[dim]Examples: test:Serialization  repo:roslyn  def:*-CI[/]");
         AnsiConsole.MarkupLine("[dim]Append ! for exact match. Press Esc to cancel[/]");
         AnsiConsole.WriteLine();
@@ -286,6 +291,7 @@ public sealed class TestBrowser
         AnsiConsole.MarkupLine("  [blue]R[/] Filter by repository");
         AnsiConsole.MarkupLine("  [blue]D[/] Filter by definition");
         AnsiConsole.MarkupLine("  [blue]K[/] Filter by kind (pr, ci)");
+        AnsiConsole.MarkupLine("  [blue]P[/] Filter by PR number");
         AnsiConsole.MarkupLine("  [blue]C[/] Clear all filters");
         AnsiConsole.MarkupLine("  [blue]Esc[/] Cancel");
 
@@ -304,11 +310,28 @@ public sealed class TestBrowser
             case ConsoleKey.K:
                 _filter.KindPattern = BrowserUI.PromptKindFilter();
                 break;
+            case ConsoleKey.P:
+                _filter.PrNumber = PromptPrNumber();
+                break;
             case ConsoleKey.C:
                 _filter.Clear();
                 break;
         }
         SaveFilter();
+    }
+
+    /// <summary>
+    /// Prompts the user to enter a PR number. Returns null if cancelled or invalid.
+    /// </summary>
+    private static int? PromptPrNumber()
+    {
+        AnsiConsole.WriteLine();
+        var raw = BrowserUI.PromptPattern("PR number (e.g. 12345):");
+        if (raw is null)
+        {
+            return null;
+        }
+        return int.TryParse(raw, out var pr) ? pr : null;
     }
 
     private static void ShowFilterHelp()
@@ -332,6 +355,7 @@ public sealed class TestBrowser
         AnsiConsole.MarkupLine("  [blue]repo:[/]  Repository name");
         AnsiConsole.MarkupLine("  [blue]def:[/]   Definition/pipeline name");
         AnsiConsole.MarkupLine("  [blue]kind:[/]  Build kind (pr, ci)");
+        AnsiConsole.MarkupLine("  [blue]pr:[/]    PR number (e.g. 12345)");
         AnsiConsole.WriteLine();
         AnsiConsole.MarkupLine("[bold]Multiple filters combine with AND.[/]");
         AnsiConsole.MarkupLine("[dim]Press any key to continue...[/]");
@@ -359,9 +383,10 @@ public sealed class TestBrowser
         public string? RepoPattern { get; set; }
         public string? DefinitionPattern { get; set; }
         public string? KindPattern { get; set; }
+        public int? PrNumber { get; set; }
 
         public bool IsActive => TestNamePattern is not null || RepoPattern is not null
-            || DefinitionPattern is not null || KindPattern is not null;
+            || DefinitionPattern is not null || KindPattern is not null || PrNumber is not null;
 
         public void Clear()
         {
@@ -369,6 +394,7 @@ public sealed class TestBrowser
             RepoPattern = null;
             DefinitionPattern = null;
             KindPattern = null;
+            PrNumber = null;
         }
 
         public void ParseExpression(string expression)
@@ -385,7 +411,13 @@ public sealed class TestBrowser
                     DefinitionPattern = part[4..];
                 else if (part.StartsWith("kind:", StringComparison.OrdinalIgnoreCase))
                     KindPattern = part[5..];
-            }
+                else if (part.StartsWith("pr:", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (int.TryParse(part[3..], out var pr))
+                    {
+                        PrNumber = pr;
+                    }
+                }            }
         }
 
         public override string ToString()
@@ -395,6 +427,7 @@ public sealed class TestBrowser
             if (RepoPattern is not null) parts.Add($"repo:{RepoPattern}");
             if (DefinitionPattern is not null) parts.Add($"def:{DefinitionPattern}");
             if (KindPattern is not null) parts.Add($"kind:{KindPattern}");
+            if (PrNumber is not null) parts.Add($"pr:{PrNumber}");
             return parts.Count > 0 ? string.Join(" ", parts) : "(none)";
         }
 
