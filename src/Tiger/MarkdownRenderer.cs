@@ -39,13 +39,13 @@ public static class MarkdownRenderer
         }
     }
 
-    private static bool IsTableRow(string line)
+    internal static bool IsTableRow(string line)
     {
         var trimmed = line.Trim();
         return trimmed.StartsWith('|') && trimmed.EndsWith('|') && trimmed.Count(c => c == '|') >= 2;
     }
 
-    private static bool IsTableSeparator(string line)
+    internal static bool IsTableSeparator(string line)
     {
         var trimmed = line.Trim();
         if (!trimmed.StartsWith('|') || !trimmed.EndsWith('|'))
@@ -58,7 +58,7 @@ public static class MarkdownRenderer
         return cells.All(c => Regex.IsMatch(c.Trim(), @"^:?-+:?$"));
     }
 
-    private static string[] SplitTableRow(string line)
+    internal static string[] SplitTableRow(string line)
     {
         var trimmed = line.Trim();
         // Remove leading and trailing |
@@ -112,6 +112,40 @@ public static class MarkdownRenderer
 
         AnsiConsole.Write(table);
         return i;
+    }
+
+    /// <summary>
+    /// Parses a markdown table into headers and rows. Returns the parsed data
+    /// and the index of the first line after the table. Testable without a console.
+    /// </summary>
+    internal static (string[] Headers, List<string[]> Rows, int NextIndex) ParseTable(string[] lines, int startIndex)
+    {
+        var headers = SplitTableRow(lines[startIndex].TrimEnd('\r'))
+            .Select(h => h.Trim())
+            .ToArray();
+
+        var i = startIndex + 2; // skip separator
+        var rows = new List<string[]>();
+
+        while (i < lines.Length)
+        {
+            var trimmed = lines[i].TrimEnd('\r');
+            if (!IsTableRow(trimmed))
+            {
+                break;
+            }
+
+            var cells = SplitTableRow(trimmed);
+            var row = new string[headers.Length];
+            for (var c = 0; c < headers.Length; c++)
+            {
+                row[c] = c < cells.Length ? cells[c].Trim() : "";
+            }
+            rows.Add(row);
+            i++;
+        }
+
+        return (headers, rows, i);
     }
 
     /// <summary>

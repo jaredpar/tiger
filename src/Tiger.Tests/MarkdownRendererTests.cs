@@ -155,4 +155,146 @@ public class MarkdownRendererTests
 
         Assert.Contains(lines, l => l.Contains("[blue]•[/]") && l.Contains("Asterisk bullet"));
     }
+
+    [Fact]
+    public void IsTableRow_ValidRows()
+    {
+        Assert.True(MarkdownRenderer.IsTableRow("| A | B |"));
+        Assert.True(MarkdownRenderer.IsTableRow("| A | B | C |"));
+        Assert.True(MarkdownRenderer.IsTableRow("|A|B|"));
+    }
+
+    [Fact]
+    public void IsTableRow_InvalidRows()
+    {
+        Assert.False(MarkdownRenderer.IsTableRow("not a table"));
+        Assert.False(MarkdownRenderer.IsTableRow("| only one pipe"));
+        Assert.False(MarkdownRenderer.IsTableRow("no pipes here"));
+    }
+
+    [Fact]
+    public void IsTableSeparator_ValidSeparators()
+    {
+        Assert.True(MarkdownRenderer.IsTableSeparator("|---|---|"));
+        Assert.True(MarkdownRenderer.IsTableSeparator("| --- | --- |"));
+        Assert.True(MarkdownRenderer.IsTableSeparator("|:---|---:|"));
+        Assert.True(MarkdownRenderer.IsTableSeparator("|:---:|:---:|"));
+    }
+
+    [Fact]
+    public void IsTableSeparator_InvalidSeparators()
+    {
+        Assert.False(MarkdownRenderer.IsTableSeparator("| A | B |"));
+        Assert.False(MarkdownRenderer.IsTableSeparator("not a separator"));
+        Assert.False(MarkdownRenderer.IsTableSeparator("| text | --- |"));
+    }
+
+    [Fact]
+    public void SplitTableRow_SplitsCells()
+    {
+        var cells = MarkdownRenderer.SplitTableRow("| A | B | C |");
+
+        Assert.Equal(3, cells.Length);
+        Assert.Equal(" A ", cells[0]);
+        Assert.Equal(" B ", cells[1]);
+        Assert.Equal(" C ", cells[2]);
+    }
+
+    [Fact]
+    public void ParseTable_BasicTable()
+    {
+        var lines = new[]
+        {
+            "| Metric | Value |",
+            "|--------|-------|",
+            "| Success rate | 50% |",
+            "| Total | 10 |",
+        };
+
+        var (headers, rows, nextIndex) = MarkdownRenderer.ParseTable(lines, 0);
+
+        Assert.Equal(2, headers.Length);
+        Assert.Equal("Metric", headers[0]);
+        Assert.Equal("Value", headers[1]);
+        Assert.Equal(2, rows.Count);
+        Assert.Equal("Success rate", rows[0][0]);
+        Assert.Equal("50%", rows[0][1]);
+        Assert.Equal("Total", rows[1][0]);
+        Assert.Equal("10", rows[1][1]);
+        Assert.Equal(4, nextIndex);
+    }
+
+    [Fact]
+    public void ParseTable_StopsAtNonTableRow()
+    {
+        var lines = new[]
+        {
+            "| A | B |",
+            "|---|---|",
+            "| 1 | 2 |",
+            "",
+            "Some other text",
+        };
+
+        var (headers, rows, nextIndex) = MarkdownRenderer.ParseTable(lines, 0);
+
+        Assert.Equal(2, headers.Length);
+        Assert.Single(rows);
+        Assert.Equal(3, nextIndex);
+    }
+
+    [Fact]
+    public void ParseTable_FewerCellsThanHeaders()
+    {
+        var lines = new[]
+        {
+            "| A | B | C |",
+            "|---|---|---|",
+            "| 1 | 2 |",
+        };
+
+        var (headers, rows, nextIndex) = MarkdownRenderer.ParseTable(lines, 0);
+
+        Assert.Equal(3, headers.Length);
+        Assert.Single(rows);
+        Assert.Equal("1", rows[0][0]);
+        Assert.Equal("2", rows[0][1]);
+        Assert.Equal("", rows[0][2]);
+    }
+
+    [Fact]
+    public void ParseTable_InlineMarkdownInCells()
+    {
+        var lines = new[]
+        {
+            "| Name | Status |",
+            "|------|--------|",
+            "| **bold** | `code` |",
+        };
+
+        var (_, rows, _) = MarkdownRenderer.ParseTable(lines, 0);
+
+        // ParseTable returns raw text (no markup transformation)
+        Assert.Equal("**bold**", rows[0][0]);
+        Assert.Equal("`code`", rows[0][1]);
+    }
+
+    [Fact]
+    public void ParseTable_StartingAtOffset()
+    {
+        var lines = new[]
+        {
+            "Some preamble",
+            "| X | Y |",
+            "|---|---|",
+            "| 1 | 2 |",
+        };
+
+        var (headers, rows, nextIndex) = MarkdownRenderer.ParseTable(lines, 1);
+
+        Assert.Equal(2, headers.Length);
+        Assert.Equal("X", headers[0]);
+        Assert.Single(rows);
+        Assert.Equal(4, nextIndex);
+    }
 }
