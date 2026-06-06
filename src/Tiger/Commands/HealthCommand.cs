@@ -96,9 +96,9 @@ public sealed class HealthCommand : AsyncCommand
 
             var menuItems = new List<string>
             {
-                $"[blue](R)[/] Re-run health analysis",
-                $"[blue](G)[/] Create public gist",
-                $"[blue](V)[/] View agent runs",
+                $"[blue]R[/]e-run health analysis",
+                $"[blue]G[/]ist (create public)",
+                $"[blue]V[/]iew agent runs",
             };
 
             var extraKeys = new Dictionary<ConsoleKey, int>
@@ -244,7 +244,7 @@ public sealed class HealthCommand : AsyncCommand
 
         var menuItems = new List<string>
         {
-            $"[blue](B)[/] Back",
+            $"[blue]B[/]ack",
         };
 
         var extraKeys = new Dictionary<ConsoleKey, int>

@@ -108,7 +108,13 @@ public sealed class BuildBrowser
             AnsiConsole.Clear();
             AnsiConsole.MarkupLine("[bold underline]Builds[/]");
             if (_filter.IsActive)
+            {
                 AnsiConsole.MarkupLine($"Filter: {Markup.Escape(_filter.ToString())}");
+            }
+            else
+            {
+                AnsiConsole.MarkupLine("[dim]Filter: (none)[/]");
+            }
             AnsiConsole.WriteLine();
 
             var builds = QueryBuilds();
@@ -118,7 +124,7 @@ public sealed class BuildBrowser
                 AnsiConsole.MarkupLine(_filter.IsActive
                     ? "[yellow]No builds match the current filter.[/]"
                     : "[yellow]No builds ingested yet.[/]");
-                AnsiConsole.MarkupLine("  [blue]E[/] Edit filter   [blue]F[/] Filter menu   [blue]Esc[/] Back");
+                AnsiConsole.MarkupLine("  [blue]E[/]dit filter   [blue]F[/]ilter menu   [blue]Esc[/] Back");
 
                 var emptyKey = Console.ReadKey(true);
                 if (emptyKey.Key == ConsoleKey.E)
@@ -168,8 +174,8 @@ public sealed class BuildBrowser
             _lastBuilds = builds;
 
             var hotkeys = _filter.IsActive
-                ? "[blue]E[/] Edit filter   [blue]F[/] Filter menu   [blue]C[/] Clear   [blue]H[/] Help"
-                : "[blue]E[/] Edit filter   [blue]F[/] Filter menu   [blue]H[/] Help";
+                ? "[blue]E[/]dit filter   [blue]F[/]ilter menu   [blue]C[/]lear   [blue]H[/]elp"
+                : "[blue]E[/]dit filter   [blue]F[/]ilter menu   [blue]H[/]elp";
 
             var selected = BrowserUI.SelectWithEscape("Select a build:", choices,
                 extraKeys: new Dictionary<ConsoleKey, int> {
@@ -344,14 +350,14 @@ public sealed class BuildBrowser
         AnsiConsole.MarkupLine("[bold underline]Set Filter[/]");
         AnsiConsole.MarkupLine($"[dim]Current: {Markup.Escape(_filter.ToString())}[/]");
         AnsiConsole.WriteLine();
-        AnsiConsole.MarkupLine("  [blue]R[/] Filter by repository");
-        AnsiConsole.MarkupLine("  [blue]D[/] Filter by definition");
-        AnsiConsole.MarkupLine("  [blue]I[/] Filter by build ID");
-        AnsiConsole.MarkupLine("  [blue]O[/] Filter by outcome (failed, succeeded, partiallySucceeded)");
-        AnsiConsole.MarkupLine("  [blue]K[/] Filter by kind (pr, ci)");
-        AnsiConsole.MarkupLine("  [blue]B[/] Filter by branch");
-        AnsiConsole.MarkupLine("  [blue]P[/] Filter by PR number");
-        AnsiConsole.MarkupLine("  [blue]C[/] Clear all filters");
+        AnsiConsole.MarkupLine("  [blue]R[/]epository");
+        AnsiConsole.MarkupLine("  [blue]D[/]efinition");
+        AnsiConsole.MarkupLine("  Build [blue]I[/]D");
+        AnsiConsole.MarkupLine("  [blue]O[/]utcome (failed, succeeded, partiallySucceeded)");
+        AnsiConsole.MarkupLine("  [blue]K[/]ind (pr, ci)");
+        AnsiConsole.MarkupLine("  [blue]B[/]ranch");
+        AnsiConsole.MarkupLine("  [blue]P[/]R number");
+        AnsiConsole.MarkupLine("  [blue]C[/]lear all filters");
         AnsiConsole.MarkupLine("  [blue]Esc[/] Cancel");
 
         var key = Console.ReadKey(true);
@@ -702,10 +708,10 @@ public sealed class BuildBrowser
         var canNext = buildIndex >= 0 && buildIndex < _lastBuilds.Count - 1;
         var canPrev = buildIndex > 0;
         AnsiConsole.MarkupLine("[bold]Navigation:[/]");
-        AnsiConsole.MarkupLine("  [blue]T[/] Tests   [blue]J[/] Jobs   [blue]H[/] Helix   [blue]A[/] Analysis   [blue]B[/] Back" +
-            (canForward ? "   [blue]F[/] Forward" : "") +
-            (canNext ? "   [blue]N[/] Next" : "") +
-            (canPrev ? "   [blue]P[/] Prev" : ""));
+        AnsiConsole.MarkupLine("  [blue]T[/]ests   [blue]J[/]obs   [blue]H[/]elix   [blue]A[/]nalysis   [blue]B[/]ack" +
+            (canForward ? "   [blue]F[/]orward" : "") +
+            (canNext ? "   [blue]N[/]ext" : "") +
+            (canPrev ? "   [blue]P[/]rev" : ""));
 
         return ReadNavKey(page);
     }
@@ -936,7 +942,7 @@ public sealed class BuildBrowser
         }
 
         AnsiConsole.MarkupLine("[bold]Navigation:[/]");
-        AnsiConsole.MarkupLine("  [blue]B[/] View builds with this failure   [blue]Esc[/] Back");
+        AnsiConsole.MarkupLine("  [blue]B[/]uilds with this failure   [blue]Esc[/] Back");
 
         while (true)
         {
@@ -1117,8 +1123,8 @@ public sealed class BuildBrowser
             }
 
             // Hotkey menu at the bottom
-            var errorsLabel = errorsOnly ? "[blue]E[/] Show all" : "[blue]E[/] Errors only";
-            var truncateLabel = truncate ? "[blue]T[/] Full messages" : "[blue]T[/] Truncate";
+            var errorsLabel = errorsOnly ? "[blue]E[/]rrors: showing" : "[blue]E[/]rrors only";
+            var truncateLabel = truncate ? "[blue]T[/]runcate: off" : "[blue]T[/]runcate: on";
             AnsiConsole.MarkupLine($"  {errorsLabel}   {truncateLabel}   [blue]Esc[/] Back");
 
             var key = Console.ReadKey(true);

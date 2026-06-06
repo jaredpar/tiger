@@ -26,10 +26,10 @@ public sealed class ConfigEditor
     {
         var menuItems = new List<string>
         {
-            "[blue](A)[/] Add source (org/project)",
-            "[blue](R)[/] Add repository to a source",
-            "[blue](D)[/] Remove source",
-            "[blue](X)[/] Remove repository from a source",
+            "[blue]A[/]dd source (org/project)",
+            "[blue]R[/]epository — add to a source",
+            "[blue]D[/]elete source",
+            "Remove repository from a source ([blue]X[/])",
         };
         var hotkeys = new Dictionary<ConsoleKey, int>
         {

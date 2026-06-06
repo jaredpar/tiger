@@ -10,11 +10,15 @@ public sealed class AnalysisBrowser
 {
     private readonly TigerDatabase _db;
     private readonly BuildAnalysisService _analysisService;
+    private readonly AzdoClientFactory _clientFactory;
+    private readonly string _configDirectory;
 
-    public AnalysisBrowser(TigerDatabase db, BuildAnalysisService analysisService)
+    public AnalysisBrowser(TigerDatabase db, BuildAnalysisService analysisService, AzdoClientFactory clientFactory, string configDirectory)
     {
         _db = db;
         _analysisService = analysisService;
+        _clientFactory = clientFactory;
+        _configDirectory = configDirectory;
     }
 
     public void Browse()
@@ -120,16 +124,18 @@ public sealed class AnalysisBrowser
             // Menu: View Log, Re-run, Force full analysis, Back
             var menuItems = new List<string>
             {
-                $"[blue](R)[/] Re-run analysis",
-                $"[blue](F)[/] Force full analysis (skip known issue check)",
-                $"[blue](L)[/] View full log",
+                $"[blue]R[/]e-run analysis",
+                $"[blue]F[/]orce full analysis (skip known issue check)",
+                $"[blue]V[/]iew full log",
+                $"[blue]B[/]uild detail",
             };
 
             var extraKeys = new Dictionary<ConsoleKey, int>
             {
                 [ConsoleKey.R] = 0,
                 [ConsoleKey.F] = 1,
-                [ConsoleKey.L] = 2,
+                [ConsoleKey.V] = 2,
+                [ConsoleKey.B] = 3,
             };
 
             var menuChoice = BrowserUI.SelectWithEscape("", menuItems, useMarkup: true, extraKeys: extraKeys);
@@ -161,6 +167,10 @@ public sealed class AnalysisBrowser
                     continue;
                 case 2: // View log
                     ShowFullLog(analysis);
+                    continue;
+                case 3: // Build detail
+                    var buildBrowser = new BuildBrowser(_db, _clientFactory, _configDirectory, _analysisService);
+                    buildBrowser.BrowseBuild(analysis.Organization, analysis.Project, analysis.BuildId);
                     continue;
                 default: // Escape
                     return;
@@ -195,7 +205,7 @@ public sealed class AnalysisBrowser
 
         var menuItems = new List<string>
         {
-            $"[blue](B)[/] Back",
+            $"[blue]B[/]ack",
         };
 
         var extraKeys = new Dictionary<ConsoleKey, int>

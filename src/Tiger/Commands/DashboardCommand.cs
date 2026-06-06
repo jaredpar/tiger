@@ -85,13 +85,13 @@ public sealed class DashboardCommand : AsyncCommand
     {
         var menuLabels = new[]
         {
-            $"[blue](B)[/] {MenuBuilds}",
-            $"[blue](T)[/] {MenuTests}",
-            $"[blue](H)[/] {MenuHealth}",
-            $"[blue](A)[/] {MenuAnalysis}",
-            $"[blue](C)[/] {MenuConfig}",
-            $"[blue](S)[/] {MenuStatus}",
-            $"[blue](Q)[/] {MenuQuit}",
+            $"[blue]B[/]uilds",
+            $"[blue]T[/]ests",
+            $"[blue]H[/]ealth",
+            $"[blue]A[/]nalysis",
+            $"[blue]C[/]onfiguration",
+            $"[blue]S[/]tatus",
+            $"[blue]Q[/]uit",
         };
 
         var selected = 0;
@@ -175,7 +175,7 @@ public sealed class DashboardCommand : AsyncCommand
                     await healthCmd.RunAsync(ct);
                     break;
                 case MenuAnalysis:
-                    var analysisBrowser = new AnalysisBrowser(db, analysisAgent);
+                    var analysisBrowser = new AnalysisBrowser(db, analysisAgent, clientFactory, tigerContext.ConfigDirectory);
                     analysisBrowser.Browse();
                     break;
                 case MenuConfig:
@@ -229,7 +229,7 @@ public sealed class DashboardCommand : AsyncCommand
 
             RenderLogEntries(visible);
             AnsiConsole.WriteLine();
-            AnsiConsole.MarkupLine("  [blue]E[/] Toggle errors   [blue]↑/↓[/] Scroll   [blue]End[/] Latest   [blue]Esc[/] Back");
+            AnsiConsole.MarkupLine("  [blue]E[/]rrors toggle   [blue]↑/↓[/] Scroll   [blue]End[/] Latest   [blue]Esc[/] Back");
         }
 
         Render();

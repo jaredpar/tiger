@@ -30,7 +30,13 @@ public sealed class TestBrowser
             AnsiConsole.Clear();
             AnsiConsole.MarkupLine("[bold underline]Test Failures[/]");
             if (_filter.IsActive)
+            {
                 AnsiConsole.MarkupLine($"Filter: {Markup.Escape(_filter.ToString())}");
+            }
+            else
+            {
+                AnsiConsole.MarkupLine("[dim]Filter: (none)[/]");
+            }
             AnsiConsole.WriteLine();
 
             var tests = QueryTests();
@@ -40,7 +46,7 @@ public sealed class TestBrowser
                 AnsiConsole.MarkupLine(_filter.IsActive
                     ? "[yellow]No test failures match the current filter.[/]"
                     : "[yellow]No test failures recorded yet.[/]");
-                AnsiConsole.MarkupLine("  [blue]E[/] Edit filter   [blue]F[/] Filter menu   [blue]Esc[/] Back");
+                AnsiConsole.MarkupLine("  [blue]E[/]dit filter   [blue]F[/]ilter menu   [blue]Esc[/] Back");
 
                 var emptyKey = Console.ReadKey(true);
                 if (emptyKey.Key == ConsoleKey.E) { EditFilter(); continue; }
@@ -60,8 +66,8 @@ public sealed class TestBrowser
             }).ToList();
 
             var hotkeys = _filter.IsActive
-                ? "[blue]E[/] Edit filter   [blue]F[/] Filter menu   [blue]C[/] Clear   [blue]H[/] Help"
-                : "[blue]E[/] Edit filter   [blue]F[/] Filter menu   [blue]H[/] Help";
+                ? "[blue]E[/]dit filter   [blue]F[/]ilter menu   [blue]C[/]lear   [blue]H[/]elp"
+                : "[blue]E[/]dit filter   [blue]F[/]ilter menu   [blue]H[/]elp";
 
             var selected = BrowserUI.SelectWithEscape("Select a test:", choices,
                 extraKeys: new Dictionary<ConsoleKey, int> {
@@ -102,7 +108,7 @@ public sealed class TestBrowser
             BrowserUI.RenderTestDetail(info);
 
             AnsiConsole.MarkupLine("[bold]Navigation:[/]");
-            AnsiConsole.MarkupLine("  [blue]B[/] View builds with this failure   [blue]Esc[/] Back");
+            AnsiConsole.MarkupLine("  [blue]B[/]uilds with this failure   [blue]Esc[/] Back");
 
             while (true)
             {
@@ -287,12 +293,12 @@ public sealed class TestBrowser
         AnsiConsole.MarkupLine("[bold underline]Set Filter[/]");
         AnsiConsole.MarkupLine($"[dim]Current: {Markup.Escape(_filter.ToString())}[/]");
         AnsiConsole.WriteLine();
-        AnsiConsole.MarkupLine("  [blue]N[/] Filter by test name");
-        AnsiConsole.MarkupLine("  [blue]R[/] Filter by repository");
-        AnsiConsole.MarkupLine("  [blue]D[/] Filter by definition");
-        AnsiConsole.MarkupLine("  [blue]K[/] Filter by kind (pr, ci)");
-        AnsiConsole.MarkupLine("  [blue]P[/] Filter by PR number");
-        AnsiConsole.MarkupLine("  [blue]C[/] Clear all filters");
+        AnsiConsole.MarkupLine("  [blue]N[/]ame filter");
+        AnsiConsole.MarkupLine("  [blue]R[/]epository");
+        AnsiConsole.MarkupLine("  [blue]D[/]efinition");
+        AnsiConsole.MarkupLine("  [blue]K[/]ind (pr, ci)");
+        AnsiConsole.MarkupLine("  [blue]P[/]R number");
+        AnsiConsole.MarkupLine("  [blue]C[/]lear all filters");
         AnsiConsole.MarkupLine("  [blue]Esc[/] Cancel");
 
         var key = Console.ReadKey(true);

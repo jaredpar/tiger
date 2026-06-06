@@ -51,6 +51,14 @@ pass before presenting changes for review.
 
 ## UI Conventions
 
-- **Menus** use `BrowserUI.SelectWithEscape` with hotkey support (the `extraKeys` parameter). Menu items are rendered with markup showing the hotkey: `[blue](X)[/] Label`. This gives both arrow-key scrolling and single-keypress shortcuts.
+- **Menus** use `BrowserUI.SelectWithEscape` with hotkey support (the `extraKeys` parameter). Menu items embed the hotkey letter in blue within the label text: `[blue]E[/]dit filter`. This gives both arrow-key scrolling and single-keypress shortcuts.
+- Inline hotkey bars (e.g. `[blue]T[/]ests   [blue]J[/]obs   [blue]Esc[/] Back`) follow the same format.
+- **All menu locations** (update all when changing the format convention):
+  - `DashboardCommand.cs` — main menu, status view hotkey bar
+  - `BuildBrowser.cs` — build list hotkey bar, empty-list hotkey bar, filter menu, filter help, build detail hotkey bar, test failure hotkey bar, timeline issues hotkey bar
+  - `TestBrowser.cs` — test list hotkey bar, empty-list hotkey bar, filter menu, test detail hotkey bar
+  - `AnalysisBrowser.cs` — analysis detail menu, full log menu
+  - `HealthCommand.cs` — state page menu, run detail menu
+  - `ConfigEditor.cs` — config menu
 - **Escape** always means "go back" or "cancel" in any interactive context.
 - **if/try/catch** bodies and braces must be on separate lines — never on the same line as the keyword.
