@@ -240,6 +240,65 @@ public sealed class TaskIngestionService : IDisposable
         {
             _log?.Info("Worker", $"  Build #{task.BuildId} — tests complete (no failures)");
         }
+
+        // Unblock the helix task now that test data is available.
+        // If there are helix work items to fetch, move it to 'pending'.
+        // Otherwise mark it complete immediately.
+        UnblockHelixTask(task.Organization, task.BuildId);
+    }
+
+    /// <summary>
+    /// Transitions the helix ingestion task from 'blocked' to either 'pending'
+    /// (if there are helix work items to fetch) or 'complete' (if there are none).
+    /// Called after test ingestion finishes so the helix task can see test_results.
+    /// </summary>
+    private void UnblockHelixTask(string organization, int buildId)
+    {
+        var hasHelixWorkItems = _db.WithCommand(cmd =>
+        {
+            cmd.CommandText = """
+                SELECT 1
+                FROM test_results tr
+                JOIN test_runs trn ON tr.organization = trn.organization AND tr.run_id = trn.run_id
+                WHERE trn.organization = @org AND trn.build_id = @buildId
+                  AND tr.helix_job_name IS NOT NULL AND tr.helix_work_item_name IS NOT NULL
+                LIMIT 1
+                """;
+            cmd.Parameters.AddWithValue("@org", organization);
+            cmd.Parameters.AddWithValue("@buildId", buildId);
+            return cmd.ExecuteScalar() is not null;
+        });
+
+        if (hasHelixWorkItems)
+        {
+            _db.WithCommand(cmd =>
+            {
+                cmd.CommandText = """
+                    UPDATE build_ingestion_tasks
+                    SET status = 'pending'
+                    WHERE organization = @org AND build_id = @buildId
+                      AND task_type = 'helix' AND status = 'blocked'
+                    """;
+                cmd.Parameters.AddWithValue("@org", organization);
+                cmd.Parameters.AddWithValue("@buildId", buildId);
+                cmd.ExecuteNonQuery();
+            });
+        }
+        else
+        {
+            _db.WithCommand(cmd =>
+            {
+                cmd.CommandText = """
+                    UPDATE build_ingestion_tasks
+                    SET status = 'complete', is_complete = 1, completed_time = datetime('now')
+                    WHERE organization = @org AND build_id = @buildId
+                      AND task_type = 'helix' AND status = 'blocked'
+                    """;
+                cmd.Parameters.AddWithValue("@org", organization);
+                cmd.Parameters.AddWithValue("@buildId", buildId);
+                cmd.ExecuteNonQuery();
+            });
+        }
     }
 
     private async Task ProcessTimelineAsync(AzdoClient client, IngestionTask task, CancellationToken ct)
@@ -460,13 +519,6 @@ public sealed class TaskIngestionService : IDisposable
                 WHERE t.is_complete = 0
                   AND t.status IN ('pending', 'failed')
                   AND (t.next_retry_time IS NULL OR t.next_retry_time <= datetime('now'))
-                  AND (t.task_type != 'helix' OR EXISTS (
-                      SELECT 1 FROM build_ingestion_tasks dep
-                      WHERE dep.organization = t.organization
-                        AND dep.build_id = t.build_id
-                        AND dep.task_type = 'tests'
-                        AND dep.is_complete = 1
-                  ))
                 ORDER BY t.build_id DESC, t.task_type ASC
                 LIMIT 20
                 """;

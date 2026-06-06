@@ -111,7 +111,8 @@ public sealed class BuildIngestionService
         foreach (var taskType in taskTypes)
         {
             var isSkipped = isCanceled && taskType == "timeline";
-            var status = isSkipped ? "complete" : "pending";
+            var isBlocked = taskType == "helix";
+            var status = isSkipped ? "complete" : isBlocked ? "blocked" : "pending";
             var isComplete = isSkipped ? 1 : 0;
             using var cmd = conn.CreateCommand();
             cmd.Transaction = tx;

@@ -90,9 +90,13 @@ Tracks async ingestion of detailed data per build.
 | organization | TEXT | AzDO organization |
 | build_id | INTEGER | FK to builds |
 | task_type | TEXT | "tests", "timeline", "helix", or "pr_info" |
-| status | TEXT | "pending", "running", "complete", "failed", "abandoned" |
+| status | TEXT | "pending", "blocked", "running", "complete", "failed", "abandoned" |
+| is_complete | INTEGER | 1 when task is terminal (complete or abandoned), 0 otherwise. A build is fully ingested when all its tasks have is_complete = 1. |
 | attempts | INTEGER | Number of attempts so far |
 | last_error | TEXT | Last error message if failed |
+| last_attempt_time | TEXT | ISO 8601 time of last attempt |
+| next_retry_time | TEXT | ISO 8601 time when a failed task can be retried |
+| completed_time | TEXT | ISO 8601 time when the task completed |
 
 Primary key: `(organization, build_id, task_type)`
 
@@ -272,7 +276,7 @@ ORDER BY b.finish_time DESC;
 - Times are stored as ISO 8601 strings in UTC
 - Only failed test results are stored (not passing tests)
 - The `build_ingestion_tasks` table shows whether test/timeline/helix data is available for a build
-- Helix ingestion only runs after test ingestion is complete
+- Helix ingestion starts as "blocked" and transitions to "pending" (or "complete" if no helix work items) after test ingestion finishes
 - Known issues are refreshed every 15 minutes; closed issues are kept for 7 days before purging
 - Use `LIKE '%pattern%'` for fuzzy matching on test names, definition names, etc.
 - PR builds have `source_branch` like `refs/pull/123/merge` and `pr_number` set

@@ -26,6 +26,14 @@ Read `docs/architecture.md` for full context on:
 
 Read `docs/todo.md` for the current work item checklist.
 
+## Keeping SKILL.md Files in Sync
+
+When changing the SQLite database schema (adding/removing/renaming tables or columns) or
+adding/changing valid values for existing columns (e.g. new status values), you **must**
+update the corresponding `SKILL.md` files under `src/Tiger/skills/` to stay in sync.
+The `tiger-data/SKILL.md` file documents the full schema and is used by MCP skills to
+query the database correctly.
+
 ## Conventions
 
 - Projects/namespaces use PascalCase: `Tiger`, `Tiger.Core`
