@@ -6,7 +6,7 @@ namespace Tiger;
 /// <summary>
 /// Renders markdown content using Spectre.Console markup.
 /// Handles headers, bullet points, bold/italic/code inline formatting,
-/// horizontal rules, and fenced code blocks.
+/// horizontal rules, fenced code blocks, and tables.
 /// </summary>
 public static class MarkdownRenderer
 {
@@ -15,15 +15,108 @@ public static class MarkdownRenderer
     /// </summary>
     public static void Render(string markdown)
     {
-        foreach (var line in ToMarkupLines(markdown))
+        var lines = markdown.Split('\n');
+        var i = 0;
+
+        while (i < lines.Length)
         {
-            AnsiConsole.MarkupLine(line);
+            var trimmed = lines[i].TrimEnd('\r');
+
+            // Detect table: line starts with | and has at least 2 |
+            if (IsTableRow(trimmed) && i + 1 < lines.Length && IsTableSeparator(lines[i + 1].TrimEnd('\r')))
+            {
+                i = RenderTable(lines, i);
+                continue;
+            }
+
+            // Fall through to line-by-line rendering
+            var markupLines = ToMarkupLines(trimmed);
+            foreach (var ml in markupLines)
+            {
+                AnsiConsole.MarkupLine(ml);
+            }
+            i++;
         }
     }
 
+    private static bool IsTableRow(string line)
+    {
+        var trimmed = line.Trim();
+        return trimmed.StartsWith('|') && trimmed.EndsWith('|') && trimmed.Count(c => c == '|') >= 2;
+    }
+
+    private static bool IsTableSeparator(string line)
+    {
+        var trimmed = line.Trim();
+        if (!trimmed.StartsWith('|') || !trimmed.EndsWith('|'))
+        {
+            return false;
+        }
+
+        // All cells should be dashes (with optional colons for alignment)
+        var cells = SplitTableRow(trimmed);
+        return cells.All(c => Regex.IsMatch(c.Trim(), @"^:?-+:?$"));
+    }
+
+    private static string[] SplitTableRow(string line)
+    {
+        var trimmed = line.Trim();
+        // Remove leading and trailing |
+        if (trimmed.StartsWith('|'))
+        {
+            trimmed = trimmed[1..];
+        }
+        if (trimmed.EndsWith('|'))
+        {
+            trimmed = trimmed[..^1];
+        }
+        return trimmed.Split('|');
+    }
+
     /// <summary>
-    /// Converts markdown to a list of Spectre.Console markup lines.
-    /// Testable without a console.
+    /// Renders a markdown table as a Spectre.Console Table. Returns the index
+    /// of the first line after the table.
+    /// </summary>
+    private static int RenderTable(string[] lines, int startIndex)
+    {
+        var table = new Table().BorderColor(Color.Grey).Border(TableBorder.Rounded).ShowRowSeparators();
+
+        // Header row
+        var headers = SplitTableRow(lines[startIndex].TrimEnd('\r'));
+        foreach (var header in headers)
+        {
+            table.AddColumn(new TableColumn(FormatInlineMarkup(header.Trim())).NoWrap());
+        }
+
+        // Skip separator row
+        var i = startIndex + 2;
+
+        // Data rows
+        while (i < lines.Length)
+        {
+            var trimmed = lines[i].TrimEnd('\r');
+            if (!IsTableRow(trimmed))
+            {
+                break;
+            }
+
+            var cells = SplitTableRow(trimmed);
+            var row = new string[headers.Length];
+            for (var c = 0; c < headers.Length; c++)
+            {
+                row[c] = c < cells.Length ? FormatInlineMarkup(cells[c].Trim()) : "";
+            }
+            table.AddRow(row);
+            i++;
+        }
+
+        AnsiConsole.Write(table);
+        return i;
+    }
+
+    /// <summary>
+    /// Converts a single line of markdown to Spectre.Console markup lines.
+    /// For multi-line input, use <see cref="Render"/>.
     /// </summary>
     public static List<string> ToMarkupLines(string markdown)
     {
