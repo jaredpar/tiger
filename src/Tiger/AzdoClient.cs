@@ -19,11 +19,17 @@ public sealed class AzdoClient
     private string Organization { get; }
     private string Project { get; }
 
-    private AzdoClient(HttpClient httpClient, string organization, string project)
+    /// <summary>
+    /// Shared rate-limit state for this organization. Updated after every HTTP response.
+    /// </summary>
+    public AzdoRateLimitState AzdoRateLimitState { get; }
+
+    private AzdoClient(HttpClient httpClient, string organization, string project, AzdoRateLimitState rateLimitState)
     {
         HttpClient = httpClient;
         Organization = organization;
         Project = project;
+        AzdoRateLimitState = rateLimitState;
     }
 
     /// <summary>
@@ -35,12 +41,21 @@ public sealed class AzdoClient
         string organization = DefaultOrganization,
         string project = DefaultProject)
     {
-        var httpClient = new HttpClient(new BearerTokenHandler(tokenCredential))
+        return Create(tokenCredential, organization, project, new AzdoRateLimitState());
+    }
+
+    internal static AzdoClient Create(
+        TokenCredential tokenCredential,
+        string organization,
+        string project,
+        AzdoRateLimitState rateLimitState)
+    {
+        var httpClient = new HttpClient(new BearerTokenHandler(tokenCredential, rateLimitState))
         {
             BaseAddress = new Uri($"https://dev.azure.com/{organization}/{project}/"),
         };
 
-        return new AzdoClient(httpClient, organization, project);
+        return new AzdoClient(httpClient, organization, project, rateLimitState);
     }
 
     /// <inheritdoc cref="Create"/>
@@ -709,19 +724,48 @@ public sealed class AzdoClient
     {
         private readonly TokenCredential _credential;
         private readonly TokenRequestContext _context = new(["499b84ac-1321-427f-aa17-267ca6975798/.default"]);
+        private readonly AzdoRateLimitState _rateLimitState;
 
-        public BearerTokenHandler(TokenCredential credential)
+        public BearerTokenHandler(TokenCredential credential, AzdoRateLimitState rateLimitState)
             : base(new HttpClientHandler())
         {
             _credential = credential;
+            _rateLimitState = rateLimitState;
         }
 
         protected override async Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request, CancellationToken cancellationToken)
         {
+            // Honor any active Retry-After delay before sending
+            var delay = _rateLimitState.DelayRemaining;
+            if (delay > TimeSpan.Zero)
+            {
+                await Task.Delay(delay, cancellationToken);
+            }
+
             var token = await _credential.GetTokenAsync(_context, cancellationToken);
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token.Token);
-            return await base.SendAsync(request, cancellationToken);
+            var response = await base.SendAsync(request, cancellationToken);
+            _rateLimitState.Update(response.Headers);
+
+            // If rate-limited (429), wait and retry once
+            if (response.StatusCode == System.Net.HttpStatusCode.TooManyRequests)
+            {
+                delay = _rateLimitState.DelayRemaining;
+                if (delay > TimeSpan.Zero)
+                {
+                    await Task.Delay(delay, cancellationToken);
+                }
+
+                // Need a fresh request since the original may have been consumed
+                using var retryRequest = new HttpRequestMessage(request.Method, request.RequestUri);
+                token = await _credential.GetTokenAsync(_context, cancellationToken);
+                retryRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token.Token);
+                response = await base.SendAsync(retryRequest, cancellationToken);
+                _rateLimitState.Update(response.Headers);
+            }
+
+            return response;
         }
     }
 }

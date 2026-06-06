@@ -89,10 +89,11 @@ public sealed class TaskIngestionService : IDisposable
         }
     }
 
-    private const int MaxParallelism = 4;
+    private const int MaxParallelism = 8;
 
     /// <summary>
-    /// Maintains up to <see cref="MaxParallelism"/> in-flight tasks at all times.
+    /// Maintains up to <see cref="MaxParallelism"/> in-flight tasks at all times,
+    /// adapting concurrency based on AzDO rate-limit headers.
     /// When any task completes, its result is handled immediately and a new task
     /// is claimed to fill the slot — no waiting for an entire batch to drain.
     /// </summary>
@@ -124,8 +125,9 @@ public sealed class TaskIngestionService : IDisposable
                     continue;
                 }
 
-                // Fill available slots
-                while (inFlight.Count < MaxParallelism)
+                // Fill available slots up to effective parallelism
+                var effectiveParallelism = GetEffectiveParallelism();
+                while (inFlight.Count < effectiveParallelism)
                 {
                     var task = GetNextReadyTask();
                     if (task is null)
@@ -181,6 +183,44 @@ public sealed class TaskIngestionService : IDisposable
                 consecutiveFailures = 0;
             }
         }
+    }
+
+    /// <summary>
+    /// Computes how many tasks to run concurrently based on AzDO rate-limit state.
+    /// Checks all known organizations and uses the most constrained one.
+    /// </summary>
+    private int GetEffectiveParallelism()
+    {
+        var fraction = GetMinRemainingFraction();
+
+        return fraction switch
+        {
+            > 0.5 => MaxParallelism,
+            > 0.25 => MaxParallelism / 2,
+            > 0.1 => 1,
+            _ => 0,
+        };
+    }
+
+    /// <summary>
+    /// Returns the lowest <see cref="AzdoRateLimitState.RemainingFraction"/> across all
+    /// organizations, representing the most constrained org. Returns 1.0 if no
+    /// rate-limit data has been received yet.
+    /// </summary>
+    private double GetMinRemainingFraction()
+    {
+        var min = 1.0;
+        foreach (var state in _clientFactory.GetAllRateLimitStates())
+        {
+            if (state.ShouldDelay)
+            {
+                return 0;
+            }
+
+            min = Math.Min(min, state.RemainingFraction);
+        }
+
+        return min;
     }
 
     /// <summary>
