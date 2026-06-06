@@ -91,75 +91,61 @@ public sealed class TaskIngestionService : IDisposable
 
     private const int MaxParallelism = 4;
 
+    /// <summary>
+    /// Maintains up to <see cref="MaxParallelism"/> in-flight tasks at all times.
+    /// When any task completes, its result is handled immediately and a new task
+    /// is claimed to fill the slot — no waiting for an entire batch to drain.
+    /// </summary>
     private async Task WorkLoopAsync(CancellationToken ct)
     {
         var consecutiveFailures = 0;
+        var inFlight = new List<Task<IngestionTask?>>(MaxParallelism);
 
         while (!ct.IsCancellationRequested)
         {
             try
             {
-                var tasks = GetReadyTasks();
-
-                if (tasks.Count == 0)
-                {
-                    consecutiveFailures = 0;
-                    await Task.Delay(TimeSpan.FromSeconds(WorkerIntervalSeconds), ct);
-                    continue;
-                }
-
-                // Mark all as running before launching parallel work
-                foreach (var task in tasks)
-                {
-                    MarkTaskRunning(task);
-                }
-
-                using var semaphore = new SemaphoreSlim(MaxParallelism);
-                var taskList = tasks.Select(async task =>
-                {
-                    await semaphore.WaitAsync(ct);
-                    try
-                    {
-                        await ProcessTaskAsync(task, ct);
-                        MarkTaskComplete(task);
-                        Interlocked.Exchange(ref consecutiveFailures, 0);
-                    }
-                    catch (Exception ex) when (ex is not OperationCanceledException)
-                    {
-                        var newAttempts = task.Attempts + 1;
-                        if (newAttempts >= MaxAttempts)
-                        {
-                            MarkTaskAbandoned(task, ex.Message);
-                            _log?.Error("Worker",
-                                $"Task {task.TaskType} for build #{task.BuildId} abandoned after {newAttempts} attempts: {ex.Message}");
-                        }
-                        else
-                        {
-                            var backoffIndex = Math.Min(newAttempts - 1, s_backoffSeconds.Length - 1);
-                            var delaySecs = s_backoffSeconds[backoffIndex];
-                            MarkTaskFailed(task, ex.Message, delaySecs);
-                            _log?.Warning("Worker",
-                                $"Task {task.TaskType} for build #{task.BuildId} failed (attempt {newAttempts}), retry in {delaySecs}s: {ex.Message}");
-                        }
-
-                        Interlocked.Increment(ref consecutiveFailures);
-                    }
-                    finally
-                    {
-                        NotifyIfBuildFullyIngested(task.Organization, task.BuildId);
-                        semaphore.Release();
-                    }
-                }).ToList();
-
-                await Task.WhenAll(taskList);
-
+                // Circuit breaker
                 if (consecutiveFailures >= CircuitBreakerThreshold)
                 {
                     _log?.Warning("Worker",
                         $"Circuit breaker: {consecutiveFailures} consecutive failures, cooling down {CircuitBreakerCooldownSeconds}s");
+
+                    // Drain in-flight work before cooling down
+                    while (inFlight.Count > 0)
+                    {
+                        var done = await Task.WhenAny(inFlight);
+                        inFlight.Remove(done);
+                        HandleCompletion(done);
+                    }
+
                     await Task.Delay(TimeSpan.FromSeconds(CircuitBreakerCooldownSeconds), ct);
                     consecutiveFailures = 0;
+                    continue;
                 }
+
+                // Fill available slots
+                while (inFlight.Count < MaxParallelism)
+                {
+                    var task = GetNextReadyTask();
+                    if (task is null)
+                    {
+                        break;
+                    }
+
+                    inFlight.Add(RunTaskAsync(task, ct));
+                }
+
+                if (inFlight.Count == 0)
+                {
+                    await Task.Delay(TimeSpan.FromSeconds(WorkerIntervalSeconds), ct);
+                    continue;
+                }
+
+                // Wait for any one task to complete, then loop to refill the slot
+                var completed = await Task.WhenAny(inFlight);
+                inFlight.Remove(completed);
+                HandleCompletion(completed);
             }
             catch (OperationCanceledException)
             {
@@ -170,6 +156,148 @@ public sealed class TaskIngestionService : IDisposable
                 _log?.Error("Worker", $"Unexpected error: {ex.Message}");
                 await Task.Delay(TimeSpan.FromSeconds(WorkerIntervalSeconds), ct);
             }
+        }
+
+        // Drain remaining in-flight tasks on shutdown
+        foreach (var remaining in inFlight)
+        {
+            try
+            {
+                await remaining;
+            }
+            catch
+            {
+            }
+        }
+
+        void HandleCompletion(Task<IngestionTask?> task)
+        {
+            if (task.IsFaulted || task.Result is null)
+            {
+                consecutiveFailures++;
+            }
+            else
+            {
+                consecutiveFailures = 0;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Processes a single ingestion task and returns it for post-completion handling.
+    /// Exceptions are captured so the caller can inspect them.
+    /// </summary>
+    private async Task<IngestionTask?> RunTaskAsync(IngestionTask task, CancellationToken ct)
+    {
+        try
+        {
+            MarkRunning();
+            await ProcessTaskAsync(task, ct);
+            MarkComplete();
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            var newAttempts = task.Attempts + 1;
+            if (newAttempts >= MaxAttempts)
+            {
+                MarkAbandoned(ex.Message);
+                _log?.Error("Worker",
+                    $"Task {task.TaskType} for build #{task.BuildId} abandoned after {newAttempts} attempts: {ex.Message}");
+            }
+            else
+            {
+                var backoffIndex = Math.Min(newAttempts - 1, s_backoffSeconds.Length - 1);
+                var delaySecs = s_backoffSeconds[backoffIndex];
+                MarkFailed(ex.Message, delaySecs);
+                _log?.Warning("Worker",
+                    $"Task {task.TaskType} for build #{task.BuildId} failed (attempt {newAttempts}), retry in {delaySecs}s: {ex.Message}");
+            }
+
+            return null; // signals failure
+        }
+        finally
+        {
+            NotifyIfBuildFullyIngested(task.Organization, task.BuildId);
+        }
+
+        return task; // signals success
+
+        void MarkRunning()
+        {
+            _db.WithCommand(cmd =>
+            {
+                cmd.CommandText = """
+                    UPDATE build_ingestion_tasks
+                    SET status = 'running', last_attempt_time = datetime('now')
+                    WHERE organization = @org AND build_id = @buildId AND task_type = @type
+                    """;
+                cmd.Parameters.AddWithValue("@org", task.Organization);
+                cmd.Parameters.AddWithValue("@buildId", task.BuildId);
+                cmd.Parameters.AddWithValue("@type", task.TaskType);
+                cmd.ExecuteNonQuery();
+            });
+        }
+
+        void MarkComplete()
+        {
+            _db.WithCommand(cmd =>
+            {
+                cmd.CommandText = """
+                    UPDATE build_ingestion_tasks
+                    SET status = 'complete', is_complete = 1, completed_time = datetime('now'), last_error = NULL
+                    WHERE organization = @org AND build_id = @buildId AND task_type = @type
+                    """;
+                cmd.Parameters.AddWithValue("@org", task.Organization);
+                cmd.Parameters.AddWithValue("@buildId", task.BuildId);
+                cmd.Parameters.AddWithValue("@type", task.TaskType);
+                cmd.ExecuteNonQuery();
+            });
+        }
+
+        void MarkFailed(string error, int retryDelaySecs)
+        {
+            _db.WithCommand(cmd =>
+            {
+                cmd.CommandText = $"""
+                    UPDATE build_ingestion_tasks
+                    SET status = 'failed',
+                        attempts = attempts + 1,
+                        last_error = @error,
+                        last_attempt_time = datetime('now'),
+                        next_retry_time = datetime('now', '+{retryDelaySecs} seconds')
+                    WHERE organization = @org AND build_id = @buildId AND task_type = @type
+                    """;
+                cmd.Parameters.AddWithValue("@org", task.Organization);
+                cmd.Parameters.AddWithValue("@buildId", task.BuildId);
+                cmd.Parameters.AddWithValue("@type", task.TaskType);
+                cmd.Parameters.AddWithValue("@error", error);
+                cmd.ExecuteNonQuery();
+            });
+        }
+
+        void MarkAbandoned(string error)
+        {
+            _db.WithCommand(cmd =>
+            {
+                cmd.CommandText = """
+                    UPDATE build_ingestion_tasks
+                    SET status = 'abandoned',
+                        is_complete = 1,
+                        attempts = attempts + 1,
+                        last_error = @error,
+                        last_attempt_time = datetime('now')
+                    WHERE organization = @org AND build_id = @buildId AND task_type = @type
+                    """;
+                cmd.Parameters.AddWithValue("@org", task.Organization);
+                cmd.Parameters.AddWithValue("@buildId", task.BuildId);
+                cmd.Parameters.AddWithValue("@type", task.TaskType);
+                cmd.Parameters.AddWithValue("@error", error);
+                cmd.ExecuteNonQuery();
+            });
         }
     }
 
@@ -508,7 +636,7 @@ public sealed class TaskIngestionService : IDisposable
 
     // ── DB helpers ──────────────────────────────────────────────────
 
-    private List<IngestionTask> GetReadyTasks()
+    private IngestionTask? GetNextReadyTask()
     {
         return _db.WithCommand(cmd =>
         {
@@ -520,55 +648,22 @@ public sealed class TaskIngestionService : IDisposable
                   AND t.status IN ('pending', 'failed')
                   AND (t.next_retry_time IS NULL OR t.next_retry_time <= datetime('now'))
                 ORDER BY t.build_id DESC, t.task_type ASC
-                LIMIT 20
+                LIMIT 1
                 """;
 
-            var tasks = new List<IngestionTask>();
             using var reader = cmd.ExecuteReader();
-            while (reader.Read())
+            if (reader.Read())
             {
-                tasks.Add(new IngestionTask(
+                return new IngestionTask(
                     reader.GetString(0),
                     reader.GetString(1),
                     reader.GetInt32(2),
                     reader.GetString(3),
                     reader.GetString(4),
-                    reader.GetInt32(5)));
+                    reader.GetInt32(5));
             }
 
-            return tasks;
-        });
-    }
-
-    private void MarkTaskRunning(IngestionTask task)
-    {
-        _db.WithCommand(cmd =>
-        {
-            cmd.CommandText = """
-                UPDATE build_ingestion_tasks
-                SET status = 'running', last_attempt_time = datetime('now')
-                WHERE organization = @org AND build_id = @buildId AND task_type = @type
-                """;
-            cmd.Parameters.AddWithValue("@org", task.Organization);
-            cmd.Parameters.AddWithValue("@buildId", task.BuildId);
-            cmd.Parameters.AddWithValue("@type", task.TaskType);
-            cmd.ExecuteNonQuery();
-        });
-    }
-
-    private void MarkTaskComplete(IngestionTask task)
-    {
-        _db.WithCommand(cmd =>
-        {
-            cmd.CommandText = """
-                UPDATE build_ingestion_tasks
-                SET status = 'complete', is_complete = 1, completed_time = datetime('now'), last_error = NULL
-                WHERE organization = @org AND build_id = @buildId AND task_type = @type
-                """;
-            cmd.Parameters.AddWithValue("@org", task.Organization);
-            cmd.Parameters.AddWithValue("@buildId", task.BuildId);
-            cmd.Parameters.AddWithValue("@type", task.TaskType);
-            cmd.ExecuteNonQuery();
+            return null;
         });
     }
 
@@ -650,48 +745,6 @@ public sealed class TaskIngestionService : IDisposable
         {
             OnBuildIngested?.Invoke(buildEvent);
         }
-    }
-
-    private void MarkTaskFailed(IngestionTask task, string error, int retryDelaySecs)
-    {
-        _db.WithCommand(cmd =>
-        {
-            cmd.CommandText = $"""
-                UPDATE build_ingestion_tasks
-                SET status = 'failed',
-                    attempts = attempts + 1,
-                    last_error = @error,
-                    last_attempt_time = datetime('now'),
-                    next_retry_time = datetime('now', '+{retryDelaySecs} seconds')
-                WHERE organization = @org AND build_id = @buildId AND task_type = @type
-                """;
-            cmd.Parameters.AddWithValue("@org", task.Organization);
-            cmd.Parameters.AddWithValue("@buildId", task.BuildId);
-            cmd.Parameters.AddWithValue("@type", task.TaskType);
-            cmd.Parameters.AddWithValue("@error", error);
-            cmd.ExecuteNonQuery();
-        });
-    }
-
-    private void MarkTaskAbandoned(IngestionTask task, string error)
-    {
-        _db.WithCommand(cmd =>
-        {
-            cmd.CommandText = """
-                UPDATE build_ingestion_tasks
-                SET status = 'abandoned',
-                    is_complete = 1,
-                    attempts = attempts + 1,
-                    last_error = @error,
-                    last_attempt_time = datetime('now')
-                WHERE organization = @org AND build_id = @buildId AND task_type = @type
-                """;
-            cmd.Parameters.AddWithValue("@org", task.Organization);
-            cmd.Parameters.AddWithValue("@buildId", task.BuildId);
-            cmd.Parameters.AddWithValue("@type", task.TaskType);
-            cmd.Parameters.AddWithValue("@error", error);
-            cmd.ExecuteNonQuery();
-        });
     }
 
     /// <summary>
