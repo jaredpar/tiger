@@ -245,11 +245,30 @@ public static class MarkdownRenderer
     }
 
     /// <summary>
-    /// Handles inline markdown formatting: **bold**, *italic*, `code`.
+    /// Handles inline markdown formatting: [links](url), **bold**, *italic*, `code`.
     /// </summary>
     public static string FormatInlineMarkup(string text)
     {
-        var escaped = Markup.Escape(text);
+        // Extract markdown links before escaping, since Markup.Escape will escape the brackets
+        // Replace [text](url) with a placeholder, escape everything else, then restore
+        var links = new List<(string Placeholder, string Markup)>();
+        var linkPattern = new Regex(@"\[([^\]]+)\]\((https?://[^\s)]+)\)");
+        var withPlaceholders = linkPattern.Replace(text, m =>
+        {
+            var placeholder = $"\x00LINK{links.Count}\x00";
+            var displayText = m.Groups[1].Value;
+            var url = m.Groups[2].Value;
+            links.Add((placeholder, $"[link={url}][blue underline]{Markup.Escape(displayText)}[/][/]"));
+            return placeholder;
+        });
+
+        var escaped = Markup.Escape(withPlaceholders);
+
+        // Restore link placeholders
+        foreach (var (placeholder, markup) in links)
+        {
+            escaped = escaped.Replace(placeholder, markup);
+        }
 
         // Bold: **text** → [bold]text[/]
         escaped = Regex.Replace(escaped, @"\*\*(.+?)\*\*", "[bold]$1[/]");

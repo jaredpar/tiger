@@ -175,8 +175,29 @@ public sealed class HealthAgentService : IDisposable
 
     private async Task EvaluateHealthAsync(string repository, string definition, double lookbackDays, CancellationToken ct)
     {
-        // Skip if no new builds since last health run
-        if (!HasNewBuildsSinceLastRun(repository, definition))
+        await EvaluateHealthCoreAsync(repository, definition, lookbackDays, skipNewBuildCheck: false, ct);
+    }
+
+    /// <summary>
+    /// Manually request a health evaluation for a specific repo/definition.
+    /// Bypasses the "no new builds" check since the user explicitly requested it.
+    /// </summary>
+    public async Task RequestEvaluationAsync(string repository, string definition, CancellationToken ct = default)
+    {
+        var lookbackDays = SelectLookbackWindow(repository, definition);
+        if (lookbackDays is null)
+        {
+            _log?.Info("HealthAgent", $"Cannot evaluate {repository} / {definition} — ingestion not ready yet.");
+            return;
+        }
+
+        await EvaluateHealthCoreAsync(repository, definition, lookbackDays.Value, skipNewBuildCheck: true, ct);
+    }
+
+    private async Task EvaluateHealthCoreAsync(string repository, string definition, double lookbackDays, bool skipNewBuildCheck, CancellationToken ct)
+    {
+        // Skip if no new builds since last health run (unless explicitly requested)
+        if (!skipNewBuildCheck && !HasNewBuildsSinceLastRun(repository, definition))
         {
             _log?.Info("HealthAgent", $"Skipping {repository} / {definition} — no new builds since last run.");
             return;

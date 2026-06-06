@@ -147,6 +147,39 @@ public class MarkdownRendererTests
     }
 
     [Fact]
+    public void InlineLink_RenderedAsSpectreLink()
+    {
+        var result = MarkdownRenderer.FormatInlineMarkup(
+            "See [#40006](https://github.com/dotnet/sdk/issues/40006) for details");
+
+        Assert.Contains("[link=https://github.com/dotnet/sdk/issues/40006]", result);
+        Assert.Contains("[blue underline]#40006[/]", result);
+        Assert.Contains("for details", result);
+    }
+
+    [Fact]
+    public void InlineLink_MultipleLinks()
+    {
+        var result = MarkdownRenderer.FormatInlineMarkup(
+            "[A](https://a.com) and [B](https://b.com)");
+
+        Assert.Contains("[link=https://a.com]", result);
+        Assert.Contains("[link=https://b.com]", result);
+        Assert.Contains("[blue underline]A[/]", result);
+        Assert.Contains("[blue underline]B[/]", result);
+    }
+
+    [Fact]
+    public void InlineLink_WithBoldText()
+    {
+        var result = MarkdownRenderer.FormatInlineMarkup(
+            "**Error** in [build](https://dev.azure.com/build/123)");
+
+        Assert.Contains("[bold]Error[/]", result);
+        Assert.Contains("[link=https://dev.azure.com/build/123]", result);
+    }
+
+    [Fact]
     public void AsteriskBullet_TreatedSameAsDash()
     {
         var md = "* Asterisk bullet";

@@ -43,6 +43,12 @@ query the database correctly.
 - GitHub operations use the user's `gh` CLI auth
 - AzDO auth uses `DefaultAzureCredential`
 
+## Testing
+
+When modifying code that has associated tests (check `src/Tiger.Tests/`), you **must**
+update or add tests to cover your changes. Run `dotnet test --nologo` to verify all tests
+pass before presenting changes for review.
+
 ## UI Conventions
 
 - **Menus** use `BrowserUI.SelectWithEscape` with hotkey support (the `extraKeys` parameter). Menu items are rendered with markup showing the hotkey: `[blue](X)[/] Label`. This gives both arrow-key scrolling and single-keypress shortcuts.

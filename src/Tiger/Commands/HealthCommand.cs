@@ -61,7 +61,7 @@ public sealed class HealthCommand : AsyncCommand
 
             var items = combos.Select(c => $"{c.Repository} / {c.Definition}").ToList();
 
-            var selected = SelectWithEscape("Select a pipeline to view health state:", items);
+            var selected = BrowserUI.SelectWithEscape("Select a pipeline:", items);
             if (selected < 0)
                 return;
 
@@ -93,20 +93,45 @@ public sealed class HealthCommand : AsyncCommand
             }
 
             AnsiConsole.WriteLine();
-            AnsiConsole.MarkupLine("[dim][[G]] Create public gist  [[R]] View agent runs  [[Esc/B]] Back[/]");
 
-            var key = Console.ReadKey(true);
-            switch (key.Key)
+            var menuItems = new List<string>
             {
-                case ConsoleKey.Escape:
-                case ConsoleKey.B:
-                    return;
-                case ConsoleKey.R:
-                    ShowRunsPage(agent, repository, definition);
+                $"[blue](R)[/] Re-run health analysis",
+                $"[blue](G)[/] Create public gist",
+                $"[blue](V)[/] View agent runs",
+            };
+
+            var extraKeys = new Dictionary<ConsoleKey, int>
+            {
+                [ConsoleKey.R] = 0,
+                [ConsoleKey.G] = 1,
+                [ConsoleKey.V] = 2,
+            };
+
+            var menuChoice = BrowserUI.SelectWithEscape("", menuItems, useMarkup: true, extraKeys: extraKeys);
+
+            switch (menuChoice)
+            {
+                case 0:
+                    AnsiConsole.MarkupLine("[dim]Running health analysis...[/]");
+                    try
+                    {
+                        agent.RequestEvaluationAsync(repository, definition).GetAwaiter().GetResult();
+                        AnsiConsole.MarkupLine("[green]Health analysis complete.[/]");
+                    }
+                    catch (Exception ex)
+                    {
+                        AnsiConsole.MarkupLine($"[red]Analysis failed: {Markup.Escape(ex.Message)}[/]");
+                    }
                     break;
-                case ConsoleKey.G:
+                case 1:
                     CreateGist(repository, definition, state);
                     break;
+                case 2:
+                    ShowRunsPage(agent, repository, definition);
+                    break;
+                default:
+                    return;
             }
         }
     }
@@ -188,7 +213,7 @@ public sealed class HealthCommand : AsyncCommand
 
             var items = runs.Select(r => r.Timestamp.Replace("_", " ")).ToList();
 
-            var selected = SelectWithEscape("Select a run to view full log:", items);
+            var selected = BrowserUI.SelectWithEscape("Select a run:", items);
             if (selected < 0)
                 return;
 
@@ -216,88 +241,17 @@ public sealed class HealthCommand : AsyncCommand
         }
 
         AnsiConsole.WriteLine();
-        AnsiConsole.MarkupLine("[dim]Press any key to go back...[/]");
-        Console.ReadKey(true);
-    }
 
-    // ── Selection helper ────────────────────────────────────────────
-
-    /// <summary>
-    /// Arrow-key selection list with Escape/B to go back.
-    /// Returns selected index or -1 if user backs out.
-    /// </summary>
-    private static int SelectWithEscape(string title, List<string> items, int pageSize = 20)
-    {
-        if (items.Count == 0)
-            return -1;
-
-        AnsiConsole.MarkupLine($"[dim]{Markup.Escape(title)}[/]");
-        AnsiConsole.WriteLine();
-
-        var selected = 0;
-        var scrollOffset = 0;
-        var visibleCount = Math.Min(pageSize, items.Count);
-        var startTop = Console.CursorTop;
-
-        while (true)
+        var menuItems = new List<string>
         {
-            Console.SetCursorPosition(0, startTop);
+            $"[blue](B)[/] Back",
+        };
 
-            for (var i = 0; i < visibleCount; i++)
-            {
-                var idx = scrollOffset + i;
-                if (idx >= items.Count)
-                    break;
+        var extraKeys = new Dictionary<ConsoleKey, int>
+        {
+            [ConsoleKey.B] = 0,
+        };
 
-                Console.Write(new string(' ', Console.WindowWidth));
-                Console.SetCursorPosition(0, Console.CursorTop);
-                var text = Markup.Escape(items[idx]);
-                if (idx == selected)
-                {
-                    AnsiConsole.MarkupLine($"  [blue]>[/] [bold]{text}[/]");
-                }
-                else
-                {
-                    AnsiConsole.MarkupLine($"    {text}");
-                }
-            }
-
-            if (items.Count > visibleCount)
-            {
-                Console.Write(new string(' ', Console.WindowWidth));
-                Console.SetCursorPosition(0, Console.CursorTop);
-                AnsiConsole.MarkupLine($"  [dim]({selected + 1}/{items.Count})[/]");
-            }
-
-            Console.Write(new string(' ', Console.WindowWidth));
-            Console.SetCursorPosition(0, Console.CursorTop);
-            AnsiConsole.MarkupLine("  [blue]↑↓[/] Navigate   [blue]Enter[/] Select   [blue]Esc[/] Back");
-
-            var key = Console.ReadKey(true);
-            switch (key.Key)
-            {
-                case ConsoleKey.UpArrow:
-                    if (selected > 0)
-                    {
-                        selected--;
-                        if (selected < scrollOffset)
-                            scrollOffset = selected;
-                    }
-                    break;
-                case ConsoleKey.DownArrow:
-                    if (selected < items.Count - 1)
-                    {
-                        selected++;
-                        if (selected >= scrollOffset + visibleCount)
-                            scrollOffset = selected - visibleCount + 1;
-                    }
-                    break;
-                case ConsoleKey.Enter:
-                    return selected;
-                case ConsoleKey.Escape:
-                case ConsoleKey.B:
-                    return -1;
-            }
-        }
+        BrowserUI.SelectWithEscape("", menuItems, useMarkup: true, extraKeys: extraKeys);
     }
 }

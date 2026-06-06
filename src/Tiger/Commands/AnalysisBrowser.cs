@@ -29,7 +29,7 @@ public sealed class AnalysisBrowser
             if (analyses.Count == 0)
             {
                 AnsiConsole.MarkupLine("[dim]No analyses yet. Failed builds will be analyzed automatically.[/]");
-                AnsiConsole.MarkupLine("[dim]Press any key to go back.[/]");
+                AnsiConsole.MarkupLine("[dim]Press Escape to go back.[/]");
                 Console.ReadKey(true);
                 return;
             }
@@ -177,7 +177,7 @@ public sealed class AnalysisBrowser
         if (analysis.LogPath is null || !File.Exists(analysis.LogPath))
         {
             AnsiConsole.MarkupLine("[dim]No log file available.[/]");
-            AnsiConsole.MarkupLine("[dim]Press any key to go back.[/]");
+            AnsiConsole.MarkupLine("[dim]Press Escape to go back.[/]");
             Console.ReadKey(true);
             return;
         }
@@ -192,8 +192,18 @@ public sealed class AnalysisBrowser
 
         MarkdownRenderer.Render(content);
         AnsiConsole.WriteLine();
-        AnsiConsole.MarkupLine("[dim]Press any key to go back.[/]");
-        Console.ReadKey(true);
+
+        var menuItems = new List<string>
+        {
+            $"[blue](B)[/] Back",
+        };
+
+        var extraKeys = new Dictionary<ConsoleKey, int>
+        {
+            [ConsoleKey.B] = 0,
+        };
+
+        BrowserUI.SelectWithEscape("", menuItems, useMarkup: true, extraKeys: extraKeys);
     }
 
     private static string FormatStatus(string status) => status switch
