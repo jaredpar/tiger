@@ -169,14 +169,17 @@ public sealed class BuildAnalysisService : IDisposable
         // Step 1: Check known issues (unless skipped)
         if (!fullAnalysisCheck)
         {
-            var knownIssueMatches = CheckKnownIssues(org, buildId);
+            var (knownIssueMatches, errorText) = CheckKnownIssues(org, buildId);
             if (knownIssueMatches.Count > 0)
             {
-                var summary = string.Join(", ", knownIssueMatches.Select(m => $"#{m.IssueNumber}: {m.Title}"));
+                var summary = string.Join("\n", knownIssueMatches.Select(m => $"#{m.IssueNumber}: {m.Title}"));
                 _log?.Info("AnalysisAgent", $"  Build #{buildId} matches known issue(s): {summary}");
+
+                var knownIssueLogPath = SaveKnownIssueLog(org, project, definitionName, buildId, knownIssueMatches, errorText);
                 _db.UpdateBuildAnalysis(org, buildId, "skipped",
                     category: "known-issue",
-                    diagnosisSummary: $"Matches known issue(s): {summary}");
+                    diagnosisSummary: $"Matches known issue(s): {summary}",
+                    logPath: knownIssueLogPath);
                 return;
             }
         }
@@ -214,7 +217,7 @@ public sealed class BuildAnalysisService : IDisposable
         _log?.Info("AnalysisAgent", $"  Build #{buildId} analysis complete: {parsed.Category} ({parsed.Confidence})");
     }
 
-    private List<KnownIssueMatch> CheckKnownIssues(string org, int buildId)
+    private (List<KnownIssueMatch> Matches, string ErrorText) CheckKnownIssues(string org, int buildId)
     {
         // Gather all error text from the build: timeline issues + test failures
         var errorText = _db.WithCommand(cmd =>
@@ -246,7 +249,7 @@ public sealed class BuildAnalysisService : IDisposable
         var combinedErrors = errorText + "\n" + testErrors;
         if (string.IsNullOrWhiteSpace(combinedErrors))
         {
-            return [];
+            return ([], "");
         }
 
         // Get repository name for this build
@@ -263,10 +266,10 @@ public sealed class BuildAnalysisService : IDisposable
 
         if (repo is null)
         {
-            return [];
+            return ([], combinedErrors);
         }
 
-        return _knownIssues.FindMatches(repo, combinedErrors);
+        return (_knownIssues.FindMatches(repo, combinedErrors), combinedErrors);
     }
 
     private BuildAnalysisContext GatherContext(
@@ -625,7 +628,7 @@ public sealed class BuildAnalysisService : IDisposable
             var categoryText = nextSection >= 0
                 ? afterCategory[..nextSection].Trim()
                 : afterCategory.Trim();
-            parsed.Category = categoryText.Split('\n')[0].Trim().ToLowerInvariant();
+            parsed.Category = StripMarkdownBold(categoryText.Split('\n')[0].Trim().ToLowerInvariant());
         }
 
         // Extract Confidence
@@ -637,7 +640,7 @@ public sealed class BuildAnalysisService : IDisposable
             var confidenceText = nextSection >= 0
                 ? afterConfidence[..nextSection].Trim()
                 : afterConfidence.Trim();
-            parsed.Confidence = confidenceText.Split('\n')[0].Trim().ToLowerInvariant();
+            parsed.Confidence = StripMarkdownBold(confidenceText.Split('\n')[0].Trim().ToLowerInvariant());
         }
 
         // Extract Diagnosis as the summary
@@ -656,6 +659,52 @@ public sealed class BuildAnalysisService : IDisposable
         }
 
         return parsed;
+    }
+
+    private static string StripMarkdownBold(string text) =>
+        text.Replace("**", "");
+
+    private string SaveKnownIssueLog(
+        string org, string project, string definitionName, int buildId,
+        List<KnownIssueMatch> matches, string errorText)
+    {
+        var logDir = Path.Combine(_logDir, org, project, definitionName);
+        Directory.CreateDirectory(logDir);
+
+        var logPath = Path.Combine(logDir, $"{buildId}.md");
+
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine($"# Known Issue Match: {project}/{definitionName} #{buildId}");
+        sb.AppendLine($"**Date:** {DateTime.UtcNow:yyyy-MM-dd HH:mm:ss} UTC");
+        sb.AppendLine($"**Organization:** {org}");
+        sb.AppendLine();
+        sb.AppendLine("---");
+        sb.AppendLine();
+        sb.AppendLine("## Matched Issues");
+        sb.AppendLine();
+        foreach (var match in matches)
+        {
+            sb.AppendLine($"### #{match.IssueNumber}: {match.Title}");
+            if (match.ErrorMessage is not null)
+            {
+                sb.AppendLine($"- **ErrorMessage:** `{match.ErrorMessage}`");
+            }
+            if (match.ErrorPattern is not null)
+            {
+                sb.AppendLine($"- **ErrorPattern:** `{match.ErrorPattern}`");
+            }
+            sb.AppendLine();
+        }
+        sb.AppendLine("---");
+        sb.AppendLine();
+        sb.AppendLine("## Combined Error Text");
+        sb.AppendLine();
+        sb.AppendLine("```");
+        sb.AppendLine(errorText);
+        sb.AppendLine("```");
+
+        File.WriteAllText(logPath, sb.ToString());
+        return logPath;
     }
 
     private string SaveLog(

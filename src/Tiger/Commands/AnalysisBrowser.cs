@@ -45,9 +45,21 @@ public sealed class AnalysisBrowser
                     "failed" => "[red]✗[/]",
                     _ => "[dim]?[/]",
                 };
-                var category = a.Category is not null ? $"[dim]({a.Category})[/]" : "";
-                var confidence = a.Confidence is not null ? $"[dim]({Markup.Escape(a.Confidence)})[/]" : "";
-                return $"{statusIcon} {Markup.Escape(a.DefinitionName)} #{a.BuildId} {category} {confidence}";
+                var category = a.Category is not null ? $"[dim]({Markup.Escape(a.Category)})[/]" : "";
+                var label = $"{statusIcon} {Markup.Escape(a.DefinitionName)} #{a.BuildId} {category}";
+
+                // Add a brief one-line summary
+                if (a.DiagnosisSummary is not null)
+                {
+                    var firstLine = a.DiagnosisSummary.Split('\n')[0].Trim();
+                    if (firstLine.Length > 80)
+                    {
+                        firstLine = firstLine[..77] + "...";
+                    }
+                    label += $" [dim]— {Markup.Escape(firstLine)}[/]";
+                }
+
+                return label;
             }).ToList();
 
             var selected = BrowserUI.SelectWithEscape("", items, useMarkup: true);
@@ -94,7 +106,7 @@ public sealed class AnalysisBrowser
             if (analysis.DiagnosisSummary is not null)
             {
                 AnsiConsole.MarkupLine("[bold]Diagnosis:[/]");
-                AnsiConsole.WriteLine(analysis.DiagnosisSummary);
+                MarkdownRenderer.Render(analysis.DiagnosisSummary);
                 AnsiConsole.WriteLine();
             }
 
@@ -178,7 +190,7 @@ public sealed class AnalysisBrowser
             content = content[..10000] + "\n\n... (truncated — see full file on disk)";
         }
 
-        AnsiConsole.WriteLine(content);
+        MarkdownRenderer.Render(content);
         AnsiConsole.WriteLine();
         AnsiConsole.MarkupLine("[dim]Press any key to go back.[/]");
         Console.ReadKey(true);

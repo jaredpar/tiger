@@ -203,7 +203,7 @@ public sealed class KnownIssueService : IDisposable
 
                 if (IsMatch(errorText, errorMessage, errorPattern))
                 {
-                    matches.Add(new KnownIssueMatch(repository, issueNumber, title));
+                    matches.Add(new KnownIssueMatch(repository, issueNumber, title, errorMessage, errorPattern));
                 }
             }
 
@@ -213,12 +213,12 @@ public sealed class KnownIssueService : IDisposable
 
     private static bool IsMatch(string errorText, string? errorMessage, string? errorPattern)
     {
-        if (errorMessage is not null)
+        if (!string.IsNullOrWhiteSpace(errorMessage))
         {
             return IsMessageMatch(errorText, errorMessage);
         }
 
-        if (errorPattern is not null)
+        if (!string.IsNullOrWhiteSpace(errorPattern))
         {
             return IsPatternMatch(errorText, errorPattern);
         }
@@ -475,4 +475,6 @@ public sealed record KnownIssueParsed(
 public sealed record KnownIssueMatch(
     string Repository,
     int IssueNumber,
-    string Title);
+    string Title,
+    string? ErrorMessage,
+    string? ErrorPattern);
