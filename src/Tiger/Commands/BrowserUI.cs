@@ -226,6 +226,13 @@ public static class BrowserUI
     /// </summary>
     public static void RenderTestDetail(TestDetailInfo info)
     {
+        // Deadletter banner
+        if (info.IsHelixDeadletter)
+        {
+            AnsiConsole.MarkupLine("[bold red on yellow] ⚠ HELIX DEAD LETTER — Infrastructure failure, not a real test failure [/]");
+            AnsiConsole.WriteLine();
+        }
+
         // Header box
         var headerTable = new Table().Border(TableBorder.Rounded);
         headerTable.AddColumn(new TableColumn("").NoWrap());
@@ -272,6 +279,10 @@ public static class BrowserUI
         AnsiConsole.MarkupLine("[bold]Helix:[/]");
         if (info.HelixJobName is not null)
         {
+            if (info.IsHelixDeadletter)
+            {
+                AnsiConsole.MarkupLine("  [bold red]⚠ DEAD LETTER[/]");
+            }
             AnsiConsole.MarkupLine($"  [bold]Job:[/] {Markup.Escape(info.HelixJobName)}");
             if (info.HelixWorkItemName is not null)
             {
@@ -344,7 +355,8 @@ public static class BrowserUI
         int BuildId, string RunName, int BuildCount,
         string? ErrorMessage, string? StackTrace,
         string? HelixJobName, string? HelixWorkItemName,
-        List<(string Name, string? Uri)>? HelixFiles = null);
+        List<(string Name, string? Uri)>? HelixFiles = null,
+        bool IsHelixDeadletter = false);
 
     /// <summary>
     /// Loads test detail info from the database.
@@ -404,26 +416,36 @@ public static class BrowserUI
             return Convert.ToInt32(cmd.ExecuteScalar());
         });
 
-        // Load helix files if available
+        // Load helix files and deadletter status if available
         List<(string Name, string? Uri)>? helixFiles = null;
+        var isDeadletter = false;
         if (detail.HelixJob is not null && detail.HelixWorkItem is not null)
         {
-            var filesJson = db.WithCommand(cmd =>
+            var helixInfo = db.WithCommand(cmd =>
             {
                 cmd.CommandText = """
-                    SELECT files FROM helix_work_items
+                    SELECT files, is_deadletter FROM helix_work_items
                     WHERE job_name = @job AND work_item_name = @wi
                     """;
                 cmd.Parameters.AddWithValue("@job", detail.HelixJob);
                 cmd.Parameters.AddWithValue("@wi", detail.HelixWorkItem);
-                return cmd.ExecuteScalar() as string;
+                using var reader = cmd.ExecuteReader();
+                if (reader.Read())
+                {
+                    return (
+                        FilesJson: reader.IsDBNull(0) ? null : reader.GetString(0),
+                        IsDeadletter: !reader.IsDBNull(1) && reader.GetInt32(1) != 0);
+                }
+                return (FilesJson: (string?)null, IsDeadletter: false);
             });
 
-            if (!string.IsNullOrWhiteSpace(filesJson))
+            isDeadletter = helixInfo.IsDeadletter;
+
+            if (!string.IsNullOrWhiteSpace(helixInfo.FilesJson))
             {
                 try
                 {
-                    var entries = System.Text.Json.JsonSerializer.Deserialize<List<HelixFileEntry>>(filesJson);
+                    var entries = System.Text.Json.JsonSerializer.Deserialize<List<HelixFileEntry>>(helixInfo.FilesJson);
                     if (entries is { Count: > 0 })
                     {
                         helixFiles = entries.Select(e => (e.FileName ?? "unknown", e.Uri)).ToList();
@@ -437,7 +459,7 @@ public static class BrowserUI
         }
 
         return new TestDetailInfo(testName, org, project, detail.BuildId, detail.RunName, buildCount,
-            detail.ErrorMessage, detail.StackTrace, detail.HelixJob, detail.HelixWorkItem, helixFiles);
+            detail.ErrorMessage, detail.StackTrace, detail.HelixJob, detail.HelixWorkItem, helixFiles, isDeadletter);
     }
 
     /// <summary>

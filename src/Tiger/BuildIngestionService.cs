@@ -174,10 +174,10 @@ public sealed class BuildIngestionService
             cmd.CommandText = """
                 INSERT OR IGNORE INTO test_results
                     (organization, project, run_id, result_id, test_case_title, outcome,
-                     error_message, stack_trace, helix_job_name, helix_work_item_name)
+                     error_message, stack_trace, helix_job_name, helix_work_item_name, is_helix_work_item)
                 VALUES
                     (@org, @proj, @runId, @resultId, @title, @outcome,
-                     @errorMsg, @stack, @helixJob, @helixWi)
+                     @errorMsg, @stack, @helixJob, @helixWi, @isHelixWi)
                 """;
             cmd.Parameters.AddWithValue("@org", organization);
             cmd.Parameters.AddWithValue("@proj", project);
@@ -189,6 +189,7 @@ public sealed class BuildIngestionService
             cmd.Parameters.AddWithValue("@stack", (object?)result.StackTrace ?? DBNull.Value);
             cmd.Parameters.AddWithValue("@helixJob", (object?)result.HelixJobName ?? DBNull.Value);
             cmd.Parameters.AddWithValue("@helixWi", (object?)result.HelixWorkItemName ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@isHelixWi", result.IsHelixWorkItem ? 1 : 0);
             cmd.ExecuteNonQuery();
         });
     }

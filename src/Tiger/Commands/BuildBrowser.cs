@@ -1056,7 +1056,7 @@ public sealed class BuildBrowser
         var helixItems = _db.WithCommand(cmd =>
         {
             cmd.CommandText = """
-                SELECT DISTINCT tr.helix_job_name, tr.helix_work_item_name, hw.state, hw.exit_code, hw.console_output_uri
+                SELECT DISTINCT tr.helix_job_name, tr.helix_work_item_name, hw.state, hw.exit_code, hw.console_output_uri, hw.is_deadletter
                 FROM test_results tr
                 JOIN test_runs r ON tr.organization = r.organization AND tr.run_id = r.run_id
                 LEFT JOIN helix_work_items hw ON tr.helix_job_name = hw.job_name
@@ -1071,7 +1071,7 @@ public sealed class BuildBrowser
             cmd.Parameters.AddWithValue("@proj", page.Project);
             cmd.Parameters.AddWithValue("@buildId", page.BuildId);
 
-            var helixItems = new List<(string Job, string WorkItem, string? State, int? ExitCode, string? ConsoleUri)>();
+            var helixItems = new List<(string Job, string WorkItem, string? State, int? ExitCode, string? ConsoleUri, bool IsDeadletter)>();
             using var reader = cmd.ExecuteReader();
             while (reader.Read())
             {
@@ -1080,17 +1080,25 @@ public sealed class BuildBrowser
                     reader.GetString(1),
                     reader.IsDBNull(2) ? null : reader.GetString(2),
                     reader.IsDBNull(3) ? (int?)null : reader.GetInt32(3),
-                    reader.IsDBNull(4) ? null : reader.GetString(4)));
+                    reader.IsDBNull(4) ? null : reader.GetString(4),
+                    !reader.IsDBNull(5) && reader.GetInt32(5) != 0));
             }
             return helixItems;
         });
 
         var hasHelix = false;
-        foreach (var (job, wi, state, exitCode, consoleUri) in helixItems)
+        foreach (var (job, wi, state, exitCode, consoleUri, isDeadletter) in helixItems)
         {
             hasHelix = true;
-            var stateInfo = state is not null ? $" [{(exitCode == 0 ? "green" : "red")}]{state} (exit {exitCode})[/]" : "";
-            AnsiConsole.MarkupLine($"  [bold]{Markup.Escape(wi)}[/]{stateInfo}");
+            if (isDeadletter)
+            {
+                AnsiConsole.MarkupLine($"  [bold red]⚠ DEAD LETTER[/] [bold]{Markup.Escape(wi)}[/]");
+            }
+            else
+            {
+                var stateInfo = state is not null ? $" [{(exitCode == 0 ? "green" : "red")}]{state} (exit {exitCode})[/]" : "";
+                AnsiConsole.MarkupLine($"  [bold]{Markup.Escape(wi)}[/]{stateInfo}");
+            }
 
             var url = consoleUri ?? HelixClient.GetConsoleUrl(job, wi);
             AnsiConsole.MarkupLine($"    {BrowserUI.FormatLink(url, "Console Log")}");

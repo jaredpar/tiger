@@ -64,6 +64,7 @@ Individual test failure results. Only failed tests are stored.
 | stack_trace | TEXT | Stack trace (may be NULL) |
 | helix_job_name | TEXT | Helix job ID if test ran on Helix |
 | helix_work_item_name | TEXT | Helix work item name if applicable |
+| is_helix_work_item | INTEGER | 1 if this is a synthetic test result created by Helix infrastructure (not a real test) |
 
 Primary key: `(organization, run_id, result_id)`
 
@@ -142,6 +143,7 @@ Cached Helix work item details for failed tests that ran on Helix.
 | exit_code | INTEGER | Process exit code (NULL if not finished) |
 | console_output_uri | TEXT | URI to console output log |
 | files | TEXT | JSON array of attached files (crash dumps, etc.), excluding the console log. Each entry has `fileName` and `uri`. NULL if no extra files. |
+| is_deadletter | INTEGER | 1 if the work item was dead-lettered (Helix infrastructure failure, not a real test failure) |
 
 Primary key: `(job_name, work_item_name)`
 

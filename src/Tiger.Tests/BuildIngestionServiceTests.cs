@@ -141,13 +141,14 @@ public class BuildIngestionServiceTests : IDisposable
 
         _db.WithCommand(cmd =>
         {
-            cmd.CommandText = "SELECT test_case_title, outcome, error_message, helix_job_name FROM test_results WHERE result_id = 1 AND run_id = 600;";
+            cmd.CommandText = "SELECT test_case_title, outcome, error_message, helix_job_name, is_helix_work_item FROM test_results WHERE result_id = 1 AND run_id = 600;";
             using var reader = cmd.ExecuteReader();
             Assert.True(reader.Read());
             Assert.Equal("MyNamespace.MyTest", reader.GetString(0));
             Assert.Equal("Failed", reader.GetString(1));
             Assert.Equal("Assert.Equal failed", reader.GetString(2));
             Assert.Equal("helix-job", reader.GetString(3));
+            Assert.Equal(1, reader.GetInt32(4));
         });
     }
 
@@ -170,11 +171,12 @@ public class BuildIngestionServiceTests : IDisposable
 
         _db.WithCommand(cmd =>
         {
-            cmd.CommandText = "SELECT helix_job_name, helix_work_item_name FROM test_results WHERE result_id = 1 AND run_id = 700;";
+            cmd.CommandText = "SELECT helix_job_name, helix_work_item_name, is_helix_work_item FROM test_results WHERE result_id = 1 AND run_id = 700;";
             using var reader = cmd.ExecuteReader();
             Assert.True(reader.Read());
             Assert.True(reader.IsDBNull(0));
             Assert.True(reader.IsDBNull(1));
+            Assert.Equal(0, reader.GetInt32(2));
         });
     }
 

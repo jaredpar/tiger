@@ -558,9 +558,9 @@ public sealed class TaskIngestionService : IDisposable
                 {
                     cmd.CommandText = """
                         INSERT OR IGNORE INTO helix_work_items
-                            (job_name, work_item_name, state, exit_code, console_output_uri, files)
+                            (job_name, work_item_name, state, exit_code, console_output_uri, files, is_deadletter)
                         VALUES
-                            (@job, @wi, @state, @exitCode, @consoleUri, @files)
+                            (@job, @wi, @state, @exitCode, @consoleUri, @files, @isDeadletter)
                         """;
                     cmd.Parameters.AddWithValue("@job", workItem.Job);
                     cmd.Parameters.AddWithValue("@wi", workItem.Name);
@@ -568,8 +568,35 @@ public sealed class TaskIngestionService : IDisposable
                     cmd.Parameters.AddWithValue("@exitCode", workItem.ExitCode.HasValue ? workItem.ExitCode.Value : DBNull.Value);
                     cmd.Parameters.AddWithValue("@consoleUri", (object?)workItem.ConsoleOutputUri ?? DBNull.Value);
                     cmd.Parameters.AddWithValue("@files", (object?)filesJson ?? DBNull.Value);
+                    cmd.Parameters.AddWithValue("@isDeadletter", workItem.IsDeadLetter ? 1 : 0);
                     cmd.ExecuteNonQuery();
                 });
+
+                if (workItem.IsDeadLetter)
+                {
+                    _db.WithCommand(cmd =>
+                    {
+                        cmd.CommandText = """
+                            UPDATE test_results
+                            SET error_message = 'Helix Work Item Dead Lettered. ' || COALESCE(error_message, '')
+                            WHERE is_helix_work_item = 1
+                              AND helix_job_name = @job
+                              AND helix_work_item_name = @wi
+                              AND organization = @org
+                              AND run_id IN (
+                                  SELECT run_id FROM test_runs
+                                  WHERE organization = @org AND build_id = @buildId
+                              )
+                              AND error_message NOT LIKE 'Helix Work Item Dead Lettered.%'
+                            """;
+                        cmd.Parameters.AddWithValue("@job", workItem.Job);
+                        cmd.Parameters.AddWithValue("@wi", workItem.Name);
+                        cmd.Parameters.AddWithValue("@org", task.Organization);
+                        cmd.Parameters.AddWithValue("@buildId", task.BuildId);
+                        cmd.ExecuteNonQuery();
+                    });
+                    _log?.Warning("Worker", $"  Helix work item {workItemName} is dead-lettered");
+                }
                 insertedCount++;
             }
             catch (HttpRequestException ex)

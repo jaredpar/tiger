@@ -117,6 +117,15 @@ public class HelixWorkItem
 
     [JsonPropertyName("warnings")]
     public List<HelixWorkItemError>? Warnings { get; init; }
+
+    /// <summary>
+    /// True when the console output URI points to the Helix dead-letter page,
+    /// indicating an infrastructure failure rather than a real test failure.
+    /// </summary>
+    [JsonIgnore]
+    public bool IsDeadLetter =>
+        ConsoleOutputUri is not null &&
+        ConsoleOutputUri.EndsWith("helix-workitem-deadletter.txt", StringComparison.OrdinalIgnoreCase);
 }
 
 /// <summary>

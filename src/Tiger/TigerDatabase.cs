@@ -10,7 +10,7 @@ namespace Tiger;
 /// </summary>
 public sealed class TigerDatabase : IDisposable
 {
-    public const int CurrentSchemaVersion = 9;
+    public const int CurrentSchemaVersion = 10;
 
     public string DatabasePath { get; }
     private string ConnectionString { get; }
@@ -253,6 +253,7 @@ public sealed class TigerDatabase : IDisposable
                 duration_ms REAL,
                 helix_job_name TEXT,
                 helix_work_item_name TEXT,
+                is_helix_work_item INTEGER NOT NULL DEFAULT 0,
                 PRIMARY KEY (organization, run_id, result_id),
                 FOREIGN KEY (organization, run_id)
                     REFERENCES test_runs (organization, run_id)
@@ -359,6 +360,7 @@ public sealed class TigerDatabase : IDisposable
                 exit_code INTEGER,
                 console_output_uri TEXT,
                 files TEXT,
+                is_deadletter INTEGER NOT NULL DEFAULT 0,
                 PRIMARY KEY (job_name, work_item_name)
             );
             """;
