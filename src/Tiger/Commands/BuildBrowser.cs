@@ -74,6 +74,9 @@ public sealed class BuildBrowser
                     if (_position < _history.Count - 1)
                         _position++;
                     break;
+                case NavAction.Refresh:
+                    // Re-render current page (loop continues)
+                    break;
             }
         }
     }
@@ -787,162 +790,19 @@ public sealed class BuildBrowser
 
     private NavAction RenderTestDetail(TestDetailPage page)
     {
-        // Get the most recent failure for this test to show error/stack/helix
-        var testInfo = _db.WithCommand(cmd =>
+        var info = BrowserUI.LoadTestDetail(_db, page.Org, page.Project, page.TestName);
+        if (info is null)
         {
-            cmd.CommandText = """
-                SELECT tr.error_message, tr.stack_trace, tr.helix_job_name, tr.helix_work_item_name,
-                       r.build_id, r.run_name
-                FROM test_results tr
-                JOIN test_runs r ON tr.organization = r.organization AND tr.run_id = r.run_id
-                WHERE tr.organization = @org AND tr.project = @proj
-                      AND tr.test_case_title = @testName AND tr.outcome = 'Failed'
-                ORDER BY r.build_id DESC
-                LIMIT 1
-                """;
-            cmd.Parameters.AddWithValue("@org", page.Org);
-            cmd.Parameters.AddWithValue("@proj", page.Project);
-            cmd.Parameters.AddWithValue("@testName", page.TestName);
-
-            using var reader = cmd.ExecuteReader();
-            if (reader.Read())
-            {
-                return (
-                    ErrorMessage: reader.IsDBNull(0) ? null : reader.GetString(0),
-                    StackTrace: reader.IsDBNull(1) ? null : reader.GetString(1),
-                    HelixJob: reader.IsDBNull(2) ? null : reader.GetString(2),
-                    HelixWorkItem: reader.IsDBNull(3) ? null : reader.GetString(3),
-                    BuildId: (int?)reader.GetInt32(4),
-                    RunName: (string?)reader.GetString(5));
-            }
-
-            return (ErrorMessage: (string?)null, StackTrace: (string?)null, HelixJob: (string?)null,
-                HelixWorkItem: (string?)null, BuildId: (int?)null, RunName: (string?)null);
-        });
-
-        var errorMessage = testInfo.ErrorMessage;
-        var stackTrace = testInfo.StackTrace;
-        var helixJob = testInfo.HelixJob;
-        var helixWorkItem = testInfo.HelixWorkItem;
-        var buildId = testInfo.BuildId;
-        var runName = testInfo.RunName;
-
-        // Count total builds with this failure
-        var buildCount = _db.WithCommand(cmd =>
-        {
-            cmd.CommandText = """
-                SELECT COUNT(DISTINCT r.build_id)
-                FROM test_results tr
-                JOIN test_runs r ON tr.organization = r.organization AND tr.run_id = r.run_id
-                WHERE tr.organization = @org AND tr.project = @proj
-                      AND tr.test_case_title = @testName AND tr.outcome = 'Failed'
-                """;
-            cmd.Parameters.AddWithValue("@org", page.Org);
-            cmd.Parameters.AddWithValue("@proj", page.Project);
-            cmd.Parameters.AddWithValue("@testName", page.TestName);
-            return Convert.ToInt32(cmd.ExecuteScalar());
-        });
-
-        // Header box
-        var headerTable = new Table().Border(TableBorder.Rounded);
-        headerTable.AddColumn(new TableColumn("").NoWrap());
-        headerTable.AddColumn(new TableColumn(""));
-        headerTable.HideHeaders();
-        headerTable.AddRow("[bold]Test Name[/]", Markup.Escape(page.TestName));
-        if (buildId is not null)
-        {
-            var buildUrl = $"https://dev.azure.com/{Uri.EscapeDataString(page.Org)}/{Uri.EscapeDataString(page.Project)}/_build/results?buildId={buildId}";
-            headerTable.AddRow("[bold]Last Failed Build[/]", BrowserUI.FormatLink(buildUrl, $"Build #{buildId}"));
+            AnsiConsole.MarkupLine("[yellow]No test failure data found.[/]");
+            AnsiConsole.MarkupLine("[dim]Press any key to go back...[/]");
+            Console.ReadKey(true);
+            return NavAction.Back.Instance;
         }
-        headerTable.AddRow("[bold]Failed In[/]", $"{buildCount} build(s)");
-        AnsiConsole.Write(headerTable);
-        AnsiConsole.WriteLine();
 
-        if (buildId is not null)
-        {
-            AnsiConsole.MarkupLine("[bold]Error:[/]");
-            if (!string.IsNullOrWhiteSpace(errorMessage))
-            {
-                var errorLines = errorMessage.ReplaceLineEndings("\n").Split('\n');
-                foreach (var line in errorLines.Take(5))
-                    AnsiConsole.MarkupLine($"  [red]{Markup.Escape(line)}[/]");
-                if (errorLines.Length > 5)
-                    AnsiConsole.MarkupLine($"  [dim]... ({errorLines.Length - 5} more lines)[/]");
-            }
-            else
-            {
-                AnsiConsole.MarkupLine("  [dim]No error message available[/]");
-            }
-            AnsiConsole.WriteLine();
-
-            AnsiConsole.MarkupLine("[bold]Stack Trace:[/]");
-            if (!string.IsNullOrWhiteSpace(stackTrace))
-            {
-                var stackLines = stackTrace.ReplaceLineEndings("\n").Split('\n');
-                foreach (var line in stackLines.Take(10))
-                    AnsiConsole.MarkupLine($"  [dim]{Markup.Escape(line)}[/]");
-                if (stackLines.Length > 10)
-                    AnsiConsole.MarkupLine($"  [dim]... ({stackLines.Length - 10} more lines)[/]");
-            }
-            else
-            {
-                AnsiConsole.MarkupLine("  [dim]No stack trace available[/]");
-            }
-            AnsiConsole.WriteLine();
-
-            AnsiConsole.MarkupLine("[bold]Helix:[/]");
-            if (helixJob is not null)
-            {
-                AnsiConsole.MarkupLine($"  [bold]Job:[/] {Markup.Escape(helixJob)}");
-                if (helixWorkItem is not null)
-                {
-                    AnsiConsole.MarkupLine($"  [bold]Work Item:[/] {Markup.Escape(helixWorkItem)}");
-                    var consoleUrl = HelixClient.GetConsoleUrl(helixJob, helixWorkItem);
-                    AnsiConsole.MarkupLine($"  [bold]Console:[/] {BrowserUI.FormatLink(consoleUrl, "Console Log")}");
-
-                    // Show attached files if available
-                    var filesJson = _db.WithCommand(cmd =>
-                    {
-                        cmd.CommandText = """
-                            SELECT files FROM helix_work_items
-                            WHERE job_name = @job AND work_item_name = @wi
-                            """;
-                        cmd.Parameters.AddWithValue("@job", helixJob);
-                        cmd.Parameters.AddWithValue("@wi", helixWorkItem);
-                        return cmd.ExecuteScalar() as string;
-                    });
-
-                    if (!string.IsNullOrWhiteSpace(filesJson))
-                    {
-                        var files = System.Text.Json.JsonSerializer.Deserialize<List<HelixFileEntry>>(filesJson);
-                        if (files is { Count: > 0 })
-                        {
-                            AnsiConsole.MarkupLine($"  [bold]Files ({files.Count}):[/]");
-                            foreach (var f in files)
-                            {
-                                var name = f.FileName ?? "unknown";
-                                if (f.Uri is not null)
-                                {
-                                    AnsiConsole.MarkupLine($"    {BrowserUI.FormatLink(f.Uri, name)}");
-                                }
-                                else
-                                {
-                                    AnsiConsole.MarkupLine($"    {Markup.Escape(name)}");
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            else
-            {
-                AnsiConsole.MarkupLine("  [dim]No Helix information available[/]");
-            }
-            AnsiConsole.WriteLine();
-        }
+        BrowserUI.RenderTestDetail(info);
 
         AnsiConsole.MarkupLine("[bold]Navigation:[/]");
-        AnsiConsole.MarkupLine("  [blue]B[/]uilds with this failure   [blue]Esc[/] Back");
+        AnsiConsole.MarkupLine("  [blue]B[/]uilds with this failure   [blue]A[/]gent task   [blue]Esc[/] Back");
 
         while (true)
         {
@@ -951,6 +811,9 @@ public sealed class BuildBrowser
             {
                 case ConsoleKey.B:
                     return new NavAction.Push(new TestBuildsPage(page.Org, page.Project, page.TestName));
+                case ConsoleKey.A:
+                    BrowserUI.CreateAgentTask(_db, info);
+                    return NavAction.Refresh.Instance;
                 case ConsoleKey.Escape:
                     return NavAction.Back.Instance;
             }
@@ -1269,48 +1132,9 @@ public sealed class BuildBrowser
             return;
         }
 
-        // Show analysis detail inline
-        AnsiConsole.Clear();
-        AnsiConsole.MarkupLine($"[bold underline]Analysis — Build #{page.BuildId}[/]");
-        AnsiConsole.WriteLine();
-
-        var table = new Table().NoBorder().HideHeaders().AddColumn("Key").AddColumn("Value");
-        table.AddRow("[bold]Status[/]", FormatAnalysisStatus(analysis.Status));
-        if (analysis.Category is not null)
-        {
-            table.AddRow("[bold]Category[/]", Markup.Escape(analysis.Category));
-        }
-        if (analysis.Confidence is not null)
-        {
-            table.AddRow("[bold]Confidence[/]", Markup.Escape(analysis.Confidence));
-        }
-        if (analysis.CompletedAt is not null)
-        {
-            table.AddRow("[bold]Completed[/]", Markup.Escape(analysis.CompletedAt));
-        }
-        AnsiConsole.Write(table);
-        AnsiConsole.WriteLine();
-
-        if (analysis.DiagnosisSummary is not null)
-        {
-            AnsiConsole.MarkupLine("[bold]Diagnosis:[/]");
-            AnsiConsole.WriteLine(analysis.DiagnosisSummary);
-            AnsiConsole.WriteLine();
-        }
-
-        AnsiConsole.MarkupLine("[dim]Press any key to go back...[/]");
-        Console.ReadKey(true);
+        var analysisBrowser = new AnalysisBrowser(_db, _analysisService, _clientFactory, _configDirectory);
+        analysisBrowser.ShowAnalysisDetail(analysis);
     }
-
-    private static string FormatAnalysisStatus(string status) => status switch
-    {
-        "complete" => "[green]Complete[/]",
-        "running" => "[yellow]Running[/]",
-        "pending" => "[dim]Pending[/]",
-        "skipped" => "[blue]Skipped[/]",
-        "failed" => "[red]Failed[/]",
-        _ => Markup.Escape(status),
-    };
 
     // ── Helpers ──────────────────────────────────────────────────────
 
@@ -1474,6 +1298,10 @@ public sealed class BuildBrowser
         {
             public static readonly Forward Instance = new();
         }
+        public sealed record Refresh : NavAction
+        {
+            public static readonly Refresh Instance = new();
+        }
         public static readonly NavAction Exit = Back.Instance;
     }
 
@@ -1482,13 +1310,4 @@ public sealed class BuildBrowser
         string DefinitionName, string? Result, string Branch,
         int? PrNumber, string? FinishTime, string IngestionStatus = "pending",
         int DefinitionId = 0, string? RepositoryName = null);
-
-    private sealed class HelixFileEntry
-    {
-        [System.Text.Json.Serialization.JsonPropertyName("fileName")]
-        public string? FileName { get; set; }
-
-        [System.Text.Json.Serialization.JsonPropertyName("uri")]
-        public string? Uri { get; set; }
-    }
 }

@@ -58,6 +58,7 @@ pass before presenting changes for review.
   - `BuildBrowser.cs` — build list hotkey bar, empty-list hotkey bar, filter menu, filter help, build detail hotkey bar, test failure hotkey bar, timeline issues hotkey bar
   - `TestBrowser.cs` — test list hotkey bar, empty-list hotkey bar, filter menu, test detail hotkey bar
   - `AnalysisBrowser.cs` — analysis detail menu, full log menu
+  - `AgentBrowser.cs` — agent list hotkey bar, agent detail menu
   - `HealthCommand.cs` — state page menu, run detail menu
   - `ConfigEditor.cs` — config menu
 - **Escape** always means "go back" or "cancel" in any interactive context.

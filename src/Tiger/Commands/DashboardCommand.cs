@@ -14,6 +14,7 @@ public sealed class DashboardCommand : AsyncCommand
     private const string MenuTests = "Tests";
     private const string MenuHealth = "Health";
     private const string MenuAnalysis = "Analysis";
+    private const string MenuAgents = "Agents";
     private const string MenuConfig = "Configuration";
     private const string MenuQuit = "Quit";
 
@@ -89,6 +90,7 @@ public sealed class DashboardCommand : AsyncCommand
             $"[blue]T[/]ests",
             $"[blue]H[/]ealth",
             $"[blue]A[/]nalysis",
+            $"A[blue]g[/]ents",
             $"[blue]C[/]onfiguration",
             $"[blue]S[/]tatus",
             $"[blue]Q[/]uit",
@@ -119,7 +121,7 @@ public sealed class DashboardCommand : AsyncCommand
             // Hotkeys
             var hotkey = char.ToUpperInvariant(key.KeyChar) switch
             {
-                'B' => 0, 'T' => 1, 'H' => 2, 'A' => 3, 'C' => 4, 'S' => 5, 'Q' => 6,
+                'B' => 0, 'T' => 1, 'H' => 2, 'A' => 3, 'G' => 4, 'C' => 5, 'S' => 6, 'Q' => 7,
                 _ => -1,
             };
             if (hotkey >= 0)
@@ -151,9 +153,10 @@ public sealed class DashboardCommand : AsyncCommand
                 1 => MenuTests,
                 2 => MenuHealth,
                 3 => MenuAnalysis,
-                4 => MenuConfig,
-                5 => MenuStatus,
-                6 => MenuQuit,
+                4 => MenuAgents,
+                5 => MenuConfig,
+                6 => MenuStatus,
+                7 => MenuQuit,
                 _ => MenuQuit,
             };
 
@@ -177,6 +180,10 @@ public sealed class DashboardCommand : AsyncCommand
                 case MenuAnalysis:
                     var analysisBrowser = new AnalysisBrowser(db, analysisAgent, clientFactory, tigerContext.ConfigDirectory);
                     analysisBrowser.Browse();
+                    break;
+                case MenuAgents:
+                    var agentBrowser = new AgentBrowser(db);
+                    agentBrowser.Browse();
                     break;
                 case MenuConfig:
                     var configEditor = new ConfigEditor(tigerContext.Config, tigerContext.ConfigDirectory);

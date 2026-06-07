@@ -145,6 +145,19 @@ Cached Helix work item details for failed tests that ran on Helix.
 
 Primary key: `(job_name, work_item_name)`
 
+### agent_tasks
+Tracks Copilot Coding Agent tasks submitted from Tiger via `gh agent-task create`.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| session_id | TEXT | Agent session GUID (primary key) |
+| repository | TEXT | GitHub repository (owner/repo format) |
+| test_name | TEXT | Test case title that triggered the task (NULL if not test-related) |
+| file_path | TEXT | Path to the markdown task file on disk |
+| created_at | TEXT | ISO 8601 timestamp when the task was submitted |
+
+Primary key: `(session_id)`
+
 ## Common Queries
 
 ### Recent failed builds

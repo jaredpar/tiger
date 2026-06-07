@@ -226,13 +226,17 @@ public static class BrowserUI
     /// </summary>
     public static void RenderTestDetail(TestDetailInfo info)
     {
-        AnsiConsole.MarkupLine("[bold underline]Test Failure Detail[/]");
-        AnsiConsole.MarkupLine($"[bold]{Markup.Escape(info.TestName)}[/]");
-        AnsiConsole.MarkupLine($"[dim]{Markup.Escape(info.Org)}/{Markup.Escape(info.Project)}[/]");
-        AnsiConsole.WriteLine();
-
-        AnsiConsole.MarkupLine($"[bold]Last failed in:[/] Build #{info.BuildId}, {Markup.Escape(info.RunName)}");
-        AnsiConsole.MarkupLine($"[bold]Failed in:[/] {info.BuildCount} build(s)");
+        // Header box
+        var headerTable = new Table().Border(TableBorder.Rounded);
+        headerTable.AddColumn(new TableColumn("").NoWrap());
+        headerTable.AddColumn(new TableColumn(""));
+        headerTable.HideHeaders();
+        headerTable.AddRow("[bold]Test Name[/]", Markup.Escape(info.TestName));
+        var buildUrl = $"https://dev.azure.com/{Uri.EscapeDataString(info.Org)}/{Uri.EscapeDataString(info.Project)}/_build/results?buildId={info.BuildId}";
+        headerTable.AddRow("[bold]Last Failed Build[/]", FormatLink(buildUrl, $"Build #{info.BuildId}"));
+        headerTable.AddRow("[bold]Run[/]", Markup.Escape(info.RunName));
+        headerTable.AddRow("[bold]Failed In[/]", $"{info.BuildCount} build(s)");
+        AnsiConsole.Write(headerTable);
         AnsiConsole.WriteLine();
 
         AnsiConsole.MarkupLine("[bold]Error:[/]");
@@ -274,6 +278,22 @@ public static class BrowserUI
                 AnsiConsole.MarkupLine($"  [bold]Work Item:[/] {Markup.Escape(info.HelixWorkItemName)}");
                 var consoleUrl = HelixClient.GetConsoleUrl(info.HelixJobName, info.HelixWorkItemName);
                 AnsiConsole.MarkupLine($"  [bold]Console:[/] {FormatLink(consoleUrl, "Console Log")}");
+
+                if (info.HelixFiles is { Count: > 0 })
+                {
+                    AnsiConsole.MarkupLine($"  [bold]Files ({info.HelixFiles.Count}):[/]");
+                    foreach (var (name, uri) in info.HelixFiles)
+                    {
+                        if (uri is not null)
+                        {
+                            AnsiConsole.MarkupLine($"    {FormatLink(uri, name)}");
+                        }
+                        else
+                        {
+                            AnsiConsole.MarkupLine($"    {Markup.Escape(name)}");
+                        }
+                    }
+                }
             }
         }
         else
@@ -307,6 +327,15 @@ public static class BrowserUI
     public static string FormatLink(string url, string displayText) =>
         $"[link={url}][blue underline]{Markup.Escape(displayText)}[/][/]";
 
+    internal sealed class HelixFileEntry
+    {
+        [System.Text.Json.Serialization.JsonPropertyName("fileName")]
+        public string? FileName { get; set; }
+
+        [System.Text.Json.Serialization.JsonPropertyName("uri")]
+        public string? Uri { get; set; }
+    }
+
     /// <summary>
     /// Data model for test failure detail rendering.
     /// </summary>
@@ -314,7 +343,8 @@ public static class BrowserUI
         string TestName, string Org, string Project,
         int BuildId, string RunName, int BuildCount,
         string? ErrorMessage, string? StackTrace,
-        string? HelixJobName, string? HelixWorkItemName);
+        string? HelixJobName, string? HelixWorkItemName,
+        List<(string Name, string? Uri)>? HelixFiles = null);
 
     /// <summary>
     /// Loads test detail info from the database.
@@ -374,7 +404,237 @@ public static class BrowserUI
             return Convert.ToInt32(cmd.ExecuteScalar());
         });
 
+        // Load helix files if available
+        List<(string Name, string? Uri)>? helixFiles = null;
+        if (detail.HelixJob is not null && detail.HelixWorkItem is not null)
+        {
+            var filesJson = db.WithCommand(cmd =>
+            {
+                cmd.CommandText = """
+                    SELECT files FROM helix_work_items
+                    WHERE job_name = @job AND work_item_name = @wi
+                    """;
+                cmd.Parameters.AddWithValue("@job", detail.HelixJob);
+                cmd.Parameters.AddWithValue("@wi", detail.HelixWorkItem);
+                return cmd.ExecuteScalar() as string;
+            });
+
+            if (!string.IsNullOrWhiteSpace(filesJson))
+            {
+                try
+                {
+                    var entries = System.Text.Json.JsonSerializer.Deserialize<List<HelixFileEntry>>(filesJson);
+                    if (entries is { Count: > 0 })
+                    {
+                        helixFiles = entries.Select(e => (e.FileName ?? "unknown", e.Uri)).ToList();
+                    }
+                }
+                catch (System.Text.Json.JsonException)
+                {
+                    // Ignore malformed JSON
+                }
+            }
+        }
+
         return new TestDetailInfo(testName, org, project, detail.BuildId, detail.RunName, buildCount,
-            detail.ErrorMessage, detail.StackTrace, detail.HelixJob, detail.HelixWorkItem);
+            detail.ErrorMessage, detail.StackTrace, detail.HelixJob, detail.HelixWorkItem, helixFiles);
+    }
+
+    /// <summary>
+    /// Creates a Copilot Coding Agent task from a test failure.
+    /// Writes a markdown file with failure details and user instructions,
+    /// then submits it via <c>gh agent-task create</c>.
+    /// </summary>
+    public static void CreateAgentTask(TigerDatabase db, TestDetailInfo info)
+    {
+        AnsiConsole.Clear();
+        AnsiConsole.MarkupLine("[bold underline]Create Agent Task[/]");
+        AnsiConsole.WriteLine();
+
+        // Look up the repository name from the build
+        var repoName = db.WithCommand(cmd =>
+        {
+            cmd.CommandText = """
+                SELECT repository_name FROM builds
+                WHERE organization = @org AND build_id = @buildId
+                """;
+            cmd.Parameters.AddWithValue("@org", info.Org);
+            cmd.Parameters.AddWithValue("@buildId", info.BuildId);
+            return cmd.ExecuteScalar() as string;
+        });
+
+        if (repoName is null)
+        {
+            AnsiConsole.MarkupLine("[red]Could not determine repository for this test.[/]");
+            AnsiConsole.MarkupLine("[dim]Press any key to go back...[/]");
+            Console.ReadKey(true);
+            return;
+        }
+
+        var buildUrl = $"https://dev.azure.com/{Uri.EscapeDataString(info.Org)}/{Uri.EscapeDataString(info.Project)}/_build/results?buildId={info.BuildId}";
+
+        // Build the context markdown (everything except instructions)
+        static void AppendContext(System.Text.StringBuilder sb, TestDetailInfo info, string repoName, string buildUrl)
+        {
+            sb.AppendLine("## Failure Details");
+            sb.AppendLine();
+            sb.AppendLine($"- **Test:** `{info.TestName}`");
+            sb.AppendLine($"- **Repository:** {repoName}");
+            sb.AppendLine($"- **Build:** [#{info.BuildId}]({buildUrl})");
+            sb.AppendLine($"- **Run:** {info.RunName}");
+            sb.AppendLine($"- **Failed in:** {info.BuildCount} build(s)");
+            if (info.HelixJobName is not null)
+            {
+                sb.AppendLine($"- **Helix Job:** `{info.HelixJobName}`");
+            }
+            if (info.HelixWorkItemName is not null)
+            {
+                sb.AppendLine($"- **Helix Work Item:** `{info.HelixWorkItemName}`");
+            }
+            sb.AppendLine();
+
+            if (info.ErrorMessage is not null)
+            {
+                sb.AppendLine("## Error Message");
+                sb.AppendLine();
+                sb.AppendLine("```");
+                sb.AppendLine(info.ErrorMessage);
+                sb.AppendLine("```");
+                sb.AppendLine();
+            }
+
+            if (info.StackTrace is not null)
+            {
+                sb.AppendLine("## Stack Trace");
+                sb.AppendLine();
+                sb.AppendLine("```");
+                sb.AppendLine(info.StackTrace);
+                sb.AppendLine("```");
+                sb.AppendLine();
+            }
+        }
+
+        // Show the context that will be sent to the agent
+        var preview = new System.Text.StringBuilder();
+        AppendContext(preview, info, repoName, buildUrl);
+
+        AnsiConsole.MarkupLine("[dim]The following context will be included in the agent task:[/]");
+        AnsiConsole.WriteLine();
+        MarkdownRenderer.Render(preview.ToString());
+
+        AnsiConsole.MarkupLine("[dim]Enter instructions for the agent (what should it do about this failure?):[/]");
+        AnsiConsole.Markup("[blue]> [/]");
+        var instructions = Console.ReadLine()?.Trim();
+        if (string.IsNullOrWhiteSpace(instructions))
+        {
+            AnsiConsole.MarkupLine("[yellow]No instructions provided, cancelled.[/]");
+            Console.ReadKey(true);
+            return;
+        }
+
+        // Build the full task description
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine($"# Test Failure: {info.TestName}");
+        sb.AppendLine();
+        sb.AppendLine("## Instructions");
+        sb.AppendLine();
+        sb.AppendLine(instructions);
+        sb.AppendLine();
+        AppendContext(sb, info, repoName, buildUrl);
+
+        // Write to disk
+        var agentDir = Path.Combine(TigerUtils.GetConfigDirectory(), "agent-tasks");
+        Directory.CreateDirectory(agentDir);
+        var timestamp = DateTime.Now.ToString("yyyyMMdd-HHmmss");
+        var safeTestName = info.TestName.Split('.').Last();
+        if (safeTestName.Length > 40)
+        {
+            safeTestName = safeTestName[..40];
+        }
+        // Remove characters that aren't safe for filenames
+        safeTestName = string.Concat(safeTestName.Select(c => char.IsLetterOrDigit(c) || c == '_' ? c : '_'));
+        var filePath = Path.Combine(agentDir, $"{timestamp}-{safeTestName}.md");
+        File.WriteAllText(filePath, sb.ToString());
+
+        AnsiConsole.WriteLine();
+        AnsiConsole.MarkupLine($"[bold]Task file:[/] {Markup.Escape(filePath)}");
+        AnsiConsole.MarkupLine($"[bold]Repository:[/] {Markup.Escape(repoName)}");
+        AnsiConsole.WriteLine();
+        AnsiConsole.MarkupLine("[dim]Review the file, then press [blue]Enter[/] to submit or [blue]Esc[/] to cancel.[/]");
+
+        while (true)
+        {
+            var key = Console.ReadKey(true);
+            if (key.Key == ConsoleKey.Escape)
+            {
+                AnsiConsole.MarkupLine("[yellow]Cancelled.[/]");
+                Console.ReadKey(true);
+                return;
+            }
+            if (key.Key == ConsoleKey.Enter)
+            {
+                break;
+            }
+        }
+
+        // Launch the agent task
+        AnsiConsole.MarkupLine("[dim]Submitting agent task...[/]");
+        var process = new System.Diagnostics.Process();
+        process.StartInfo.FileName = "gh";
+        process.StartInfo.Arguments = $"agent-task create -F \"{filePath}\" -R {repoName}";
+        process.StartInfo.RedirectStandardOutput = true;
+        process.StartInfo.RedirectStandardError = true;
+        process.StartInfo.UseShellExecute = false;
+        process.Start();
+
+        var output = process.StandardOutput.ReadToEnd();
+        var error = process.StandardError.ReadToEnd();
+        process.WaitForExit();
+
+        AnsiConsole.WriteLine();
+        if (process.ExitCode == 0)
+        {
+            AnsiConsole.MarkupLine($"[green]Agent task created![/]");
+            if (!string.IsNullOrWhiteSpace(output))
+            {
+                AnsiConsole.WriteLine(output.Trim());
+            }
+
+            // Try to extract session ID from output and save to DB
+            var sessionId = ExtractSessionId(output);
+            if (sessionId is not null)
+            {
+                db.InsertAgentTask(sessionId, repoName, info.TestName, filePath);
+            }
+        }
+        else
+        {
+            AnsiConsole.MarkupLine($"[red]Failed to create agent task (exit code {process.ExitCode}):[/]");
+            if (!string.IsNullOrWhiteSpace(error))
+            {
+                AnsiConsole.WriteLine(error.Trim());
+            }
+        }
+
+        AnsiConsole.WriteLine();
+        AnsiConsole.MarkupLine("[dim]Press any key to continue...[/]");
+        Console.ReadKey(true);
+    }
+
+    /// <summary>
+    /// Extracts a session ID (GUID) from <c>gh agent-task create</c> output.
+    /// Looks for a GUID pattern in the output text or URLs.
+    /// </summary>
+    internal static string? ExtractSessionId(string output)
+    {
+        if (string.IsNullOrWhiteSpace(output))
+        {
+            return null;
+        }
+
+        var match = System.Text.RegularExpressions.Regex.Match(
+            output,
+            @"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}");
+        return match.Success ? match.Value : null;
     }
 }

@@ -10,7 +10,7 @@ namespace Tiger;
 /// </summary>
 public sealed class TigerDatabase : IDisposable
 {
-    public const int CurrentSchemaVersion = 8;
+    public const int CurrentSchemaVersion = 9;
 
     public string DatabasePath { get; }
     private string ConnectionString { get; }
@@ -384,6 +384,20 @@ public sealed class TigerDatabase : IDisposable
             """;
             cmd.ExecuteNonQuery();
         });
+
+        WithCommand(cmd =>
+        {
+            cmd.CommandText = """
+            CREATE TABLE IF NOT EXISTS agent_tasks (
+                session_id TEXT NOT NULL PRIMARY KEY,
+                repository TEXT NOT NULL,
+                test_name TEXT,
+                file_path TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+            """;
+            cmd.ExecuteNonQuery();
+        });
     }
 
     /// <summary>
@@ -563,6 +577,43 @@ public sealed class TigerDatabase : IDisposable
             cmd.Parameters.AddWithValue("@org", organization);
             cmd.Parameters.AddWithValue("@buildId", buildId);
             cmd.ExecuteNonQuery();
+        });
+    }
+
+    /// <summary>
+    /// Records an agent task that was submitted via <c>gh agent-task create</c>.
+    /// </summary>
+    public void InsertAgentTask(string sessionId, string repository, string? testName, string? filePath)
+    {
+        WithCommand(cmd =>
+        {
+            cmd.CommandText = """
+                INSERT OR IGNORE INTO agent_tasks (session_id, repository, test_name, file_path)
+                VALUES (@sessionId, @repo, @testName, @filePath)
+                """;
+            cmd.Parameters.AddWithValue("@sessionId", sessionId);
+            cmd.Parameters.AddWithValue("@repo", repository);
+            cmd.Parameters.AddWithValue("@testName", (object?)testName ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@filePath", (object?)filePath ?? DBNull.Value);
+            cmd.ExecuteNonQuery();
+        });
+    }
+
+    /// <summary>
+    /// Returns all tracked agent task session IDs.
+    /// </summary>
+    public HashSet<string> GetAgentTaskSessionIds()
+    {
+        return WithCommand(cmd =>
+        {
+            cmd.CommandText = "SELECT session_id FROM agent_tasks";
+            var ids = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+            {
+                ids.Add(reader.GetString(0));
+            }
+            return ids;
         });
     }
 

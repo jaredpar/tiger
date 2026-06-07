@@ -108,7 +108,7 @@ public sealed class TestBrowser
             BrowserUI.RenderTestDetail(info);
 
             AnsiConsole.MarkupLine("[bold]Navigation:[/]");
-            AnsiConsole.MarkupLine("  [blue]B[/]uilds with this failure   [blue]Esc[/] Back");
+            AnsiConsole.MarkupLine("  [blue]B[/]uilds with this failure   [blue]A[/]gent task   [blue]Esc[/] Back");
 
             while (true)
             {
@@ -118,6 +118,11 @@ public sealed class TestBrowser
                 if (key.Key == ConsoleKey.B)
                 {
                     ShowTestBuilds(test);
+                    break; // re-render detail after returning
+                }
+                if (key.Key == ConsoleKey.A)
+                {
+                    BrowserUI.CreateAgentTask(_db, info);
                     break; // re-render detail after returning
                 }
             }

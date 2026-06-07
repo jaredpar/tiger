@@ -9,11 +9,11 @@ namespace Tiger.Commands;
 public sealed class AnalysisBrowser
 {
     private readonly TigerDatabase _db;
-    private readonly BuildAnalysisService _analysisService;
+    private readonly BuildAnalysisService? _analysisService;
     private readonly AzdoClientFactory _clientFactory;
     private readonly string _configDirectory;
 
-    public AnalysisBrowser(TigerDatabase db, BuildAnalysisService analysisService, AzdoClientFactory clientFactory, string configDirectory)
+    public AnalysisBrowser(TigerDatabase db, BuildAnalysisService? analysisService, AzdoClientFactory clientFactory, string configDirectory)
     {
         _db = db;
         _analysisService = analysisService;
@@ -76,7 +76,10 @@ public sealed class AnalysisBrowser
         }
     }
 
-    private void ShowAnalysisDetail(BuildAnalysisInfo analysis)
+    /// <summary>
+    /// Shows the detail view for a single analysis, with re-run, log view, and build navigation.
+    /// </summary>
+    public void ShowAnalysisDetail(BuildAnalysisInfo analysis)
     {
         while (true)
         {
@@ -121,32 +124,43 @@ public sealed class AnalysisBrowser
                 AnsiConsole.WriteLine();
             }
 
-            // Menu: View Log, Re-run, Force full analysis, Back
-            var menuItems = new List<string>
-            {
-                $"[blue]R[/]e-run analysis",
-                $"[blue]F[/]orce full analysis (skip known issue check)",
-                $"[blue]V[/]iew full log",
-                $"[blue]B[/]uild detail",
-            };
+            // Menu: conditionally include re-run options based on analysis service availability
+            var menuItems = new List<string>();
+            var extraKeys = new Dictionary<ConsoleKey, int>();
+            var actions = new List<string>();
 
-            var extraKeys = new Dictionary<ConsoleKey, int>
+            if (_analysisService is not null)
             {
-                [ConsoleKey.R] = 0,
-                [ConsoleKey.F] = 1,
-                [ConsoleKey.V] = 2,
-                [ConsoleKey.B] = 3,
-            };
+                menuItems.Add($"[blue]R[/]e-run analysis");
+                extraKeys[ConsoleKey.R] = menuItems.Count - 1;
+                actions.Add("rerun");
+
+                menuItems.Add($"[blue]F[/]orce full analysis (skip known issue check)");
+                extraKeys[ConsoleKey.F] = menuItems.Count - 1;
+                actions.Add("force");
+            }
+
+            menuItems.Add($"[blue]V[/]iew full log");
+            extraKeys[ConsoleKey.V] = menuItems.Count - 1;
+            actions.Add("log");
+
+            menuItems.Add($"[blue]B[/]uild detail");
+            extraKeys[ConsoleKey.B] = menuItems.Count - 1;
+            actions.Add("build");
 
             var menuChoice = BrowserUI.SelectWithEscape("", menuItems, useMarkup: true, extraKeys: extraKeys);
 
-            switch (menuChoice)
+            if (menuChoice < 0)
             {
-                case 0: // Re-run
-                    _analysisService.RequestAnalysis(analysis.Organization, analysis.BuildId);
+                return;
+            }
+
+            switch (actions[menuChoice])
+            {
+                case "rerun":
+                    _analysisService!.RequestAnalysis(analysis.Organization, analysis.BuildId);
                     AnsiConsole.MarkupLine("[green]Analysis queued.[/]");
                     Console.ReadKey(true);
-                    // Refresh the analysis info
                     var refreshed = _db.GetRecentAnalyses(50)
                         .FirstOrDefault(a => a.Organization == analysis.Organization && a.BuildId == analysis.BuildId);
                     if (refreshed is not null)
@@ -154,8 +168,8 @@ public sealed class AnalysisBrowser
                         analysis = refreshed;
                     }
                     continue;
-                case 1: // Force full (skip known issues)
-                    _analysisService.RequestAnalysis(analysis.Organization, analysis.BuildId, fullAnalysisCheck: true);
+                case "force":
+                    _analysisService!.RequestAnalysis(analysis.Organization, analysis.BuildId, fullAnalysisCheck: true);
                     AnsiConsole.MarkupLine("[green]Full analysis queued (skipping known issue check).[/]");
                     Console.ReadKey(true);
                     var refreshedFull = _db.GetRecentAnalyses(50)
@@ -165,14 +179,14 @@ public sealed class AnalysisBrowser
                         analysis = refreshedFull;
                     }
                     continue;
-                case 2: // View log
+                case "log":
                     ShowFullLog(analysis);
                     continue;
-                case 3: // Build detail
+                case "build":
                     var buildBrowser = new BuildBrowser(_db, _clientFactory, _configDirectory, _analysisService);
                     buildBrowser.BrowseBuild(analysis.Organization, analysis.Project, analysis.BuildId);
                     continue;
-                default: // Escape
+                default:
                     return;
             }
         }
