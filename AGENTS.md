@@ -34,6 +34,11 @@ update the corresponding `SKILL.md` files under `src/Tiger/skills/` to stay in s
 The `tiger-data/SKILL.md` file documents the full schema and is used by MCP skills to
 query the database correctly.
 
+When adding, removing, or renaming `tiger azdo` or `tiger helix` CLI subcommands, you
+**must** update `src/Tiger/skills/tiger-cli/SKILL.md` to keep the command tables in sync.
+This skill file is how MCP agents discover available CLI commands for querying live
+AzDO and Helix data.
+
 ## CLI Subcommand Conventions
 
 - The `tiger azdo` and `tiger helix` subcommands are designed for **agent consumption**, not human use. They must produce **structured JSON output** (via `JsonSerializer.Serialize` with `JsonOptions.Indented`). Do not use Spectre.Console tables, color markup, or interactive prompts in these commands.
