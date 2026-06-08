@@ -172,9 +172,13 @@ public class AzdoArtifactsCommand : AsyncCommand<AzdoArtifactsCommand.Settings>
     }
 }
 
-public class AzdoJobsCommand : AsyncCommand<AzdoBuildSettings>
+public class AzdoJobsCommand : AsyncCommand<AzdoJobsCommand.Settings>
 {
-    protected override async Task<int> ExecuteAsync(CommandContext context, AzdoBuildSettings settings, CancellationToken ct)
+    public class Settings : AzdoBuildSettings
+    {
+    }
+
+    protected override async Task<int> ExecuteAsync(CommandContext context, Settings settings, CancellationToken ct)
     {
         var client = settings.CreateClient();
         var timeline = await client.GetTimelineAsync(settings.BuildId);
@@ -182,6 +186,7 @@ public class AzdoJobsCommand : AsyncCommand<AzdoBuildSettings>
             .Where(r => r.RecordType == "Job")
             .OrderBy(r => r.Order)
             .ToList();
+
         Console.WriteLine(JsonSerializer.Serialize(jobs, JsonOptions.Indented));
         return 0;
     }

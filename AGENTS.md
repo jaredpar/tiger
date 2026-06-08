@@ -34,6 +34,11 @@ update the corresponding `SKILL.md` files under `src/Tiger/skills/` to stay in s
 The `tiger-data/SKILL.md` file documents the full schema and is used by MCP skills to
 query the database correctly.
 
+## CLI Subcommand Conventions
+
+- The `tiger azdo` and `tiger helix` subcommands are designed for **agent consumption**, not human use. They must produce **structured JSON output** (via `JsonSerializer.Serialize` with `JsonOptions.Indented`). Do not use Spectre.Console tables, color markup, or interactive prompts in these commands.
+- The interactive dashboard (`tiger dashboard`) is for human use and uses Spectre.Console for rich UI.
+
 ## Conventions
 
 - Projects/namespaces use PascalCase: `Tiger`, `Tiger.Core`

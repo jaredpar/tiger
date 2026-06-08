@@ -62,6 +62,9 @@ public class AzdoTimelineRecord
     public int WarningCount { get; init; }
     public DateTime? StartTime { get; init; }
     public DateTime? FinishTime { get; init; }
+    public TimeSpan? Duration => StartTime is not null && FinishTime is not null
+        ? FinishTime.Value - StartTime.Value
+        : null;
     public List<AzdoTimelineIssue> Issues { get; init; } = [];
     public string? WorkerName { get; init; }
     public string? LogUrl { get; init; }
