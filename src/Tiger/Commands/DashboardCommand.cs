@@ -192,7 +192,10 @@ public sealed class DashboardCommand : AsyncCommand
                         }
                     }
                 },
-                "[blue]E[/]rrors toggle   [blue]↑/↓[/] Scroll   [blue]End[/] Latest   [blue]Esc[/] Back");
+                PanelLayout.BuildCommandBarString(new List<CommandBarItem>
+                {
+                    new("Errors toggle", ConsoleKey.E, -2),
+                }) + "  [blue]↑/↓[/] Scroll  [blue]End[/] Latest  [blue]Esc[/] Back");
         }
 
         Render();

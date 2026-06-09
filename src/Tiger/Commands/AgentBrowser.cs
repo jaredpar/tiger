@@ -39,7 +39,10 @@ public sealed class AgentBrowser
                     ["Agents"],
                     null,
                     () => PanelLayout.RenderPanelLine("[dim]No agent tasks found.[/]"),
-                    "[blue]R[/]efresh   [blue]Esc[/] Back");
+                    PanelLayout.BuildCommandBarString(new List<CommandBarItem>
+                    {
+                        new("Refresh", ConsoleKey.R, -2),
+                    }));
 
                 while (true)
                 {
@@ -160,7 +163,12 @@ public sealed class AgentBrowser
                         PanelLayout.RenderField("Source", "[yellow]Submitted from Tiger[/]");
                     }
                 },
-                "[blue]O[/]pen PR   [blue]V[/]iew logs   [blue]R[/]efresh   [blue]Esc[/] Back");
+                PanelLayout.BuildCommandBarString(new List<CommandBarItem>
+                {
+                    new("Open PR", ConsoleKey.O, -2),
+                    new("View logs", ConsoleKey.V, -3),
+                    new("Refresh", ConsoleKey.R, -4),
+                }));
 
             var key = Console.ReadKey(true);
             if (key.Key == ConsoleKey.Escape)

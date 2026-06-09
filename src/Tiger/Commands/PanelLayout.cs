@@ -45,9 +45,16 @@ public static class PanelLayout
 
     /// <summary>
     /// Renders a single line inside the panel with vertical borders.
+    /// When called during RenderDetailPanel's content capture phase, lines are buffered instead.
     /// </summary>
     public static void RenderPanelLine(string markupContent)
     {
+        if (_captureTarget is not null)
+        {
+            _captureTarget.Add(markupContent);
+            return;
+        }
+
         AnsiConsole.Markup($"[{BorderStyle}]{Vertical}[/] ");
         AnsiConsole.Markup(markupContent);
 
@@ -59,9 +66,16 @@ public static class PanelLayout
 
     /// <summary>
     /// Renders an empty line inside the panel borders.
+    /// When called during RenderDetailPanel's content capture phase, an empty line is buffered.
     /// </summary>
     public static void RenderEmptyLine()
     {
+        if (_captureTarget is not null)
+        {
+            _captureTarget.Add("");
+            return;
+        }
+
         var width = Console.WindowWidth - 2;
         AnsiConsole.Markup($"[{BorderStyle}]{Vertical}[/]");
         Console.Write(new string(' ', width));
@@ -523,30 +537,164 @@ public static class PanelLayout
     // ── Detail Panel ────────────────────────────────────────────────
 
     /// <summary>
-    /// Renders a detail view inside a panel frame.
+    /// Renders a detail view inside a panel frame with scrollable content.
+    /// Content is captured and paginated to fit the terminal. Callers should use
+    /// <see cref="HandleDetailScroll"/> in their key loop for scroll support.
     /// </summary>
     public static void RenderDetailPanel(string[] breadcrumbs, string? context, Action renderContent, string hotkeys)
+    {
+        // Capture content lines
+        var contentLines = new List<string>();
+        _captureTarget = contentLines;
+        try
+        {
+            renderContent();
+        }
+        finally
+        {
+            _captureTarget = null;
+        }
+
+        // Store for scroll support
+        _lastDetailBreadcrumbs = breadcrumbs;
+        _lastDetailContext = context;
+        _lastDetailHotkeys = hotkeys;
+        _lastDetailLines = contentLines;
+        _lastDetailScrollOffset = 0;
+
+        RenderDetailPanelFrame(breadcrumbs, context, contentLines, 0, hotkeys);
+    }
+
+    /// <summary>
+    /// Handles scroll keys (Up/Down/PageUp/PageDown) for the last rendered detail panel.
+    /// Returns true if the key was handled (scrolled), false if the caller should process it.
+    /// </summary>
+    public static bool HandleDetailScroll(ConsoleKeyInfo key)
+    {
+        if (_lastDetailLines is null || _lastDetailLines.Count == 0)
+        {
+            return false;
+        }
+
+        var availableHeight = GetDetailAvailableHeight(_lastDetailContext);
+        if (_lastDetailLines.Count <= availableHeight)
+        {
+            return false; // No scrolling needed
+        }
+
+        var maxOffset = Math.Max(0, _lastDetailLines.Count - availableHeight);
+        var oldOffset = _lastDetailScrollOffset;
+
+        switch (key.Key)
+        {
+            case ConsoleKey.UpArrow:
+                _lastDetailScrollOffset = Math.Max(0, _lastDetailScrollOffset - 1);
+                break;
+            case ConsoleKey.DownArrow:
+                _lastDetailScrollOffset = Math.Min(maxOffset, _lastDetailScrollOffset + 1);
+                break;
+            case ConsoleKey.PageUp:
+                _lastDetailScrollOffset = Math.Max(0, _lastDetailScrollOffset - 10);
+                break;
+            case ConsoleKey.PageDown:
+                _lastDetailScrollOffset = Math.Min(maxOffset, _lastDetailScrollOffset + 10);
+                break;
+            default:
+                return false;
+        }
+
+        if (_lastDetailScrollOffset != oldOffset)
+        {
+            RenderDetailPanelFrame(_lastDetailBreadcrumbs!, _lastDetailContext, _lastDetailLines, _lastDetailScrollOffset, _lastDetailHotkeys!);
+        }
+
+        return true;
+    }
+
+    private static string[]? _lastDetailBreadcrumbs;
+    private static string? _lastDetailContext;
+    private static string? _lastDetailHotkeys;
+    private static List<string>? _lastDetailLines;
+    private static int _lastDetailScrollOffset;
+
+    private static int GetDetailAvailableHeight(string? context)
+    {
+        // Header: top border(1) + breadcrumb(1) + context?(0-1) + separator(1)
+        // Footer: separator(1) + hotkeys(1) + bottom border(1)
+        var headerRows = 3 + (context is not null ? 1 : 0);
+        var footerRows = 3;
+        return Math.Max(5, Console.WindowHeight - headerRows - footerRows);
+    }
+
+    private static void RenderDetailPanelFrame(string[] breadcrumbs, string? context, List<string> contentLines, int scrollOffset, string hotkeys)
     {
         AnsiConsole.Clear();
         Console.CursorVisible = false;
         var width = Console.WindowWidth - 2;
 
+        // Header
         AnsiConsole.MarkupLine($"[{BorderStyle}]{TopLeft}{new string(Horizontal, width)}{TopRight}[/]");
         var crumbText = string.Join($" {Separator} ", breadcrumbs);
-        RenderPanelLine($"[bold orange1]TIGER[/] [dim]{Separator}[/] {crumbText}");
+        RenderPanelLineDirect($"[bold orange1]TIGER[/] [dim]{Separator}[/] {crumbText}");
 
         if (context is not null)
         {
-            RenderPanelLine(context);
+            RenderPanelLineDirect(context);
         }
 
         AnsiConsole.MarkupLine($"[{BorderStyle}]{MiddleLeft}{new string(Horizontal, width)}{MiddleRight}[/]");
-        renderContent();
 
+        // Content
+        var availableHeight = GetDetailAvailableHeight(context);
+        var visibleLines = contentLines.Skip(scrollOffset).Take(availableHeight).ToList();
+        foreach (var line in visibleLines)
+        {
+            RenderPanelLineDirect(line);
+        }
+
+        // Pad remaining space
+        for (var i = visibleLines.Count; i < availableHeight; i++)
+        {
+            RenderEmptyLineDirect();
+        }
+
+        // Footer
         AnsiConsole.MarkupLine($"[{BorderStyle}]{MiddleLeft}{new string(Horizontal, width)}{MiddleRight}[/]");
-        RenderPanelLine(hotkeys);
+        var scrollHint = contentLines.Count > availableHeight
+            ? $"  [dim]({scrollOffset + 1}-{Math.Min(scrollOffset + availableHeight, contentLines.Count)}/{contentLines.Count} ↑↓)[/]"
+            : "";
+        RenderPanelLineDirect($"{hotkeys}{scrollHint}");
         AnsiConsole.MarkupLine($"[{BorderStyle}]{BottomLeft}{new string(Horizontal, width)}{BottomRight}[/]");
         Console.CursorVisible = true;
+    }
+
+    // Capture infrastructure for RenderDetailPanel scrolling
+    [ThreadStatic]
+    private static List<string>? _captureTarget;
+
+    /// <summary>
+    /// Renders a single line inside the panel with vertical borders (direct, no capture).
+    /// </summary>
+    private static void RenderPanelLineDirect(string markupContent)
+    {
+        AnsiConsole.Markup($"[{BorderStyle}]{Vertical}[/] ");
+        AnsiConsole.Markup(markupContent);
+
+        var plainLen = Markup.Remove(markupContent).Length;
+        var padding = Math.Max(0, Console.WindowWidth - 4 - plainLen);
+        Console.Write(new string(' ', padding));
+        AnsiConsole.MarkupLine($" [{BorderStyle}]{Vertical}[/]");
+    }
+
+    /// <summary>
+    /// Renders an empty line (direct, no capture).
+    /// </summary>
+    private static void RenderEmptyLineDirect()
+    {
+        var width = Console.WindowWidth - 2;
+        AnsiConsole.Markup($"[{BorderStyle}]{Vertical}[/]");
+        Console.Write(new string(' ', width));
+        AnsiConsole.MarkupLine($"[{BorderStyle}]{Vertical}[/]");
     }
 
     // ── Text Prompt ─────────────────────────────────────────────────

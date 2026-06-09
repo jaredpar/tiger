@@ -107,7 +107,12 @@ public sealed class HealthCommand : AsyncCommand
                         PanelLayout.RenderPanelLine("[dim]No state summary available yet.[/]");
                     }
                 },
-                "[blue]R[/]e-run   [blue]G[/]ist   [blue]V[/]iew runs   [blue]Esc[/] Back");
+                PanelLayout.BuildCommandBarString(new List<CommandBarItem>
+                {
+                    new("Re-run", ConsoleKey.R, -2),
+                    new("Gist", ConsoleKey.G, -3),
+                    new("View runs", ConsoleKey.V, -4),
+                }));
 
             var key = Console.ReadKey(true);
             switch (key.Key)

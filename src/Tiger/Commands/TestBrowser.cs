@@ -46,7 +46,11 @@ public sealed class TestBrowser
                     ["Tests"],
                     context,
                     () => PanelLayout.RenderPanelLine(emptyMsg),
-                    "[blue]E[/]dit filter   [blue]F[/]ilter menu   [blue]Esc[/] Back");
+                    PanelLayout.BuildCommandBarString(new List<CommandBarItem>
+                    {
+                        new("Edit filter", ConsoleKey.E, -5),
+                        new("Filter menu", ConsoleKey.F, -2),
+                    }));
 
                 var emptyKey = Console.ReadKey(true);
                 if (emptyKey.Key == ConsoleKey.E) { EditFilter(); continue; }
@@ -112,6 +116,10 @@ public sealed class TestBrowser
                 new("Builds with failure", ConsoleKey.B, -2),
                 new("Agent task", ConsoleKey.A, -3),
             };
+            if (info.HelixJobName is not null)
+            {
+                commands.Add(new("Helix", ConsoleKey.H, -4));
+            }
 
             PanelLayout.RenderDetailPanel(
                 ["Tests", Markup.Escape(shortTitle)],
@@ -122,6 +130,7 @@ public sealed class TestBrowser
             while (true)
             {
                 var key = Console.ReadKey(true);
+                if (PanelLayout.HandleDetailScroll(key)) continue;
                 if (key.Key == ConsoleKey.Escape)
                 {
                     return;
@@ -136,7 +145,57 @@ public sealed class TestBrowser
                     BrowserUI.CreateAgentTask(_db, info);
                     break; // re-render detail after returning
                 }
+                if (key.Key == ConsoleKey.H && info.HelixJobName is not null)
+                {
+                    ShowHelixWorkItemDetail(info);
+                    break; // re-render detail after returning
+                }
             }
+        }
+    }
+
+    private static void ShowHelixWorkItemDetail(BrowserUI.TestDetailInfo info)
+    {
+        PanelLayout.RenderDetailPanel(
+            ["Tests", "Helix Work Item"],
+            null,
+            () =>
+            {
+                if (info.IsHelixDeadletter)
+                {
+                    PanelLayout.RenderPanelLine("[bold red on yellow] ⚠ HELIX DEAD LETTER — Infrastructure failure [/]");
+                    PanelLayout.RenderEmptyLine();
+                }
+                PanelLayout.RenderField("Job", Markup.Escape(info.HelixJobName!));
+                if (info.HelixWorkItemName is not null)
+                {
+                    PanelLayout.RenderField("Work Item", Markup.Escape(info.HelixWorkItemName));
+                    var url = HelixClient.GetConsoleUrl(info.HelixJobName!, info.HelixWorkItemName);
+                    PanelLayout.RenderField("Console", BrowserUI.FormatLink(url, "Console Log"));
+                }
+                if (info.HelixFiles is { Count: > 0 })
+                {
+                    PanelLayout.RenderEmptyLine();
+                    PanelLayout.RenderSectionTitle($"Files ({info.HelixFiles.Count})");
+                    foreach (var (name, uri) in info.HelixFiles)
+                    {
+                        if (uri is not null)
+                        {
+                            PanelLayout.RenderPanelLine($"  {BrowserUI.FormatLink(uri, name)}");
+                        }
+                        else
+                        {
+                            PanelLayout.RenderPanelLine($"  {Markup.Escape(name)}");
+                        }
+                    }
+                }
+            },
+            "[blue]Esc[/] Back");
+        while (true)
+        {
+            var key = Console.ReadKey(true);
+            if (PanelLayout.HandleDetailScroll(key)) continue;
+            if (key.Key == ConsoleKey.Escape) return;
         }
     }
 
@@ -273,76 +332,86 @@ public sealed class TestBrowser
 
     private void EditFilter()
     {
-        AnsiConsole.Clear();
-        AnsiConsole.MarkupLine("[bold underline]Edit Filter[/]");
-        AnsiConsole.MarkupLine("[dim]Syntax: test:VALUE repo:VALUE def:VALUE pr:NUMBER[/]");
-        AnsiConsole.MarkupLine("[dim]Examples: test:Serialization  repo:roslyn  def:*-CI[/]");
-        AnsiConsole.MarkupLine("[dim]Append ! for exact match. Press Esc to cancel[/]");
-        AnsiConsole.WriteLine();
-        if (_filter.IsActive)
-            AnsiConsole.MarkupLine($"[dim]Current: {Markup.Escape(_filter.ToString())}[/]");
-        AnsiConsole.Markup("[blue]> [/]");
+        var currentValue = _filter.IsActive ? _filter.ToString() : null;
+        var result = PanelLayout.PromptInPanel(
+            ["Tests", "Edit Filter"],
+            "Enter filter expression (e.g. test:Serialization repo:roslyn def:*-CI)",
+            currentValue);
 
-        var buffer = new System.Text.StringBuilder();
-        while (true)
+        if (result is not null)
         {
-            var key = Console.ReadKey(true);
-            if (key.Key == ConsoleKey.Escape) return;
-            if (key.Key == ConsoleKey.Enter)
-            {
-                AnsiConsole.WriteLine();
-                var input = buffer.ToString().Trim();
-                if (!string.IsNullOrEmpty(input))
-                    _filter.ParseExpression(input);
-                SaveFilter();
-                return;
-            }
-            if (key.Key == ConsoleKey.Backspace)
-            {
-                if (buffer.Length > 0) { buffer.Remove(buffer.Length - 1, 1); Console.Write("\b \b"); }
-                continue;
-            }
-            if (key.KeyChar >= 32) { buffer.Append(key.KeyChar); Console.Write(key.KeyChar); }
+            _filter.ParseExpression(result);
+            SaveFilter();
         }
     }
 
     private void ShowFilterMenu()
     {
-        AnsiConsole.Clear();
-        AnsiConsole.MarkupLine("[bold underline]Set Filter[/]");
-        AnsiConsole.MarkupLine($"[dim]Current: {Markup.Escape(_filter.ToString())}[/]");
-        AnsiConsole.WriteLine();
-        AnsiConsole.MarkupLine("  [blue]N[/]ame filter");
-        AnsiConsole.MarkupLine("  [blue]R[/]epository");
-        AnsiConsole.MarkupLine("  [blue]D[/]efinition");
-        AnsiConsole.MarkupLine("  [blue]K[/]ind (pr, ci)");
-        AnsiConsole.MarkupLine("  [blue]P[/]R number");
-        AnsiConsole.MarkupLine("  [blue]C[/]lear all filters");
-        AnsiConsole.MarkupLine("  [blue]Esc[/] Cancel");
-
-        var key = Console.ReadKey(true);
-        switch (key.Key)
+        while (true)
         {
-            case ConsoleKey.N:
-                _filter.TestNamePattern = BrowserUI.PromptPattern("Test name pattern (e.g. Serialization, *EditAndContinue*):");
-                break;
-            case ConsoleKey.R:
-                _filter.RepoPattern = BrowserUI.PromptPattern("Repository pattern (e.g. roslyn, dotnet/*):");
-                break;
-            case ConsoleKey.D:
-                _filter.DefinitionPattern = BrowserUI.PromptPattern("Definition pattern (e.g. ci, roslyn-CI*):");
-                break;
-            case ConsoleKey.K:
-                _filter.KindPattern = BrowserUI.PromptKindFilter();
-                break;
-            case ConsoleKey.P:
-                _filter.PrNumber = PromptPrNumber();
-                break;
-            case ConsoleKey.C:
-                _filter.Clear();
-                break;
+            var commands = new List<CommandBarItem>
+            {
+                new("Name", ConsoleKey.N, 1),
+                new("Repository", ConsoleKey.R, 2),
+                new("Definition", ConsoleKey.D, 3),
+                new("Kind", ConsoleKey.K, 4),
+                new("PR number", ConsoleKey.P, 5),
+                new("Clear", ConsoleKey.C, 6),
+            };
+
+            PanelLayout.RenderDetailPanel(
+                ["Tests", "Filter"],
+                null,
+                () =>
+                {
+                    PanelLayout.RenderPanelLine("Filter test failures by name, repository, definition, kind, etc.");
+                    PanelLayout.RenderEmptyLine();
+
+                    if (_filter.IsActive)
+                    {
+                        PanelLayout.RenderPanelLine($"[bold]Current filter:[/] {Markup.Escape(_filter.ToString())}");
+                    }
+                    else
+                    {
+                        PanelLayout.RenderPanelLine("[dim]No filter active[/]");
+                    }
+
+                    PanelLayout.RenderEmptyLine();
+                    PanelLayout.RenderPanelLine("[dim]Syntax: substring match by default, * for wildcards, ! suffix for exact[/]");
+                },
+                PanelLayout.BuildCommandBarString(commands));
+
+            var key = Console.ReadKey(true);
+            switch (key.Key)
+            {
+                case ConsoleKey.N:
+                    _filter.TestNamePattern = PanelLayout.PromptInPanel(["Tests", "Filter"], "Test name pattern (e.g. Serialization, *EditAndContinue*)");
+                    SaveFilter();
+                    continue;
+                case ConsoleKey.R:
+                    _filter.RepoPattern = PanelLayout.PromptInPanel(["Tests", "Filter"], "Repository pattern (e.g. roslyn, dotnet/*)");
+                    SaveFilter();
+                    continue;
+                case ConsoleKey.D:
+                    _filter.DefinitionPattern = PanelLayout.PromptInPanel(["Tests", "Filter"], "Definition pattern (e.g. ci, roslyn-CI*)");
+                    SaveFilter();
+                    continue;
+                case ConsoleKey.K:
+                    _filter.KindPattern = BrowserUI.PromptKindFilter();
+                    SaveFilter();
+                    continue;
+                case ConsoleKey.P:
+                    _filter.PrNumber = PromptPrNumber();
+                    SaveFilter();
+                    continue;
+                case ConsoleKey.C:
+                    _filter.Clear();
+                    SaveFilter();
+                    continue;
+                default:
+                    return;
+            }
         }
-        SaveFilter();
     }
 
     /// <summary>
@@ -350,8 +419,7 @@ public sealed class TestBrowser
     /// </summary>
     private static int? PromptPrNumber()
     {
-        AnsiConsole.WriteLine();
-        var raw = BrowserUI.PromptPattern("PR number (e.g. 12345):");
+        var raw = PanelLayout.PromptInPanel(["Tests", "Filter"], "PR number (e.g. 12345)");
         if (raw is null)
         {
             return null;
@@ -361,29 +429,31 @@ public sealed class TestBrowser
 
     private static void ShowFilterHelp()
     {
-        AnsiConsole.Clear();
-        AnsiConsole.MarkupLine("[bold underline]Test Filter Help[/]");
-        AnsiConsole.WriteLine();
-        AnsiConsole.MarkupLine("[bold]Quick filter (E):[/]");
-        AnsiConsole.MarkupLine("  Type an expression like: [blue]test:Serialization repo:roslyn[/]");
-        AnsiConsole.WriteLine();
-        AnsiConsole.MarkupLine("[bold]Matching (default: contains / LIKE):[/]");
-        AnsiConsole.MarkupLine("  [dim]Serial → matches tests containing 'Serial'[/]");
-        AnsiConsole.MarkupLine("  [dim]*EditAndContinue* → matches tests with 'EditAndContinue'[/]");
-        AnsiConsole.MarkupLine("  [dim]roslyn → matches repos containing 'roslyn'[/]");
-        AnsiConsole.WriteLine();
-        AnsiConsole.MarkupLine("[bold]Exact match (append !):[/]");
-        AnsiConsole.MarkupLine("  [dim]dotnet/roslyn! → matches exactly 'dotnet/roslyn'[/]");
-        AnsiConsole.WriteLine();
-        AnsiConsole.MarkupLine("[bold]Filter prefixes:[/]");
-        AnsiConsole.MarkupLine("  [blue]test:[/]  Test name");
-        AnsiConsole.MarkupLine("  [blue]repo:[/]  Repository name");
-        AnsiConsole.MarkupLine("  [blue]def:[/]   Definition/pipeline name");
-        AnsiConsole.MarkupLine("  [blue]kind:[/]  Build kind (pr, ci)");
-        AnsiConsole.MarkupLine("  [blue]pr:[/]    PR number (e.g. 12345)");
-        AnsiConsole.WriteLine();
-        AnsiConsole.MarkupLine("[bold]Multiple filters combine with AND.[/]");
-        AnsiConsole.MarkupLine("[dim]Press any key to continue...[/]");
+        PanelLayout.RenderDetailPanel(
+            ["Tests", "Filter Help"],
+            null,
+            () =>
+            {
+                PanelLayout.RenderPanelLine("[bold]Quick filter (E):[/]");
+                PanelLayout.RenderPanelLine("  Type an expression like: [blue]test:Serialization repo:roslyn[/]");
+                PanelLayout.RenderEmptyLine();
+                PanelLayout.RenderPanelLine("[bold]Matching (default: contains / LIKE):[/]");
+                PanelLayout.RenderPanelLine("  [dim]Serial → matches tests containing 'Serial'[/]");
+                PanelLayout.RenderPanelLine("  [dim]*EditAndContinue* → matches tests with 'EditAndContinue'[/]");
+                PanelLayout.RenderEmptyLine();
+                PanelLayout.RenderPanelLine("[bold]Exact match (append !):[/]");
+                PanelLayout.RenderPanelLine("  [dim]dotnet/roslyn! → matches exactly 'dotnet/roslyn'[/]");
+                PanelLayout.RenderEmptyLine();
+                PanelLayout.RenderPanelLine("[bold]Filter prefixes:[/]");
+                PanelLayout.RenderPanelLine("  [blue]test:[/]  Test name");
+                PanelLayout.RenderPanelLine("  [blue]repo:[/]  Repository name");
+                PanelLayout.RenderPanelLine("  [blue]def:[/]   Definition/pipeline name");
+                PanelLayout.RenderPanelLine("  [blue]kind:[/]  Build kind (pr, ci)");
+                PanelLayout.RenderPanelLine("  [blue]pr:[/]    PR number");
+                PanelLayout.RenderEmptyLine();
+                PanelLayout.RenderPanelLine("[bold]Multiple filters combine with AND.[/]");
+            },
+            "[blue]Esc[/] Back");
         Console.ReadKey(true);
     }
 

@@ -126,7 +126,11 @@ public sealed class BuildBrowser
                     ["Builds"],
                     context,
                     () => PanelLayout.RenderPanelLine(emptyMsg),
-                    "[blue]E[/]dit filter   [blue]F[/]ilter menu   [blue]Esc[/] Back");
+                    PanelLayout.BuildCommandBarString(new List<CommandBarItem>
+                    {
+                        new("Edit filter", ConsoleKey.E, -5),
+                        new("Filter menu", ConsoleKey.F, -2),
+                    }));
 
                 var emptyKey = Console.ReadKey(true);
                 if (emptyKey.Key == ConsoleKey.E)
@@ -550,10 +554,25 @@ public sealed class BuildBrowser
         var canNext = buildIndex >= 0 && buildIndex < _lastBuilds.Count - 1;
         var canPrev = buildIndex > 0;
 
-        var hotkeys = "[blue]T[/]ests   [blue]J[/]obs   [blue]H[/]elix   [blue]A[/]nalysis   [blue]Esc[/] Back" +
-            (canForward ? "   [blue]F[/]orward" : "") +
-            (canNext ? "   [blue]N[/]ext" : "") +
-            (canPrev ? "   [blue]P[/]rev" : "");
+        var detailCommands = new List<CommandBarItem>
+        {
+            new("Tests", ConsoleKey.T, -10),
+            new("Jobs", ConsoleKey.J, -11),
+            new("Helix", ConsoleKey.H, -12),
+            new("Analysis", ConsoleKey.A, -13),
+        };
+        if (canForward)
+        {
+            detailCommands.Add(new("Forward", ConsoleKey.F, -14));
+        }
+        if (canNext)
+        {
+            detailCommands.Add(new("Next", ConsoleKey.N, -15));
+        }
+        if (canPrev)
+        {
+            detailCommands.Add(new("Prev", ConsoleKey.P, -16));
+        }
 
         PanelLayout.RenderDetailPanel(
             ["Builds", $"#{page.BuildId} {defName}"],
@@ -739,7 +758,7 @@ public sealed class BuildBrowser
                     PanelLayout.RenderPanelLine($"  [bold]Helix Work Items:[/] {helixCount}");
                 }
             },
-            hotkeys);
+            PanelLayout.BuildCommandBarString(detailCommands));
 
         return ReadNavKey(page);
     }
@@ -843,6 +862,10 @@ public sealed class BuildBrowser
             new("Builds with failure", ConsoleKey.B, -2),
             new("Agent task", ConsoleKey.A, -3),
         };
+        if (info.HelixJobName is not null)
+        {
+            commands.Add(new("Helix", ConsoleKey.H, -4));
+        }
 
         PanelLayout.RenderDetailPanel(
             ["Builds", "Tests", Markup.Escape(shortTitle)],
@@ -853,6 +876,7 @@ public sealed class BuildBrowser
         while (true)
         {
             var key = Console.ReadKey(true);
+            if (PanelLayout.HandleDetailScroll(key)) continue;
             switch (key.Key)
             {
                 case ConsoleKey.B:
@@ -860,9 +884,58 @@ public sealed class BuildBrowser
                 case ConsoleKey.A:
                     BrowserUI.CreateAgentTask(_db, info);
                     return NavAction.Refresh.Instance;
+                case ConsoleKey.H when info.HelixJobName is not null:
+                    ShowHelixWorkItemDetail(info);
+                    return NavAction.Refresh.Instance;
                 case ConsoleKey.Escape:
                     return NavAction.Back.Instance;
             }
+        }
+    }
+
+    private static void ShowHelixWorkItemDetail(BrowserUI.TestDetailInfo info)
+    {
+        var commands = new List<CommandBarItem>();
+        PanelLayout.RenderDetailPanel(
+            ["Tests", "Helix Work Item"],
+            null,
+            () =>
+            {
+                if (info.IsHelixDeadletter)
+                {
+                    PanelLayout.RenderPanelLine("[bold red on yellow] ⚠ HELIX DEAD LETTER — Infrastructure failure [/]");
+                    PanelLayout.RenderEmptyLine();
+                }
+                PanelLayout.RenderField("Job", Markup.Escape(info.HelixJobName!));
+                if (info.HelixWorkItemName is not null)
+                {
+                    PanelLayout.RenderField("Work Item", Markup.Escape(info.HelixWorkItemName));
+                    var url = HelixClient.GetConsoleUrl(info.HelixJobName!, info.HelixWorkItemName);
+                    PanelLayout.RenderField("Console", BrowserUI.FormatLink(url, "Console Log"));
+                }
+                if (info.HelixFiles is { Count: > 0 })
+                {
+                    PanelLayout.RenderEmptyLine();
+                    PanelLayout.RenderSectionTitle($"Files ({info.HelixFiles.Count})");
+                    foreach (var (name, uri) in info.HelixFiles)
+                    {
+                        if (uri is not null)
+                        {
+                            PanelLayout.RenderPanelLine($"  {BrowserUI.FormatLink(uri, name)}");
+                        }
+                        else
+                        {
+                            PanelLayout.RenderPanelLine($"  {Markup.Escape(name)}");
+                        }
+                    }
+                }
+            },
+            "[blue]Esc[/] Back");
+        while (true)
+        {
+            var key = Console.ReadKey(true);
+            if (PanelLayout.HandleDetailScroll(key)) continue;
+            if (key.Key == ConsoleKey.Escape) return;
         }
     }
 
@@ -1083,6 +1156,7 @@ public sealed class BuildBrowser
         while (true)
         {
             var key = Console.ReadKey(true);
+            if (PanelLayout.HandleDetailScroll(key)) continue;
 
             switch (key.Key)
             {
@@ -1186,7 +1260,12 @@ public sealed class BuildBrowser
                 }
             },
             "[blue]Esc[/] Back");
-        Console.ReadKey(true);
+        while (true)
+        {
+            var key = Console.ReadKey(true);
+            if (PanelLayout.HandleDetailScroll(key)) continue;
+            if (key.Key == ConsoleKey.Escape) return;
+        }
     }
 
     private void ShowAnalysis(BuildDetailPage page)
