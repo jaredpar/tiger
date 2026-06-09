@@ -27,26 +27,26 @@ public sealed class TestBrowser
     {
         while (true)
         {
-            AnsiConsole.Clear();
-            AnsiConsole.MarkupLine("[bold underline]Test Failures[/]");
-            if (_filter.IsActive)
-            {
-                AnsiConsole.MarkupLine($"Filter: {Markup.Escape(_filter.ToString())}");
-            }
-            else
-            {
-                AnsiConsole.MarkupLine("[dim]Filter: (none)[/]");
-            }
-            AnsiConsole.WriteLine();
-
             var tests = QueryTests();
+
+            var filterText = _filter.IsActive
+                ? $"Filter: {Markup.Escape(_filter.ToString())}"
+                : "[dim]Filter: (none)[/]";
+            var context = tests.Count > 0
+                ? $"{filterText}  [dim]({tests.Count} failed test(s))[/]"
+                : filterText;
 
             if (tests.Count == 0)
             {
-                AnsiConsole.MarkupLine(_filter.IsActive
+                var emptyMsg = _filter.IsActive
                     ? "[yellow]No test failures match the current filter.[/]"
-                    : "[yellow]No test failures recorded yet.[/]");
-                AnsiConsole.MarkupLine("  [blue]E[/]dit filter   [blue]F[/]ilter menu   [blue]Esc[/] Back");
+                    : "[yellow]No test failures recorded yet.[/]";
+
+                PanelLayout.RenderDetailPanel(
+                    ["Tests"],
+                    context,
+                    () => PanelLayout.RenderPanelLine(emptyMsg),
+                    "[blue]E[/]dit filter   [blue]F[/]ilter menu   [blue]Esc[/] Back");
 
                 var emptyKey = Console.ReadKey(true);
                 if (emptyKey.Key == ConsoleKey.E) { EditFilter(); continue; }
@@ -56,28 +56,28 @@ public sealed class TestBrowser
                 return;
             }
 
-            AnsiConsole.MarkupLine($"[dim]{tests.Count} failed test(s)[/]");
-            AnsiConsole.WriteLine();
-
             var choices = tests.Select(t =>
             {
                 var title = t.TestName.Length > 70 ? t.TestName[..67] + "..." : t.TestName;
                 return $"[red]✗[/] {Markup.Escape(title)}  [dim]({t.FailCount} build(s))[/]";
             }).ToList();
 
-            var hotkeys = _filter.IsActive
-                ? "[blue]E[/]dit filter   [blue]F[/]ilter menu   [blue]C[/]lear   [blue]H[/]elp"
-                : "[blue]E[/]dit filter   [blue]F[/]ilter menu   [blue]H[/]elp";
+            var commands = new List<CommandBarItem>
+            {
+                new("Edit filter", ConsoleKey.E, -5),
+                new("Filter menu", ConsoleKey.F, -2),
+                new("Help", ConsoleKey.H, -3),
+            };
+            if (_filter.IsActive)
+            {
+                commands.Add(new("Clear", ConsoleKey.C, -4));
+            }
 
-            var selected = BrowserUI.SelectWithEscape("Select a test:", choices,
-                extraKeys: new Dictionary<ConsoleKey, int> {
-                    { ConsoleKey.E, -5 },
-                    { ConsoleKey.F, -2 },
-                    { ConsoleKey.H, -3 },
-                    { ConsoleKey.C, -4 },
-                },
-                useMarkup: true,
-                hotkeys: hotkeys);
+            var selected = PanelLayout.SelectInPanel(
+                ["Tests"],
+                context,
+                choices,
+                commands);
 
             if (selected == -5) { EditFilter(); continue; }
             if (selected == -2) { ShowFilterMenu(); continue; }

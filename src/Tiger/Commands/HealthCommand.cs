@@ -40,20 +40,18 @@ public sealed class HealthCommand : AsyncCommand
     {
         while (true)
         {
-            AnsiConsole.Clear();
-            AnsiConsole.MarkupLine("[bold underline]Tiger Health Reports[/]");
-            AnsiConsole.WriteLine();
-
             var runs = agent.GetRecentRuns();
             if (runs.Count == 0)
             {
-                AnsiConsole.MarkupLine("[yellow]No health reports available yet. The agent runs every 15 minutes.[/]");
-                AnsiConsole.MarkupLine("[dim]Press any key to exit...[/]");
+                PanelLayout.RenderDetailPanel(
+                    ["Health"],
+                    null,
+                    () => PanelLayout.RenderPanelLine("[yellow]No health reports available yet. The agent runs every 15 minutes.[/]"),
+                    "[blue]Esc[/] Back");
                 Console.ReadKey(true);
                 return;
             }
 
-            // Get distinct combos
             var combos = runs
                 .Select(r => (r.Repository, r.Definition))
                 .Distinct()
@@ -61,9 +59,15 @@ public sealed class HealthCommand : AsyncCommand
 
             var items = combos.Select(c => $"{c.Repository} / {c.Definition}").ToList();
 
-            var selected = BrowserUI.SelectWithEscape("Select a pipeline:", items);
+            var selected = PanelLayout.SelectInPanel(
+                ["Health"],
+                $"[dim]{combos.Count} pipeline(s)[/]",
+                items,
+                new List<CommandBarItem>());
             if (selected < 0)
+            {
                 return;
+            }
 
             var (repo, def) = combos[selected];
             ShowStatePage(agent, repo, def);
@@ -78,41 +82,37 @@ public sealed class HealthCommand : AsyncCommand
     {
         while (true)
         {
-            AnsiConsole.Clear();
-            AnsiConsole.MarkupLine($"[bold underline]{Markup.Escape(repository)} / {Markup.Escape(definition)}[/]");
-            AnsiConsole.WriteLine();
-
             var state = agent.GetCurrentState(repository, definition);
-            if (state is not null)
-            {
-                MarkdownRenderer.Render(state);
-            }
-            else
-            {
-                AnsiConsole.MarkupLine("[dim]No state summary available yet.[/]");
-            }
 
-            AnsiConsole.WriteLine();
+            PanelLayout.RenderDetailPanel(
+                ["Health", $"{Markup.Escape(repository)} / {Markup.Escape(definition)}"],
+                null,
+                () =>
+                {
+                    if (state is not null)
+                    {
+                        // Render markdown content line-by-line inside panel
+                        var lines = state.ReplaceLineEndings("\n").Split('\n');
+                        foreach (var line in lines.Take(30))
+                        {
+                            PanelLayout.RenderPanelLine(Markup.Escape(line));
+                        }
+                        if (lines.Length > 30)
+                        {
+                            PanelLayout.RenderPanelLine($"[dim]... ({lines.Length - 30} more lines)[/]");
+                        }
+                    }
+                    else
+                    {
+                        PanelLayout.RenderPanelLine("[dim]No state summary available yet.[/]");
+                    }
+                },
+                "[blue]R[/]e-run   [blue]G[/]ist   [blue]V[/]iew runs   [blue]Esc[/] Back");
 
-            var menuItems = new List<string>
+            var key = Console.ReadKey(true);
+            switch (key.Key)
             {
-                $"[blue]R[/]e-run health analysis",
-                $"[blue]G[/]ist (create public)",
-                $"[blue]V[/]iew agent runs",
-            };
-
-            var extraKeys = new Dictionary<ConsoleKey, int>
-            {
-                [ConsoleKey.R] = 0,
-                [ConsoleKey.G] = 1,
-                [ConsoleKey.V] = 2,
-            };
-
-            var menuChoice = BrowserUI.SelectWithEscape("", menuItems, useMarkup: true, extraKeys: extraKeys);
-
-            switch (menuChoice)
-            {
-                case 0:
+                case ConsoleKey.R:
                     AnsiConsole.MarkupLine("[dim]Running health analysis...[/]");
                     try
                     {
@@ -124,13 +124,13 @@ public sealed class HealthCommand : AsyncCommand
                         AnsiConsole.MarkupLine($"[red]Analysis failed: {Markup.Escape(ex.Message)}[/]");
                     }
                     break;
-                case 1:
+                case ConsoleKey.G:
                     CreateGist(repository, definition, state);
                     break;
-                case 2:
+                case ConsoleKey.V:
                     ShowRunsPage(agent, repository, definition);
                     break;
-                default:
+                case ConsoleKey.Escape:
                     return;
             }
         }
@@ -198,60 +198,61 @@ public sealed class HealthCommand : AsyncCommand
     {
         while (true)
         {
-            AnsiConsole.Clear();
-            AnsiConsole.MarkupLine($"[bold underline]Agent Runs — {Markup.Escape(repository)} / {Markup.Escape(definition)}[/]");
-            AnsiConsole.WriteLine();
-
             var runs = agent.GetRecentRuns(repository, definition);
             if (runs.Count == 0)
             {
-                AnsiConsole.MarkupLine("[dim]No runs found.[/]");
-                AnsiConsole.MarkupLine("[dim]Press any key to go back...[/]");
+                PanelLayout.RenderDetailPanel(
+                    ["Health", $"{Markup.Escape(repository)}", "Runs"],
+                    null,
+                    () => PanelLayout.RenderPanelLine("[dim]No runs found.[/]"),
+                    "[blue]Esc[/] Back");
                 Console.ReadKey(true);
                 return;
             }
 
             var items = runs.Select(r => r.Timestamp.Replace("_", " ")).ToList();
 
-            var selected = BrowserUI.SelectWithEscape("Select a run:", items);
+            var selected = PanelLayout.SelectInPanel(
+                ["Health", $"{Markup.Escape(repository)}", "Runs"],
+                $"[dim]{runs.Count} run(s)[/]",
+                items,
+                new List<CommandBarItem>());
             if (selected < 0)
+            {
                 return;
+            }
 
             ShowRunDetail(runs[selected]);
         }
     }
 
-    /// <summary>
-    /// Fourth level: full log of a single agent run.
-    /// </summary>
     private static void ShowRunDetail(HealthRunInfo run)
     {
-        AnsiConsole.Clear();
-        AnsiConsole.MarkupLine($"[bold underline]Health Report — {Markup.Escape(run.Timestamp.Replace("_", " "))}[/]");
-        AnsiConsole.WriteLine();
+        PanelLayout.RenderDetailPanel(
+            ["Health", "Run", Markup.Escape(run.Timestamp.Replace("_", " "))],
+            null,
+            () =>
+            {
+                if (File.Exists(run.LogPath))
+                {
+                    var content = File.ReadAllText(run.LogPath);
+                    var lines = content.ReplaceLineEndings("\n").Split('\n');
+                    foreach (var line in lines.Take(40))
+                    {
+                        PanelLayout.RenderPanelLine(Markup.Escape(line));
+                    }
+                    if (lines.Length > 40)
+                    {
+                        PanelLayout.RenderPanelLine($"[dim]... ({lines.Length - 40} more lines)[/]");
+                    }
+                }
+                else
+                {
+                    PanelLayout.RenderPanelLine("[red]Log file not found.[/]");
+                }
+            },
+            "[blue]Esc[/] Back");
 
-        if (File.Exists(run.LogPath))
-        {
-            var content = File.ReadAllText(run.LogPath);
-            MarkdownRenderer.Render(content);
-        }
-        else
-        {
-            AnsiConsole.MarkupLine("[red]Log file not found.[/]");
-        }
-
-        AnsiConsole.WriteLine();
-
-        var menuItems = new List<string>
-        {
-            $"[blue]B[/]ack",
-        };
-
-        var extraKeys = new Dictionary<ConsoleKey, int>
-        {
-            [ConsoleKey.B] = 0,
-        };
-
-        BrowserUI.SelectWithEscape("", menuItems, useMarkup: true, extraKeys: extraKeys);
+        Console.ReadKey(true);
     }
 }

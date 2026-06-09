@@ -21,23 +21,25 @@ public sealed class AgentBrowser
     {
         while (true)
         {
-            AnsiConsole.Clear();
-            AnsiConsole.MarkupLine("[bold underline]Agent Tasks[/]");
-            AnsiConsole.WriteLine();
-
             var tasks = LoadTasks();
             if (tasks is null)
             {
-                AnsiConsole.MarkupLine("[red]Failed to load agent tasks from gh CLI.[/]");
-                AnsiConsole.MarkupLine("[dim]Press any key to go back...[/]");
+                PanelLayout.RenderDetailPanel(
+                    ["Agents"],
+                    null,
+                    () => PanelLayout.RenderPanelLine("[red]Failed to load agent tasks from gh CLI.[/]"),
+                    "[blue]Esc[/] Back");
                 Console.ReadKey(true);
                 return;
             }
 
             if (tasks.Count == 0)
             {
-                AnsiConsole.MarkupLine("[dim]No agent tasks found.[/]");
-                AnsiConsole.MarkupLine("  [blue]R[/]efresh   [blue]Esc[/] Back");
+                PanelLayout.RenderDetailPanel(
+                    ["Agents"],
+                    null,
+                    () => PanelLayout.RenderPanelLine("[dim]No agent tasks found.[/]"),
+                    "[blue]R[/]efresh   [blue]Esc[/] Back");
 
                 while (true)
                 {
@@ -74,15 +76,16 @@ public sealed class AgentBrowser
                 items.Add($"{stateIcon} {Markup.Escape(name)}{prInfo}{tigerMark}  [dim]{Markup.Escape(repo)}[/]");
             }
 
-            var extraKeys = new Dictionary<ConsoleKey, int>
+            var commands = new List<CommandBarItem>
             {
-                [ConsoleKey.R] = -2,
+                new("Refresh", ConsoleKey.R, -2),
             };
 
-            AnsiConsole.MarkupLine("  [blue]R[/]efresh   [yellow]★[/] = submitted from Tiger");
-            AnsiConsole.WriteLine();
-
-            var selected = BrowserUI.SelectWithEscape("", items, useMarkup: true, extraKeys: extraKeys);
+            var selected = PanelLayout.SelectInPanel(
+                ["Agents"],
+                $"[dim]{tasks.Count} task(s)[/]  [yellow]★[/] = submitted from Tiger",
+                items,
+                commands);
 
             if (selected == -1)
             {
@@ -101,46 +104,7 @@ public sealed class AgentBrowser
     {
         while (true)
         {
-            AnsiConsole.Clear();
-
             var isTracked = task.Id is not null && trackedIds.Contains(task.Id);
-
-            var headerTable = new Table().Border(TableBorder.Rounded);
-            headerTable.AddColumn(new TableColumn("").NoWrap());
-            headerTable.AddColumn(new TableColumn(""));
-            headerTable.HideHeaders();
-
-            headerTable.AddRow("[bold]Name[/]", Markup.Escape(task.Name ?? "unnamed"));
-            headerTable.AddRow("[bold]State[/]", FormatState(task.State));
-            headerTable.AddRow("[bold]Repository[/]", Markup.Escape(task.Repository ?? "unknown"));
-            if (task.Id is not null)
-            {
-                headerTable.AddRow("[bold]Session[/]", Markup.Escape(task.Id));
-            }
-            if (task.CreatedAt is not null)
-            {
-                headerTable.AddRow("[bold]Created[/]", BrowserUI.FormatTime(task.CreatedAt));
-            }
-            if (task.UpdatedAt is not null)
-            {
-                headerTable.AddRow("[bold]Updated[/]", BrowserUI.FormatTime(task.UpdatedAt));
-            }
-            if (task.PullRequestNumber is not null && task.PullRequestUrl is not null)
-            {
-                headerTable.AddRow("[bold]Pull Request[/]",
-                    $"{BrowserUI.FormatLink(task.PullRequestUrl, $"PR #{task.PullRequestNumber}")} ({Markup.Escape(task.PullRequestState ?? "unknown")})");
-            }
-            else if (task.PullRequestNumber is not null)
-            {
-                headerTable.AddRow("[bold]Pull Request[/]", $"#{task.PullRequestNumber}");
-            }
-            if (isTracked)
-            {
-                headerTable.AddRow("[bold]Source[/]", "[yellow]Submitted from Tiger[/]");
-            }
-
-            AnsiConsole.Write(headerTable);
-            AnsiConsole.WriteLine();
 
             var menuItems = new List<string>();
             var actions = new List<string>();
@@ -161,13 +125,59 @@ public sealed class AgentBrowser
             extraKeys[ConsoleKey.R] = menuItems.Count - 1;
             actions.Add("refresh");
 
-            var choice = BrowserUI.SelectWithEscape("", menuItems, useMarkup: true, extraKeys: extraKeys);
-            if (choice < 0)
+            // Use RenderDetailPanel for the header info, then SelectInPanel for menu
+            PanelLayout.RenderDetailPanel(
+                ["Agents", Markup.Escape(task.Name ?? "unnamed")],
+                $"{FormatState(task.State)}  {Markup.Escape(task.Repository ?? "unknown")}",
+                () =>
+                {
+                    PanelLayout.RenderField("Name", Markup.Escape(task.Name ?? "unnamed"));
+                    PanelLayout.RenderField("State", FormatState(task.State));
+                    PanelLayout.RenderField("Repository", Markup.Escape(task.Repository ?? "unknown"));
+                    if (task.Id is not null)
+                    {
+                        PanelLayout.RenderField("Session", Markup.Escape(task.Id));
+                    }
+                    if (task.CreatedAt is not null)
+                    {
+                        PanelLayout.RenderField("Created", BrowserUI.FormatTime(task.CreatedAt));
+                    }
+                    if (task.UpdatedAt is not null)
+                    {
+                        PanelLayout.RenderField("Updated", BrowserUI.FormatTime(task.UpdatedAt));
+                    }
+                    if (task.PullRequestNumber is not null && task.PullRequestUrl is not null)
+                    {
+                        PanelLayout.RenderField("Pull Request",
+                            $"{BrowserUI.FormatLink(task.PullRequestUrl, $"PR #{task.PullRequestNumber}")} ({Markup.Escape(task.PullRequestState ?? "unknown")})");
+                    }
+                    else if (task.PullRequestNumber is not null)
+                    {
+                        PanelLayout.RenderField("Pull Request", $"#{task.PullRequestNumber}");
+                    }
+                    if (isTracked)
+                    {
+                        PanelLayout.RenderField("Source", "[yellow]Submitted from Tiger[/]");
+                    }
+                },
+                "[blue]O[/]pen PR   [blue]V[/]iew logs   [blue]R[/]efresh   [blue]Esc[/] Back");
+
+            var key = Console.ReadKey(true);
+            if (key.Key == ConsoleKey.Escape)
             {
                 return;
             }
 
-            switch (actions[choice])
+            // Map key to action
+            string? action = key.Key switch
+            {
+                ConsoleKey.O when task.PullRequestUrl is not null => "open_pr",
+                ConsoleKey.V => "logs",
+                ConsoleKey.R => "refresh",
+                _ => null,
+            };
+
+            switch (action)
             {
                 case "open_pr":
                     var openProcess = new System.Diagnostics.Process();
