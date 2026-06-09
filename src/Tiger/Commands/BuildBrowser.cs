@@ -305,94 +305,102 @@ public sealed class BuildBrowser
 
     private void EditFilter()
     {
-        AnsiConsole.Clear();
-        AnsiConsole.MarkupLine("[bold underline]Edit Filter[/]");
-        AnsiConsole.MarkupLine("[dim]Syntax: repo:VALUE def:VALUE num:VALUE result:VALUE pr:NUMBER[/]");
-        AnsiConsole.MarkupLine("[dim]Examples: repo:roslyn  result:failed  repo:dotnet/* def:*-CI[/]");
-        AnsiConsole.MarkupLine("[dim]Append ! for exact match: repo:dotnet/roslyn![/]");
-        AnsiConsole.MarkupLine("[dim]Press Esc to cancel[/]");
-        AnsiConsole.WriteLine();
-        if (_filter.IsActive)
-            AnsiConsole.MarkupLine($"[dim]Current: {Markup.Escape(_filter.ToString())}[/]");
-        AnsiConsole.Markup("[blue]> [/]");
+        var currentValue = _filter.IsActive ? _filter.ToString() : null;
+        var result = PanelLayout.PromptInPanel(
+            ["Builds", "Edit Filter"],
+            "Enter filter expression (e.g. repo:roslyn def:ci result:failed)",
+            currentValue);
 
-        var buffer = new System.Text.StringBuilder();
-        while (true)
+        if (result is not null)
         {
-            var key = Console.ReadKey(true);
-            if (key.Key == ConsoleKey.Escape)
-                return; // keep existing filter
-            if (key.Key == ConsoleKey.Enter)
-            {
-                AnsiConsole.WriteLine();
-                var input = buffer.ToString().Trim();
-                if (!string.IsNullOrEmpty(input))
-                    _filter.ParseExpression(input);
-                SaveFilter();
-                return;
-            }
-            if (key.Key == ConsoleKey.Backspace)
-            {
-                if (buffer.Length > 0)
-                {
-                    buffer.Remove(buffer.Length - 1, 1);
-                    Console.Write("\b \b");
-                }
-                continue;
-            }
-            if (key.KeyChar >= 32)
-            {
-                buffer.Append(key.KeyChar);
-                Console.Write(key.KeyChar);
-            }
+            _filter.ParseExpression(result);
+            SaveFilter();
         }
     }
 
     private void ShowFilterMenu()
     {
-        AnsiConsole.Clear();
-        AnsiConsole.MarkupLine("[bold underline]Set Filter[/]");
-        AnsiConsole.MarkupLine($"[dim]Current: {Markup.Escape(_filter.ToString())}[/]");
-        AnsiConsole.WriteLine();
-        AnsiConsole.MarkupLine("  [blue]R[/]epository");
-        AnsiConsole.MarkupLine("  [blue]D[/]efinition");
-        AnsiConsole.MarkupLine("  Build [blue]I[/]D");
-        AnsiConsole.MarkupLine("  [blue]O[/]utcome (failed, succeeded, partiallySucceeded)");
-        AnsiConsole.MarkupLine("  [blue]K[/]ind (pr, ci)");
-        AnsiConsole.MarkupLine("  [blue]B[/]ranch");
-        AnsiConsole.MarkupLine("  [blue]P[/]R number");
-        AnsiConsole.MarkupLine("  [blue]C[/]lear all filters");
-        AnsiConsole.MarkupLine("  [blue]Esc[/] Cancel");
-
-        var key = Console.ReadKey(true);
-        switch (key.Key)
+        while (true)
         {
-            case ConsoleKey.R:
-                _filter.RepoPattern = BrowserUI.PromptPattern("Repository pattern (e.g. roslyn, dotnet/*):");
-                break;
-            case ConsoleKey.D:
-                _filter.DefinitionPattern = BrowserUI.PromptPattern("Definition pattern (e.g. ci, roslyn-CI*):");
-                break;
-            case ConsoleKey.I:
-                _filter.IdPattern = BrowserUI.PromptPattern("Build ID pattern (e.g. 1423*, 142333):");
-                break;
-            case ConsoleKey.O:
-                _filter.ResultPattern = PromptResultFilter();
-                break;
-            case ConsoleKey.K:
-                _filter.KindPattern = BrowserUI.PromptKindFilter();
-                break;
-            case ConsoleKey.B:
-                _filter.BranchPattern = BrowserUI.PromptPattern("Branch pattern (e.g. main, release/*):");
-                break;
-            case ConsoleKey.P:
-                _filter.PrNumber = PromptPrNumber();
-                break;
-            case ConsoleKey.C:
-                _filter.Clear();
-                break;
+            var commands = new List<CommandBarItem>
+            {
+                new("Repository", ConsoleKey.R, 1),
+                new("Definition", ConsoleKey.D, 2),
+                new("Build ID", ConsoleKey.I, 3),
+                new("Outcome", ConsoleKey.O, 4),
+                new("Kind", ConsoleKey.K, 5),
+                new("Branch", ConsoleKey.B, 6),
+                new("PR number", ConsoleKey.P, 7),
+                new("Clear", ConsoleKey.C, 8),
+            };
+
+            PanelLayout.RenderDetailPanel(
+                ["Builds", "Filter"],
+                null,
+                () =>
+                {
+                    PanelLayout.RenderPanelLine("Filter available builds by repository, definition, kind, branch, etc.");
+                    PanelLayout.RenderEmptyLine();
+
+                    if (_filter.IsActive)
+                    {
+                        PanelLayout.RenderPanelLine($"[bold]Current filter:[/] {Markup.Escape(_filter.ToString())}");
+                    }
+                    else
+                    {
+                        PanelLayout.RenderPanelLine("[dim]No filter active[/]");
+                    }
+
+                    PanelLayout.RenderEmptyLine();
+                    PanelLayout.RenderPanelLine("[dim]Syntax: substring match by default, * for wildcards, ! suffix for exact[/]");
+                    PanelLayout.RenderPanelLine("[dim]Example: repo:roslyn  def:*-CI  result:failed  branch:main[/]");
+                },
+                PanelLayout.BuildCommandBarString(commands));
+
+            var key = Console.ReadKey(true);
+            switch (key.Key)
+            {
+                case ConsoleKey.R:
+                    _filter.RepoPattern = PromptFilterField("Repository pattern (e.g. roslyn, dotnet/*)");
+                    SaveFilter();
+                    continue;
+                case ConsoleKey.D:
+                    _filter.DefinitionPattern = PromptFilterField("Definition pattern (e.g. ci, roslyn-CI*)");
+                    SaveFilter();
+                    continue;
+                case ConsoleKey.I:
+                    _filter.IdPattern = PromptFilterField("Build ID pattern (e.g. 1423*, 142333)");
+                    SaveFilter();
+                    continue;
+                case ConsoleKey.O:
+                    _filter.ResultPattern = PromptResultFilter();
+                    SaveFilter();
+                    continue;
+                case ConsoleKey.K:
+                    _filter.KindPattern = BrowserUI.PromptKindFilter();
+                    SaveFilter();
+                    continue;
+                case ConsoleKey.B:
+                    _filter.BranchPattern = PromptFilterField("Branch pattern (e.g. main, release/*)");
+                    SaveFilter();
+                    continue;
+                case ConsoleKey.P:
+                    _filter.PrNumber = PromptPrNumber();
+                    SaveFilter();
+                    continue;
+                case ConsoleKey.C:
+                    _filter.Clear();
+                    SaveFilter();
+                    continue;
+                default:
+                    return;
+            }
         }
-        SaveFilter();
+    }
+
+    private static string? PromptFilterField(string prompt)
+    {
+        return PanelLayout.PromptInPanel(["Builds", "Filter"], prompt);
     }
 
     /// <summary>
@@ -400,11 +408,18 @@ public sealed class BuildBrowser
     /// </summary>
     private static string? PromptResultFilter()
     {
-        AnsiConsole.WriteLine();
-        var choices = new[] { "all", "failed", "succeeded", "partiallySucceeded" };
-        var selected = BrowserUI.SelectWithEscape("Select outcome:", choices.ToList(), pageSize: 5);
-        if (selected < 0) return null; // cancelled
-        return choices[selected] == "all" ? null : choices[selected];
+        var outcomes = new List<string> { "all", "failed", "succeeded", "partiallySucceeded" };
+        var commands = new List<CommandBarItem>();
+        var selected = PanelLayout.SelectInPanel(
+            ["Builds", "Filter", "Outcome"],
+            "[dim]Select build outcome to filter on[/]",
+            outcomes,
+            commands);
+        if (selected < 0)
+        {
+            return null;
+        }
+        return outcomes[selected] == "all" ? null : outcomes[selected];
     }
 
     /// <summary>
@@ -412,8 +427,7 @@ public sealed class BuildBrowser
     /// </summary>
     private static int? PromptPrNumber()
     {
-        AnsiConsole.WriteLine();
-        var raw = BrowserUI.PromptPattern("PR number (e.g. 12345):");
+        var raw = PanelLayout.PromptInPanel(["Builds", "Filter"], "PR number (e.g. 12345)");
         if (raw is null)
         {
             return null;
@@ -423,31 +437,34 @@ public sealed class BuildBrowser
 
     private static void ShowFilterHelp()
     {
-        AnsiConsole.Clear();
-        AnsiConsole.MarkupLine("[bold underline]Filter Help[/]");
-        AnsiConsole.WriteLine();
-        AnsiConsole.MarkupLine("[bold]Quick filter (E):[/]");
-        AnsiConsole.MarkupLine("  Type an expression like: [blue]repo:roslyn def:ci[/]");
-        AnsiConsole.WriteLine();
-        AnsiConsole.MarkupLine("[bold]Matching (default: contains / LIKE):[/]");
-        AnsiConsole.MarkupLine("  [dim]ros → matches 'dotnet/roslyn', 'roslyn-CI', etc.[/]");
-        AnsiConsole.MarkupLine("  [dim]dotnet/* → matches 'dotnet/roslyn', 'dotnet/runtime'[/]");
-        AnsiConsole.MarkupLine("  [dim]14* → matches build numbers starting with '14'[/]");
-        AnsiConsole.MarkupLine("  [dim]*-CI → matches definition names ending with '-CI'[/]");
-        AnsiConsole.WriteLine();
-        AnsiConsole.MarkupLine("[bold]Exact match (append !):[/]");
-        AnsiConsole.MarkupLine("  [dim]dotnet/roslyn! → matches exactly 'dotnet/roslyn'[/]");
-        AnsiConsole.WriteLine();
-        AnsiConsole.MarkupLine("[bold]Filter prefixes:[/]");
-        AnsiConsole.MarkupLine("  [blue]repo:[/]    Repository name");
-        AnsiConsole.MarkupLine("  [blue]def:[/]     Definition/pipeline name");
-        AnsiConsole.MarkupLine("  [blue]id:[/]      Build ID (e.g. 1423*, 142333)");
-        AnsiConsole.MarkupLine("  [blue]result:[/]  Outcome (failed, succeeded, partiallySucceeded)");
-        AnsiConsole.MarkupLine("  [blue]kind:[/]    Build kind (pr, ci)");
-        AnsiConsole.MarkupLine("  [blue]branch:[/]  Source branch (e.g. main, release/*)");
-        AnsiConsole.MarkupLine("  [blue]pr:[/]      PR number (e.g. 12345)");        AnsiConsole.WriteLine();
-        AnsiConsole.MarkupLine("[bold]Multiple filters combine with AND.[/]");
-        AnsiConsole.MarkupLine("[dim]Press any key to continue...[/]");
+        PanelLayout.RenderDetailPanel(
+            ["Builds", "Filter Help"],
+            null,
+            () =>
+            {
+                PanelLayout.RenderPanelLine("[bold]Quick filter (E):[/]");
+                PanelLayout.RenderPanelLine("  Type an expression like: [blue]repo:roslyn def:ci[/]");
+                PanelLayout.RenderEmptyLine();
+                PanelLayout.RenderPanelLine("[bold]Matching (default: contains / LIKE):[/]");
+                PanelLayout.RenderPanelLine("  [dim]ros → matches 'dotnet/roslyn', 'roslyn-CI', etc.[/]");
+                PanelLayout.RenderPanelLine("  [dim]dotnet/* → matches 'dotnet/roslyn', 'dotnet/runtime'[/]");
+                PanelLayout.RenderPanelLine("  [dim]*-CI → matches definition names ending with '-CI'[/]");
+                PanelLayout.RenderEmptyLine();
+                PanelLayout.RenderPanelLine("[bold]Exact match (append !):[/]");
+                PanelLayout.RenderPanelLine("  [dim]dotnet/roslyn! → matches exactly 'dotnet/roslyn'[/]");
+                PanelLayout.RenderEmptyLine();
+                PanelLayout.RenderPanelLine("[bold]Filter prefixes:[/]");
+                PanelLayout.RenderPanelLine("  [blue]repo:[/]    Repository name");
+                PanelLayout.RenderPanelLine("  [blue]def:[/]     Definition/pipeline name");
+                PanelLayout.RenderPanelLine("  [blue]id:[/]      Build ID");
+                PanelLayout.RenderPanelLine("  [blue]result:[/]  Outcome (failed, succeeded, partiallySucceeded)");
+                PanelLayout.RenderPanelLine("  [blue]kind:[/]    Build kind (pr, ci)");
+                PanelLayout.RenderPanelLine("  [blue]branch:[/]  Source branch");
+                PanelLayout.RenderPanelLine("  [blue]pr:[/]      PR number");
+                PanelLayout.RenderEmptyLine();
+                PanelLayout.RenderPanelLine("[bold]Multiple filters combine with AND.[/]");
+            },
+            "[blue]Esc[/] Back");
         Console.ReadKey(true);
     }
 
@@ -731,9 +748,6 @@ public sealed class BuildBrowser
 
     private NavAction RenderTestList(TestListPage page)
     {
-        AnsiConsole.MarkupLine($"[bold underline]Failed Tests — Build #{page.BuildId}[/]");
-        AnsiConsole.WriteLine();
-
         var tests = _db.WithCommand(cmd =>
         {
             var tests = new List<(string RunName, string Title)>();
@@ -759,8 +773,11 @@ public sealed class BuildBrowser
 
         if (tests.Count == 0)
         {
-            AnsiConsole.MarkupLine("[green]No failed tests in this build.[/]");
-            AnsiConsole.MarkupLine("[dim]Press any key to go back...[/]");
+            PanelLayout.RenderDetailPanel(
+                ["Builds", $"#{page.BuildId}", "Tests"],
+                null,
+                () => PanelLayout.RenderPanelLine("[green]No failed tests in this build.[/]"),
+                "[blue]Esc[/] Back");
             Console.ReadKey(true);
             return NavAction.Back.Instance;
         }
@@ -768,9 +785,11 @@ public sealed class BuildBrowser
         // Build grouped display: run name headers are non-selectable, tests are selectable
         var choices = new List<string>();
         var selectableIndices = new List<int>(); // maps choice index → tests list index
+        var skipIndices = new HashSet<int>();
         var grouped = tests.Select((t, i) => (t, i)).GroupBy(x => x.t.RunName);
         foreach (var group in grouped)
         {
+            skipIndices.Add(choices.Count);
             choices.Add($"[bold yellow]{Markup.Escape(group.Key)}[/]");
             selectableIndices.Add(-1); // header, not selectable
 
@@ -783,11 +802,19 @@ public sealed class BuildBrowser
         }
 
         var totalFailed = tests.Select(t => t.Title).Distinct().Count();
-        var selected = BrowserUI.SelectWithEscape($"{totalFailed} failed test(s) across {grouped.Count()} run(s):",
-            choices, useMarkup: true, skipIndices: selectableIndices.Select((v, i) => (v, i)).Where(x => x.v == -1).Select(x => x.i).ToHashSet());
+        var commands = new List<CommandBarItem>();
+
+        var selected = PanelLayout.SelectInPanel(
+            ["Builds", $"#{page.BuildId}", "Tests"],
+            $"[dim]{totalFailed} failed test(s) across {grouped.Count()} run(s)[/]",
+            choices,
+            commands,
+            skipIndices: skipIndices);
 
         if (selected < 0)
+        {
             return NavAction.Back.Instance;
+        }
 
         var testTitle = tests[selectableIndices[selected]].Title;
         return new NavAction.Push(
@@ -801,16 +828,27 @@ public sealed class BuildBrowser
         var info = BrowserUI.LoadTestDetail(_db, page.Org, page.Project, page.TestName);
         if (info is null)
         {
-            AnsiConsole.MarkupLine("[yellow]No test failure data found.[/]");
-            AnsiConsole.MarkupLine("[dim]Press any key to go back...[/]");
+            PanelLayout.RenderDetailPanel(
+                ["Builds", "Tests", "Detail"],
+                null,
+                () => PanelLayout.RenderPanelLine("[yellow]No test failure data found.[/]"),
+                "[blue]Esc[/] Back");
             Console.ReadKey(true);
             return NavAction.Back.Instance;
         }
 
-        BrowserUI.RenderTestDetail(info);
+        var shortTitle = page.TestName.Length > 60 ? page.TestName[..57] + "..." : page.TestName;
+        var commands = new List<CommandBarItem>
+        {
+            new("Builds with failure", ConsoleKey.B, -2),
+            new("Agent task", ConsoleKey.A, -3),
+        };
 
-        AnsiConsole.MarkupLine("[bold]Navigation:[/]");
-        AnsiConsole.MarkupLine("  [blue]B[/]uilds with this failure   [blue]A[/]gent task   [blue]Esc[/] Back");
+        PanelLayout.RenderDetailPanel(
+            ["Builds", "Tests", Markup.Escape(shortTitle)],
+            null,
+            () => BrowserUI.RenderTestDetailInPanel(info),
+            PanelLayout.BuildCommandBarString(commands));
 
         while (true)
         {
@@ -833,9 +871,6 @@ public sealed class BuildBrowser
     private NavAction RenderTestBuilds(TestBuildsPage page)
     {
         var shortTitle = page.TestName.Length > 60 ? page.TestName[..57] + "..." : page.TestName;
-        AnsiConsole.MarkupLine($"[bold underline]Builds with failure[/]");
-        AnsiConsole.MarkupLine($"[bold]{Markup.Escape(shortTitle)}[/]");
-        AnsiConsole.WriteLine();
 
         var builds = _db.WithCommand(cmd =>
         {
@@ -875,8 +910,11 @@ public sealed class BuildBrowser
 
         if (builds.Count == 0)
         {
-            AnsiConsole.MarkupLine("[yellow]No builds found with this test failure.[/]");
-            AnsiConsole.MarkupLine("[dim]Press any key to go back...[/]");
+            PanelLayout.RenderDetailPanel(
+                ["Builds", "Tests", "Builds with failure"],
+                null,
+                () => PanelLayout.RenderPanelLine("[yellow]No builds found with this test failure.[/]"),
+                "[blue]Esc[/] Back");
             Console.ReadKey(true);
             return NavAction.Back.Instance;
         }
@@ -895,10 +933,17 @@ public sealed class BuildBrowser
             return $"{resultIcon} {b.BuildId} {Markup.Escape(b.DefinitionName)} {time}{pr}";
         }).ToList();
 
-        var selected = BrowserUI.SelectWithEscape("Select a build:", choices, useMarkup: true);
+        var commands = new List<CommandBarItem>();
+        var selected = PanelLayout.SelectInPanel(
+            ["Builds", "Tests", Markup.Escape(shortTitle), "Builds"],
+            $"[dim]{builds.Count} build(s) with this failure[/]",
+            choices,
+            commands);
 
         if (selected < 0)
+        {
             return NavAction.Back.Instance;
+        }
 
         var b2 = builds[selected];
         return new NavAction.Push(new BuildDetailPage(b2.Org, b2.Project, b2.BuildId));
@@ -945,8 +990,11 @@ public sealed class BuildBrowser
 
         if (jobIssues.Count == 0)
         {
-            AnsiConsole.MarkupLine("[green]No timeline issues recorded for this build.[/]");
-            AnsiConsole.MarkupLine("[dim]Press any key to go back...[/]");
+            PanelLayout.RenderDetailPanel(
+                ["Builds", $"#{page.BuildId}", "Jobs"],
+                null,
+                () => PanelLayout.RenderPanelLine("[green]No timeline issues recorded for this build.[/]"),
+                "[blue]Esc[/] Back");
             Console.ReadKey(true);
             return NavAction.Back.Instance;
         }
@@ -956,55 +1004,75 @@ public sealed class BuildBrowser
 
         while (true)
         {
-            AnsiConsole.Clear();
-            AnsiConsole.MarkupLine($"[bold underline]Failed Jobs — Build #{page.BuildId}[/]");
-            if (errorsOnly)
-                AnsiConsole.MarkupLine("[dim]Showing errors only[/]");
-            AnsiConsole.WriteLine();
-
-            foreach (var (jobName, issues) in jobIssues)
+            var commands = new List<CommandBarItem>
             {
-                var filtered = errorsOnly
-                    ? issues.Where(i => i.Type == "error").ToList()
-                    : issues;
+                new(errorsOnly ? "Errors: showing" : "Errors only", ConsoleKey.E, -2),
+                new(truncate ? "Truncate: off" : "Truncate: on", ConsoleKey.T, -3),
+            };
 
-                if (filtered.Count == 0)
-                    continue;
-
-                var errorCount = issues.Count(i => i.Type == "error");
-                var warnCount = issues.Count(i => i.Type == "warning");
-                var summary = new List<string>();
-                if (errorCount > 0) summary.Add($"[red]{errorCount} error(s)[/]");
-                if (warnCount > 0) summary.Add($"[yellow]{warnCount} warning(s)[/]");
-                AnsiConsole.MarkupLine($"[bold]{Markup.Escape(jobName)}[/]  {string.Join(" ", summary)}");
-
-                foreach (var (type, message) in filtered.Take(10))
+            PanelLayout.RenderDetailPanel(
+                ["Builds", $"#{page.BuildId}", "Jobs"],
+                errorsOnly ? "[dim]Showing errors only[/]" : null,
+                () =>
                 {
-                    var icon = type == "error" ? "[red]error[/]" : "[yellow]warn[/]";
-                    var msg = message.ReplaceLineEndings(" ");
-                    if (truncate && msg.Length > 120)
-                        msg = msg[..117] + "...";
-                    AnsiConsole.MarkupLine($"  {icon}: {Markup.Escape(msg)}");
-                }
+                    foreach (var (jobName, issues) in jobIssues)
+                    {
+                        var filtered = errorsOnly
+                            ? issues.Where(i => i.Type == "error").ToList()
+                            : issues;
 
-                if (filtered.Count > 10)
-                    AnsiConsole.MarkupLine($"  [dim]... and {filtered.Count - 10} more[/]");
+                        if (filtered.Count == 0)
+                        {
+                            continue;
+                        }
 
-                AnsiConsole.WriteLine();
-            }
+                        var errorCount = issues.Count(i => i.Type == "error");
+                        var warnCount = issues.Count(i => i.Type == "warning");
+                        var summary = new List<string>();
+                        if (errorCount > 0)
+                        {
+                            summary.Add($"[red]{errorCount} error(s)[/]");
+                        }
+                        if (warnCount > 0)
+                        {
+                            summary.Add($"[yellow]{warnCount} warning(s)[/]");
+                        }
+                        PanelLayout.RenderPanelLine($"[bold]{Markup.Escape(jobName)}[/]  {string.Join(" ", summary)}");
 
-            // Hotkey menu at the bottom
-            var errorsLabel = errorsOnly ? "[blue]E[/]rrors: showing" : "[blue]E[/]rrors only";
-            var truncateLabel = truncate ? "[blue]T[/]runcate: off" : "[blue]T[/]runcate: on";
-            AnsiConsole.MarkupLine($"  {errorsLabel}   {truncateLabel}   [blue]Esc[/] Back");
+                        foreach (var (type, message) in filtered.Take(10))
+                        {
+                            var icon = type == "error" ? "[red]error[/]" : "[yellow]warn[/]";
+                            var msg = message.ReplaceLineEndings(" ");
+                            if (truncate && msg.Length > 120)
+                            {
+                                msg = msg[..117] + "...";
+                            }
+                            PanelLayout.RenderPanelLine($"  {icon}: {Markup.Escape(msg)}");
+                        }
+
+                        if (filtered.Count > 10)
+                        {
+                            PanelLayout.RenderPanelLine($"  [dim]... and {filtered.Count - 10} more[/]");
+                        }
+
+                        PanelLayout.RenderEmptyLine();
+                    }
+                },
+                PanelLayout.BuildCommandBarString(commands));
 
             var key = Console.ReadKey(true);
             if (key.Key is ConsoleKey.Escape or ConsoleKey.B)
+            {
                 return NavAction.Back.Instance;
+            }
             if (key.Key == ConsoleKey.T)
+            {
                 truncate = !truncate;
+            }
             if (key.Key == ConsoleKey.E)
+            {
                 errorsOnly = !errorsOnly;
+            }
         }
     }
 
@@ -1057,10 +1125,6 @@ public sealed class BuildBrowser
 
     private void ShowHelixInfo(BuildDetailPage page)
     {
-        AnsiConsole.Clear();
-        AnsiConsole.MarkupLine($"[bold underline]Helix Work Items — Build #{page.BuildId}[/]");
-        AnsiConsole.WriteLine();
-
         var helixItems = _db.WithCommand(cmd =>
         {
             cmd.CommandText = """
@@ -1094,31 +1158,34 @@ public sealed class BuildBrowser
             return helixItems;
         });
 
-        var hasHelix = false;
-        foreach (var (job, wi, state, exitCode, consoleUri, isDeadletter) in helixItems)
-        {
-            hasHelix = true;
-            if (isDeadletter)
+        PanelLayout.RenderDetailPanel(
+            ["Builds", $"#{page.BuildId}", "Helix Work Items"],
+            $"[dim]{helixItems.Count} work item(s)[/]",
+            () =>
             {
-                AnsiConsole.MarkupLine($"  [bold red]⚠ DEAD LETTER[/] [bold]{Markup.Escape(wi)}[/]");
-            }
-            else
-            {
-                var stateInfo = state is not null ? $" [{(exitCode == 0 ? "green" : "red")}]{state} (exit {exitCode})[/]" : "";
-                AnsiConsole.MarkupLine($"  [bold]{Markup.Escape(wi)}[/]{stateInfo}");
-            }
+                if (helixItems.Count == 0)
+                {
+                    PanelLayout.RenderPanelLine("[yellow]No Helix work items found for failed tests in this build.[/]");
+                    return;
+                }
 
-            var url = consoleUri ?? HelixClient.GetConsoleUrl(job, wi);
-            AnsiConsole.MarkupLine($"    {BrowserUI.FormatLink(url, "Console Log")}");
-        }
+                foreach (var (job, wi, state, exitCode, consoleUri, isDeadletter) in helixItems)
+                {
+                    if (isDeadletter)
+                    {
+                        PanelLayout.RenderPanelLine($"  [bold red]⚠ DEAD LETTER[/] [bold]{Markup.Escape(wi)}[/]");
+                    }
+                    else
+                    {
+                        var stateInfo = state is not null ? $" [{(exitCode == 0 ? "green" : "red")}]{state} (exit {exitCode})[/]" : "";
+                        PanelLayout.RenderPanelLine($"  [bold]{Markup.Escape(wi)}[/]{stateInfo}");
+                    }
 
-        if (!hasHelix)
-        {
-            AnsiConsole.MarkupLine("[yellow]No Helix work items found for failed tests in this build.[/]");
-        }
-
-        AnsiConsole.WriteLine();
-        AnsiConsole.MarkupLine("[dim]Press any key to go back...[/]");
+                    var url = consoleUri ?? HelixClient.GetConsoleUrl(job, wi);
+                    PanelLayout.RenderPanelLine($"    {BrowserUI.FormatLink(url, "Console Log")}");
+                }
+            },
+            "[blue]Esc[/] Back");
         Console.ReadKey(true);
     }
 

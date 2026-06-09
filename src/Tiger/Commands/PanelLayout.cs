@@ -171,6 +171,20 @@ public static class PanelLayout
         return $"{barContent}{tabHint}";
     }
 
+    /// <summary>
+    /// Builds a static hotkey string from a list of commands (for use in RenderDetailPanel footers).
+    /// Renders each command with the [X] bracket-style hotkey highlighting.
+    /// </summary>
+    public static string BuildCommandBarString(List<CommandBarItem> commands)
+    {
+        var parts = new List<string>();
+        foreach (var cmd in commands)
+        {
+            parts.Add(FormatHotkeyLabel(cmd));
+        }
+        return string.Join("  ", parts) + "  [blue]Esc[/] Back";
+    }
+
     private static void RenderCommandBarAt(int row, List<CommandBarItem> commands, int focusedIndex, bool barFocused)
     {
         Console.SetCursorPosition(0, row);
@@ -263,12 +277,29 @@ public static class PanelLayout
     /// or -1 on Escape.
     /// </summary>
     public static int SelectInPanel(string[] breadcrumbs, string? context, List<string> items,
-        List<CommandBarItem> commands, int pageSize = 20,
+        List<CommandBarItem> commands, int pageSize = 0,
         int startIndex = 0, HashSet<int>? skipIndices = null, Action? renderAboveList = null)
     {
         if (items.Count == 0)
         {
             return -1;
+        }
+
+        // Calculate available page size dynamically to ensure command bar stays visible.
+        // Reserve rows: top border(1) + breadcrumb(1) + context(0-1) + separator(1)
+        //   + position indicator(0-1) + separator(1) + command bar(1) + bottom border(1) = 6-8
+        var headerRows = 3 + (context is not null ? 1 : 0); // top border + breadcrumb + context + separator
+        var footerRows = 3; // separator + command bar + bottom border
+        var reservedIndicatorRows = 1; // position indicator when items > visible
+        var maxPageSize = Math.Max(5, Console.WindowHeight - headerRows - footerRows - reservedIndicatorRows);
+
+        if (pageSize <= 0)
+        {
+            pageSize = maxPageSize;
+        }
+        else
+        {
+            pageSize = Math.Min(pageSize, maxPageSize);
         }
 
         var selected = Math.Clamp(startIndex, 0, items.Count - 1);

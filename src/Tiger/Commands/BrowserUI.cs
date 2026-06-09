@@ -315,9 +315,97 @@ public static class BrowserUI
     }
 
     /// <summary>
-    /// Converts a user pattern to a SQL LIKE pattern or exact match.
-    /// Default: contains match (ros → %ros%). Trailing ! means exact match.
-    /// * is a wildcard (dotnet/* → dotnet/%).
+    /// Renders test detail info using PanelLayout (for use inside RenderDetailPanel content delegates).
+    /// </summary>
+    public static void RenderTestDetailInPanel(TestDetailInfo info)
+    {
+        if (info.IsHelixDeadletter)
+        {
+            PanelLayout.RenderPanelLine("[bold red on yellow] ⚠ HELIX DEAD LETTER — Infrastructure failure, not a real test failure [/]");
+            PanelLayout.RenderEmptyLine();
+        }
+
+        PanelLayout.RenderField("Test Name", Markup.Escape(info.TestName));
+        var buildUrl = $"https://dev.azure.com/{Uri.EscapeDataString(info.Org)}/{Uri.EscapeDataString(info.Project)}/_build/results?buildId={info.BuildId}";
+        PanelLayout.RenderField("Last Failed Build", FormatLink(buildUrl, $"Build #{info.BuildId}"));
+        PanelLayout.RenderField("Run", Markup.Escape(info.RunName));
+        PanelLayout.RenderField("Failed In", $"{info.BuildCount} build(s)");
+        PanelLayout.RenderEmptyLine();
+
+        PanelLayout.RenderSectionTitle("Error");
+        if (!string.IsNullOrWhiteSpace(info.ErrorMessage))
+        {
+            var errorLines = info.ErrorMessage.ReplaceLineEndings("\n").Split('\n');
+            foreach (var line in errorLines.Take(5))
+            {
+                PanelLayout.RenderPanelLine($"  [red]{Markup.Escape(line)}[/]");
+            }
+            if (errorLines.Length > 5)
+            {
+                PanelLayout.RenderPanelLine($"  [dim]... ({errorLines.Length - 5} more lines)[/]");
+            }
+        }
+        else
+        {
+            PanelLayout.RenderPanelLine("  [dim]No error message available[/]");
+        }
+        PanelLayout.RenderEmptyLine();
+
+        PanelLayout.RenderSectionTitle("Stack Trace");
+        if (!string.IsNullOrWhiteSpace(info.StackTrace))
+        {
+            var stackLines = info.StackTrace.ReplaceLineEndings("\n").Split('\n');
+            foreach (var line in stackLines.Take(10))
+            {
+                PanelLayout.RenderPanelLine($"  [dim]{Markup.Escape(line)}[/]");
+            }
+            if (stackLines.Length > 10)
+            {
+                PanelLayout.RenderPanelLine($"  [dim]... ({stackLines.Length - 10} more lines)[/]");
+            }
+        }
+        else
+        {
+            PanelLayout.RenderPanelLine("  [dim]No stack trace available[/]");
+        }
+        PanelLayout.RenderEmptyLine();
+
+        PanelLayout.RenderSectionTitle("Helix");
+        if (info.HelixJobName is not null)
+        {
+            if (info.IsHelixDeadletter)
+            {
+                PanelLayout.RenderPanelLine("  [bold red]⚠ DEAD LETTER[/]");
+            }
+            PanelLayout.RenderField("Job", Markup.Escape(info.HelixJobName));
+            if (info.HelixWorkItemName is not null)
+            {
+                PanelLayout.RenderField("Work Item", Markup.Escape(info.HelixWorkItemName));
+                var consoleUrl = HelixClient.GetConsoleUrl(info.HelixJobName, info.HelixWorkItemName);
+                PanelLayout.RenderField("Console", FormatLink(consoleUrl, "Console Log"));
+
+                if (info.HelixFiles is { Count: > 0 })
+                {
+                    PanelLayout.RenderPanelLine($"  [bold]Files ({info.HelixFiles.Count}):[/]");
+                    foreach (var (name, uri) in info.HelixFiles)
+                    {
+                        if (uri is not null)
+                        {
+                            PanelLayout.RenderPanelLine($"    {FormatLink(uri, name)}");
+                        }
+                        else
+                        {
+                            PanelLayout.RenderPanelLine($"    {Markup.Escape(name)}");
+                        }
+                    }
+                }
+            }
+        }
+        else
+        {
+            PanelLayout.RenderPanelLine("  [dim]No Helix information available[/]");
+        }
+    }
     /// </summary>
     public static (string Pattern, bool IsExact) ToSqlPattern(string input)
     {

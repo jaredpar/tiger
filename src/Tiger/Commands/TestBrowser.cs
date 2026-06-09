@@ -94,27 +94,38 @@ public sealed class TestBrowser
     {
         while (true)
         {
-            AnsiConsole.Clear();
-
             var info = BrowserUI.LoadTestDetail(_db, test.Org, test.Project, test.TestName);
             if (info is null)
             {
-                AnsiConsole.MarkupLine("[yellow]No test failure data found.[/]");
-                AnsiConsole.MarkupLine("[dim]Press any key to go back...[/]");
+                PanelLayout.RenderDetailPanel(
+                    ["Tests", "Detail"],
+                    null,
+                    () => PanelLayout.RenderPanelLine("[yellow]No test failure data found.[/]"),
+                    "[blue]Esc[/] Back");
                 Console.ReadKey(true);
                 return;
             }
 
-            BrowserUI.RenderTestDetail(info);
+            var shortTitle = test.TestName.Length > 60 ? test.TestName[..57] + "..." : test.TestName;
+            var commands = new List<CommandBarItem>
+            {
+                new("Builds with failure", ConsoleKey.B, -2),
+                new("Agent task", ConsoleKey.A, -3),
+            };
 
-            AnsiConsole.MarkupLine("[bold]Navigation:[/]");
-            AnsiConsole.MarkupLine("  [blue]B[/]uilds with this failure   [blue]A[/]gent task   [blue]Esc[/] Back");
+            PanelLayout.RenderDetailPanel(
+                ["Tests", Markup.Escape(shortTitle)],
+                null,
+                () => BrowserUI.RenderTestDetailInPanel(info),
+                PanelLayout.BuildCommandBarString(commands));
 
             while (true)
             {
                 var key = Console.ReadKey(true);
                 if (key.Key == ConsoleKey.Escape)
+                {
                     return;
+                }
                 if (key.Key == ConsoleKey.B)
                 {
                     ShowTestBuilds(test);
@@ -131,18 +142,16 @@ public sealed class TestBrowser
 
     private void ShowTestBuilds(TestRow test)
     {
-        AnsiConsole.Clear();
         var shortTitle = test.TestName.Length > 60 ? test.TestName[..57] + "..." : test.TestName;
-        AnsiConsole.MarkupLine("[bold underline]Builds with failure[/]");
-        AnsiConsole.MarkupLine($"[bold]{Markup.Escape(shortTitle)}[/]");
-        AnsiConsole.WriteLine();
-
         var builds = QueryTestBuilds(test);
 
         if (builds.Count == 0)
         {
-            AnsiConsole.MarkupLine("[yellow]No builds found.[/]");
-            AnsiConsole.MarkupLine("[dim]Press any key to go back...[/]");
+            PanelLayout.RenderDetailPanel(
+                ["Tests", Markup.Escape(shortTitle), "Builds"],
+                null,
+                () => PanelLayout.RenderPanelLine("[yellow]No builds found.[/]"),
+                "[blue]Esc[/] Back");
             Console.ReadKey(true);
             return;
         }
@@ -151,7 +160,12 @@ public sealed class TestBrowser
             BrowserUI.FormatBuildChoice(b.BuildId, b.DefinitionName, b.Result,
                 b.FinishTime, b.PrNumber)).ToList();
 
-        var selected = BrowserUI.SelectWithEscape("Select a build:", choices, useMarkup: true);
+        var commands = new List<CommandBarItem>();
+        var selected = PanelLayout.SelectInPanel(
+            ["Tests", Markup.Escape(shortTitle), "Builds"],
+            $"[dim]{builds.Count} build(s) with this failure[/]",
+            choices,
+            commands);
 
         if (selected >= 0)
         {
