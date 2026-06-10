@@ -63,7 +63,7 @@ public sealed class TestBrowser
             var choices = tests.Select(t =>
             {
                 var title = t.TestName.Length > 70 ? t.TestName[..67] + "..." : t.TestName;
-                return $"[red]✗[/] {Markup.Escape(title)}  [dim]({t.FailCount} build(s))[/]";
+                return $"[red]X[/] {Markup.Escape(title)}  [dim]({t.FailCount} build(s))[/]";
             }).ToList();
 
             var commands = new List<CommandBarItem>
@@ -163,7 +163,7 @@ public sealed class TestBrowser
             {
                 if (info.IsHelixDeadletter)
                 {
-                    PanelLayout.RenderPanelLine("[bold red on yellow] ⚠ HELIX DEAD LETTER — Infrastructure failure [/]");
+                    PanelLayout.RenderPanelLine("[bold red on yellow] !! HELIX DEAD LETTER — Infrastructure failure [/]");
                     PanelLayout.RenderEmptyLine();
                 }
                 PanelLayout.RenderField("Job", Markup.Escape(info.HelixJobName!));
@@ -438,11 +438,11 @@ public sealed class TestBrowser
                 PanelLayout.RenderPanelLine("  Type an expression like: [blue]test:Serialization repo:roslyn[/]");
                 PanelLayout.RenderEmptyLine();
                 PanelLayout.RenderPanelLine("[bold]Matching (default: contains / LIKE):[/]");
-                PanelLayout.RenderPanelLine("  [dim]Serial → matches tests containing 'Serial'[/]");
-                PanelLayout.RenderPanelLine("  [dim]*EditAndContinue* → matches tests with 'EditAndContinue'[/]");
+                PanelLayout.RenderPanelLine("  [dim]Serial - matches tests containing 'Serial'[/]");
+                PanelLayout.RenderPanelLine("  [dim]*EditAndContinue* - matches tests with 'EditAndContinue'[/]");
                 PanelLayout.RenderEmptyLine();
                 PanelLayout.RenderPanelLine("[bold]Exact match (append !):[/]");
-                PanelLayout.RenderPanelLine("  [dim]dotnet/roslyn! → matches exactly 'dotnet/roslyn'[/]");
+                PanelLayout.RenderPanelLine("  [dim]dotnet/roslyn! - matches exactly 'dotnet/roslyn'[/]");
                 PanelLayout.RenderEmptyLine();
                 PanelLayout.RenderPanelLine("[bold]Filter prefixes:[/]");
                 PanelLayout.RenderPanelLine("  [blue]test:[/]  Test name");

@@ -66,7 +66,7 @@ public static class BrowserUI
 
             Console.Write(new string(' ', Console.WindowWidth));
             Console.SetCursorPosition(0, Console.CursorTop);
-            var builtIn = "[blue]↑↓[/] Navigate  [blue]Enter[/] Select  [blue]Esc[/] Back";
+            var builtIn = "[blue]Up/Dn[/] Navigate  [blue]Enter[/] Select  [blue]Esc[/] Back";
             var footer = hotkeys is not null
                 ? $"  {hotkeys}   {builtIn}"
                 : $"  {builtIn}";
@@ -191,21 +191,21 @@ public static class BrowserUI
 
     public static string FormatResult(string? result) => result switch
     {
-        "succeeded" => "[green]✓ succeeded[/]",
-        "failed" => "[red]✗ failed[/]",
-        "partiallySucceeded" => "[yellow]⚠ partial[/]",
+        "succeeded" => "[green]+ succeeded[/]",
+        "failed" => "[red]X failed[/]",
+        "partiallySucceeded" => "[yellow]! partial[/]",
         "canceled" => "[dim]canceled[/]",
-        null => "[dim]—[/]",
+        null => "[dim]-[/]",
         _ => result,
     };
 
     public static string FormatResultIcon(string? result) => result switch
     {
-        "succeeded" => "[green]✓[/]",
-        "failed" => "[red]✗[/]",
-        "partiallySucceeded" => "[yellow]⚠[/]",
-        "canceled" => "[dim]⊘[/]",
-        _ => "[dim]—[/]",
+        "succeeded" => "[green]+[/]",
+        "failed" => "[red]X[/]",
+        "partiallySucceeded" => "[yellow]![/]",
+        "canceled" => "[dim]-[/]",
+        _ => "[dim]-[/]",
     };
 
     /// <summary>
@@ -217,7 +217,7 @@ public static class BrowserUI
         var icon = FormatResultIcon(result);
         var pr = prNumber is not null ? $" PR#{prNumber}" : "";
         var time = FormatTime(finishTime);
-        var pendingIcon = pending ? " ⏳" : "";
+        var pendingIcon = pending ? " [dim]...[/]" : "";
         return $"{icon} {buildId} {Markup.Escape(definitionName)} {time}{pr}{pendingIcon}";
     }
 
@@ -229,7 +229,7 @@ public static class BrowserUI
         // Deadletter banner
         if (info.IsHelixDeadletter)
         {
-            AnsiConsole.MarkupLine("[bold red on yellow] ⚠ HELIX DEAD LETTER — Infrastructure failure, not a real test failure [/]");
+            AnsiConsole.MarkupLine("[bold red on yellow] !! HELIX DEAD LETTER — Infrastructure failure, not a real test failure [/]");
             AnsiConsole.WriteLine();
         }
 
@@ -281,7 +281,7 @@ public static class BrowserUI
         {
             if (info.IsHelixDeadletter)
             {
-                AnsiConsole.MarkupLine("  [bold red]⚠ DEAD LETTER[/]");
+                AnsiConsole.MarkupLine("  [bold red]!! DEAD LETTER[/]");
             }
             AnsiConsole.MarkupLine($"  [bold]Job:[/] {Markup.Escape(info.HelixJobName)}");
             if (info.HelixWorkItemName is not null)
@@ -321,7 +321,7 @@ public static class BrowserUI
     {
         if (info.IsHelixDeadletter)
         {
-            PanelLayout.RenderPanelLine("[bold red on yellow] ⚠ HELIX DEAD LETTER — Infrastructure failure, not a real test failure [/]");
+            PanelLayout.RenderPanelLine("[bold red on yellow] !! HELIX DEAD LETTER — Infrastructure failure, not a real test failure [/]");
             PanelLayout.RenderEmptyLine();
         }
 
@@ -375,7 +375,7 @@ public static class BrowserUI
         {
             if (info.IsHelixDeadletter)
             {
-                PanelLayout.RenderPanelLine("  [bold red]⚠ DEAD LETTER[/]");
+                PanelLayout.RenderPanelLine("  [bold red]!! DEAD LETTER[/]");
             }
             PanelLayout.RenderField("Job", Markup.Escape(info.HelixJobName));
             if (info.HelixWorkItemName is not null)

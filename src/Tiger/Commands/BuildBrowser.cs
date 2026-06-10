@@ -161,7 +161,7 @@ public sealed class BuildBrowser
             {
                 var resultIcon = b.Result switch
                 {
-                    "succeeded" => "[green]✓[/]",
+                    "succeeded" => "[green]+[/]",
                     "failed" => "[red]X[/]",
                     "partiallySucceeded" => "[yellow]![/]",
                     "canceled" => "[dim]-[/]",
@@ -450,12 +450,12 @@ public sealed class BuildBrowser
                 PanelLayout.RenderPanelLine("  Type an expression like: [blue]repo:roslyn def:ci[/]");
                 PanelLayout.RenderEmptyLine();
                 PanelLayout.RenderPanelLine("[bold]Matching (default: contains / LIKE):[/]");
-                PanelLayout.RenderPanelLine("  [dim]ros → matches 'dotnet/roslyn', 'roslyn-CI', etc.[/]");
-                PanelLayout.RenderPanelLine("  [dim]dotnet/* → matches 'dotnet/roslyn', 'dotnet/runtime'[/]");
-                PanelLayout.RenderPanelLine("  [dim]*-CI → matches definition names ending with '-CI'[/]");
+                PanelLayout.RenderPanelLine("  [dim]ros - matches 'dotnet/roslyn', 'roslyn-CI', etc.[/]");
+                PanelLayout.RenderPanelLine("  [dim]dotnet/* - matches 'dotnet/roslyn', 'dotnet/runtime'[/]");
+                PanelLayout.RenderPanelLine("  [dim]*-CI - matches definition names ending with '-CI'[/]");
                 PanelLayout.RenderEmptyLine();
                 PanelLayout.RenderPanelLine("[bold]Exact match (append !):[/]");
-                PanelLayout.RenderPanelLine("  [dim]dotnet/roslyn! → matches exactly 'dotnet/roslyn'[/]");
+                PanelLayout.RenderPanelLine("  [dim]dotnet/roslyn! - matches exactly 'dotnet/roslyn'[/]");
                 PanelLayout.RenderEmptyLine();
                 PanelLayout.RenderPanelLine("[bold]Filter prefixes:[/]");
                 PanelLayout.RenderPanelLine("  [blue]repo:[/]    Repository name");
@@ -538,7 +538,7 @@ public sealed class BuildBrowser
             }
             return t.Status switch
             {
-                "complete" => "[green]✓[/]",
+                "complete" => "[green]+[/]",
                 "running" => "[blue]...[/]",
                 "failed" => $"[yellow]X retry {t.Attempts}/5[/]",
                 "abandoned" => "[red]abandoned[/]",
@@ -735,27 +735,51 @@ public sealed class BuildBrowser
                     }
                 }
 
-                // Helix work items count
-                var helixCount = _db.WithCommand(cmd =>
+                // Helix work items
+                var helixItems = _db.WithCommand(cmd =>
                 {
                     cmd.CommandText = """
-                        SELECT COUNT(DISTINCT hw.job_name || '/' || hw.work_item_name)
+                        SELECT DISTINCT tr.helix_job_name, tr.helix_work_item_name, hw.state, hw.exit_code, hw.is_deadletter
                         FROM test_results tr
                         JOIN test_runs trn ON tr.organization = trn.organization
                             AND tr.project = trn.project AND tr.run_id = trn.run_id
-                        JOIN helix_work_items hw ON tr.helix_job_name = hw.job_name
+                        LEFT JOIN helix_work_items hw ON tr.helix_job_name = hw.job_name
                             AND tr.helix_work_item_name = hw.work_item_name
                         WHERE trn.organization = @org AND trn.project = @proj AND trn.build_id = @buildId
                           AND tr.outcome = 'Failed'
+                          AND tr.helix_job_name IS NOT NULL
+                        ORDER BY tr.helix_job_name, tr.helix_work_item_name
+                        LIMIT 15
                         """;
                     cmd.Parameters.AddWithValue("@org", page.Org);
                     cmd.Parameters.AddWithValue("@proj", page.Project);
                     cmd.Parameters.AddWithValue("@buildId", page.BuildId);
-                    return Convert.ToInt32(cmd.ExecuteScalar());
+
+                    var items = new List<(string Job, string Wi, string? State, int? ExitCode, bool IsDeadletter)>();
+                    using var reader = cmd.ExecuteReader();
+                    while (reader.Read())
+                    {
+                        items.Add((
+                            reader.GetString(0),
+                            reader.GetString(1),
+                            reader.IsDBNull(2) ? null : reader.GetString(2),
+                            reader.IsDBNull(3) ? (int?)null : reader.GetInt32(3),
+                            !reader.IsDBNull(4) && reader.GetInt32(4) != 0));
+                    }
+                    return items;
                 });
-                if (helixCount > 0)
+
+                if (helixItems.Count > 0)
                 {
-                    PanelLayout.RenderPanelLine($"  [bold]Helix Work Items:[/] {helixCount}");
+                    PanelLayout.RenderEmptyLine();
+                    PanelLayout.RenderSectionTitle($"Helix Work Items ({helixItems.Count})");
+                    foreach (var (job, wi, state, exitCode, isDeadletter) in helixItems)
+                    {
+                        var exitInfo = exitCode is not null ? $" exit {exitCode}" : "";
+                        var extra = isDeadletter ? " [red]deadletter[/]" : "";
+                        var color = (exitCode ?? 1) == 0 ? "green" : "red";
+                        PanelLayout.RenderPanelLine($"  [{color}]X[/] {Markup.Escape(wi)}  [dim]{Markup.Escape(job)}[/]{exitInfo}{extra}");
+                    }
                 }
             },
             PanelLayout.BuildCommandBarString(detailCommands));
@@ -803,7 +827,7 @@ public sealed class BuildBrowser
 
         // Build grouped display: run name headers are non-selectable, tests are selectable
         var choices = new List<string>();
-        var selectableIndices = new List<int>(); // maps choice index → tests list index
+        var selectableIndices = new List<int>(); // maps choice index -> tests list index
         var skipIndices = new HashSet<int>();
         var grouped = tests.Select((t, i) => (t, i)).GroupBy(x => x.t.RunName);
         foreach (var group in grouped)
@@ -903,7 +927,7 @@ public sealed class BuildBrowser
             {
                 if (info.IsHelixDeadletter)
                 {
-                    PanelLayout.RenderPanelLine("[bold red on yellow] ⚠ HELIX DEAD LETTER — Infrastructure failure [/]");
+                    PanelLayout.RenderPanelLine("[bold red on yellow] !! HELIX DEAD LETTER — Infrastructure failure [/]");
                     PanelLayout.RenderEmptyLine();
                 }
                 PanelLayout.RenderField("Job", Markup.Escape(info.HelixJobName!));
@@ -996,7 +1020,7 @@ public sealed class BuildBrowser
         {
             var resultIcon = b.Result switch
             {
-                "succeeded" => "[green]✓[/]",
+                "succeeded" => "[green]+[/]",
                 "failed" => "[red]X[/]",
                 "partiallySucceeded" => "[yellow]![/]",
                 _ => "[dim]-[/]",
@@ -1247,7 +1271,7 @@ public sealed class BuildBrowser
                 {
                     if (isDeadletter)
                     {
-                        PanelLayout.RenderPanelLine($"  [bold red]⚠ DEAD LETTER[/] [bold]{Markup.Escape(wi)}[/]");
+                        PanelLayout.RenderPanelLine($"  [bold red]!! DEAD LETTER[/] [bold]{Markup.Escape(wi)}[/]");
                     }
                     else
                     {

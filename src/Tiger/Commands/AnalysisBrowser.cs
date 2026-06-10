@@ -41,11 +41,11 @@ public sealed class AnalysisBrowser
             {
                 var statusIcon = a.Status switch
                 {
-                    "complete" => "[green]✓[/]",
-                    "running" => "[yellow]⟳[/]",
-                    "pending" => "[dim]…[/]",
-                    "skipped" => "[blue]⊘[/]",
-                    "failed" => "[red]✗[/]",
+                    "complete" => "[green]+[/]",
+                    "running" => "[yellow]~[/]",
+                    "pending" => "[dim]...[/]",
+                    "skipped" => "[blue]-[/]",
+                    "failed" => "[red]X[/]",
                     _ => "[dim]?[/]",
                 };
                 var category = a.Category is not null ? $"[dim]({Markup.Escape(a.Category)})[/]" : "";

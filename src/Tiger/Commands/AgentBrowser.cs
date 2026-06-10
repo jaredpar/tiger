@@ -75,7 +75,7 @@ public sealed class AgentBrowser
                 var prInfo = task.PullRequestNumber is not null
                     ? $" PR #{task.PullRequestNumber}"
                     : "";
-                var tigerMark = isTracked ? " [yellow]★[/]" : "";
+                var tigerMark = isTracked ? " [yellow]*[/]" : "";
                 items.Add($"{stateIcon} {Markup.Escape(name)}{prInfo}{tigerMark}  [dim]{Markup.Escape(repo)}[/]");
             }
 
@@ -86,7 +86,7 @@ public sealed class AgentBrowser
 
             var selected = PanelLayout.SelectInPanel(
                 ["Agents"],
-                $"[dim]{tasks.Count} task(s)[/]  [yellow]★[/] = submitted from Tiger",
+                $"[dim]{tasks.Count} task(s)[/]  [yellow]*[/] = submitted from Tiger",
                 items,
                 commands);
 
@@ -306,11 +306,11 @@ public sealed class AgentBrowser
 
     private static string FormatState(string? state) => state switch
     {
-        "completed" => "[green]✓ completed[/]",
-        "in_progress" => "[blue]● in progress[/]",
-        "cancelled" => "[dim]✕ cancelled[/]",
-        "waiting" => "[yellow]◌ waiting[/]",
-        "queued" => "[yellow]◌ queued[/]",
+        "completed" => "[green]+ completed[/]",
+        "in_progress" => "[blue]> in progress[/]",
+        "cancelled" => "[dim]X cancelled[/]",
+        "waiting" => "[yellow]- waiting[/]",
+        "queued" => "[yellow]- queued[/]",
         _ => Markup.Escape(state ?? "unknown"),
     };
 

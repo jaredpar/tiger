@@ -34,7 +34,7 @@ public static class PanelLayout
     private const char Vertical = '║';
     private const char MiddleLeft = '╠';
     private const char MiddleRight = '╣';
-    private const char Separator = '▸';
+    private const char Separator = '>';
 
     private const string BorderStyle = "dim";
 
@@ -163,7 +163,7 @@ public static class PanelLayout
     {
         if (commands.Count == 0)
         {
-            return "[dim]↑↓ Navigate  Enter Select  Esc Back[/]";
+            return "[dim]Up/Dn Navigate  Enter Select  Esc Back[/]";
         }
 
         var parts = new List<string>();
@@ -180,7 +180,7 @@ public static class PanelLayout
         }
         var barContent = string.Join("  ", parts);
         var tabHint = barFocused
-            ? "  [dim]←→ Move  Enter Execute  Tab Content[/]"
+            ? "  [dim]<-> Move  Enter Execute  Tab Content[/]"
             : "  [dim]Tab Commands[/]";
         return $"{barContent}{tabHint}";
     }
@@ -210,7 +210,7 @@ public static class PanelLayout
     private static void RenderListLineAt(int row, string markupContent, bool isSelected)
     {
         Console.SetCursorPosition(0, row);
-        var prefix = isSelected ? "[blue]▸[/] " : "  ";
+        var prefix = isSelected ? "[blue]>[/] " : "  ";
         var line = $"{prefix}{markupContent}";
         AnsiConsole.Markup($"[{BorderStyle}]{Vertical}[/] ");
         AnsiConsole.Markup(line);
@@ -374,7 +374,7 @@ public static class PanelLayout
 
                     if (!barFocused && idx == selected)
                     {
-                        RenderPanelLine($"[blue]▸[/] {items[idx]}");
+                        RenderPanelLine($"[blue]>[/] {items[idx]}");
                     }
                     else
                     {
@@ -628,7 +628,8 @@ public static class PanelLayout
 
     private static void RenderDetailPanelFrame(string[] breadcrumbs, string? context, List<string> contentLines, int scrollOffset, string hotkeys)
     {
-        AnsiConsole.Clear();
+        Console.Clear();
+        Console.SetCursorPosition(0, 0);
         Console.CursorVisible = false;
         var width = Console.WindowWidth - 2;
 
@@ -661,7 +662,7 @@ public static class PanelLayout
         // Footer
         AnsiConsole.MarkupLine($"[{BorderStyle}]{MiddleLeft}{new string(Horizontal, width)}{MiddleRight}[/]");
         var scrollHint = contentLines.Count > availableHeight
-            ? $"  [dim]({scrollOffset + 1}-{Math.Min(scrollOffset + availableHeight, contentLines.Count)}/{contentLines.Count} ↑↓)[/]"
+            ? $"  [dim]({scrollOffset + 1}-{Math.Min(scrollOffset + availableHeight, contentLines.Count)}/{contentLines.Count} Up/Dn)[/]"
             : "";
         RenderPanelLineDirect($"{hotkeys}{scrollHint}");
         AnsiConsole.MarkupLine($"[{BorderStyle}]{BottomLeft}{new string(Horizontal, width)}{BottomRight}[/]");
@@ -674,14 +675,27 @@ public static class PanelLayout
 
     /// <summary>
     /// Renders a single line inside the panel with vertical borders (direct, no capture).
+    /// Truncates content to fit within the panel width.
     /// </summary>
     private static void RenderPanelLineDirect(string markupContent)
     {
-        AnsiConsole.Markup($"[{BorderStyle}]{Vertical}[/] ");
-        AnsiConsole.Markup(markupContent);
+        var maxContentWidth = Console.WindowWidth - 4; // borders + padding
+        var plainText = Markup.Remove(markupContent);
+        var displayContent = markupContent;
 
-        var plainLen = Markup.Remove(markupContent).Length;
-        var padding = Math.Max(0, Console.WindowWidth - 4 - plainLen);
+        // If plain text exceeds available width, truncate
+        if (plainText.Length > maxContentWidth)
+        {
+            // Truncate the plain text and use it directly (loses markup but prevents wrapping)
+            var truncated = plainText[..(maxContentWidth - 3)] + "...";
+            displayContent = Markup.Escape(truncated);
+        }
+
+        AnsiConsole.Markup($"[{BorderStyle}]{Vertical}[/] ");
+        AnsiConsole.Markup(displayContent);
+
+        var plainLen = Markup.Remove(displayContent).Length;
+        var padding = Math.Max(0, maxContentWidth - plainLen);
         Console.Write(new string(' ', padding));
         AnsiConsole.MarkupLine($" [{BorderStyle}]{Vertical}[/]");
     }
