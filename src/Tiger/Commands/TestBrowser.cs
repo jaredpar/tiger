@@ -98,6 +98,7 @@ public sealed class TestBrowser
 
     private void ShowTestDetail(TestRow test)
     {
+        var truncate = true;
         while (true)
         {
             var info = BrowserUI.LoadTestDetail(_db, test.Org, test.Project, test.TestName);
@@ -112,11 +113,13 @@ public sealed class TestBrowser
                 return;
             }
 
+            _ui.TruncationEnabled = truncate;
             var shortTitle = test.TestName.Length > 60 ? test.TestName[..57] + "..." : test.TestName;
             var commands = new List<CommandBarItem>
             {
                 new("Builds with failure", ConsoleKey.B, -2),
                 new("Agent task", ConsoleKey.A, -3),
+                new(truncate ? "Truncate: off" : "Truncate: on", ConsoleKey.T, -5),
             };
             if (info.HelixJobName is not null)
             {
@@ -135,20 +138,29 @@ public sealed class TestBrowser
                 if (_ui.HandleDetailScroll(key)) continue;
                 if (key.Key == ConsoleKey.Escape)
                 {
+                    _ui.TruncationEnabled = true;
                     return;
+                }
+                if (key.Key == ConsoleKey.T)
+                {
+                    truncate = !truncate;
+                    break; // re-render with updated truncate
                 }
                 if (key.Key == ConsoleKey.B)
                 {
+                    _ui.TruncationEnabled = true;
                     ShowTestBuilds(test);
                     break; // re-render detail after returning
                 }
                 if (key.Key == ConsoleKey.A)
                 {
+                    _ui.TruncationEnabled = true;
                     BrowserUI.CreateAgentTask(_db, info);
                     break; // re-render detail after returning
                 }
                 if (key.Key == ConsoleKey.H && info.HelixJobName is not null)
                 {
+                    _ui.TruncationEnabled = true;
                     ShowHelixWorkItemDetail(info);
                     break; // re-render detail after returning
                 }

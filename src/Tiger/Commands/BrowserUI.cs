@@ -327,7 +327,7 @@ public static class BrowserUI
 
         ui.RenderField("Test Name", Markup.Escape(info.TestName));
         var buildUrl = $"https://dev.azure.com/{Uri.EscapeDataString(info.Org)}/{Uri.EscapeDataString(info.Project)}/_build/results?buildId={info.BuildId}";
-        ui.RenderField("Last Failed Build", FormatLink(buildUrl, $"Build #{info.BuildId}"));
+        ui.RenderField("Last Failed Build", Markup.Escape(buildUrl));
         ui.RenderField("Run", Markup.Escape(info.RunName));
         ui.RenderField("Failed In", $"{info.BuildCount} build(s)");
         ui.RenderEmptyLine();
@@ -381,6 +381,11 @@ public static class BrowserUI
             if (info.HelixWorkItemName is not null)
             {
                 ui.RenderField("Work Item", Markup.Escape(info.HelixWorkItemName));
+                if (info.HelixExitCode is not null)
+                {
+                    var exitColor = info.HelixExitCode == 0 ? "green" : "red";
+                    ui.RenderField("Exit Code", $"[{exitColor}]{info.HelixExitCode}[/]");
+                }
                 var consoleUrl = HelixClient.GetConsoleUrl(info.HelixJobName, info.HelixWorkItemName);
                 ui.RenderField("Console", FormatLink(consoleUrl, "Console Log"));
 
@@ -444,7 +449,8 @@ public static class BrowserUI
         string? ErrorMessage, string? StackTrace,
         string? HelixJobName, string? HelixWorkItemName,
         List<(string Name, string? Uri)>? HelixFiles = null,
-        bool IsHelixDeadletter = false);
+        bool IsHelixDeadletter = false,
+        int? HelixExitCode = null);
 
     /// <summary>
     /// Loads test detail info from the database.
@@ -507,12 +513,13 @@ public static class BrowserUI
         // Load helix files and deadletter status if available
         List<(string Name, string? Uri)>? helixFiles = null;
         var isDeadletter = false;
+        int? helixExitCode = null;
         if (detail.HelixJob is not null && detail.HelixWorkItem is not null)
         {
             var helixInfo = db.WithCommand(cmd =>
             {
                 cmd.CommandText = """
-                    SELECT files, is_deadletter FROM helix_work_items
+                    SELECT files, is_deadletter, exit_code FROM helix_work_items
                     WHERE job_name = @job AND work_item_name = @wi
                     """;
                 cmd.Parameters.AddWithValue("@job", detail.HelixJob);
@@ -522,12 +529,14 @@ public static class BrowserUI
                 {
                     return (
                         FilesJson: reader.IsDBNull(0) ? null : reader.GetString(0),
-                        IsDeadletter: !reader.IsDBNull(1) && reader.GetInt32(1) != 0);
+                        IsDeadletter: !reader.IsDBNull(1) && reader.GetInt32(1) != 0,
+                        ExitCode: reader.IsDBNull(2) ? (int?)null : reader.GetInt32(2));
                 }
-                return (FilesJson: (string?)null, IsDeadletter: false);
+                return (FilesJson: (string?)null, IsDeadletter: false, ExitCode: (int?)null);
             });
 
             isDeadletter = helixInfo.IsDeadletter;
+            helixExitCode = helixInfo.ExitCode;
 
             if (!string.IsNullOrWhiteSpace(helixInfo.FilesJson))
             {
@@ -547,7 +556,7 @@ public static class BrowserUI
         }
 
         return new TestDetailInfo(testName, org, project, detail.BuildId, detail.RunName, buildCount,
-            detail.ErrorMessage, detail.StackTrace, detail.HelixJob, detail.HelixWorkItem, helixFiles, isDeadletter);
+            detail.ErrorMessage, detail.StackTrace, detail.HelixJob, detail.HelixWorkItem, helixFiles, isDeadletter, helixExitCode);
     }
 
     /// <summary>

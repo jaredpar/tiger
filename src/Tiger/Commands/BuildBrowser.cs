@@ -883,38 +883,53 @@ public sealed class BuildBrowser
         }
 
         var shortTitle = page.TestName.Length > 60 ? page.TestName[..57] + "..." : page.TestName;
-        var commands = new List<CommandBarItem>
-        {
-            new("Builds with failure", ConsoleKey.B, -2),
-            new("Agent task", ConsoleKey.A, -3),
-        };
-        if (info.HelixJobName is not null)
-        {
-            commands.Add(new("Helix", ConsoleKey.H, -4));
-        }
-
-        _ui.RenderDetailPanel(
-            ["Builds", "Tests", Markup.Escape(shortTitle)],
-            null,
-            () => BrowserUI.RenderTestDetailInPanel(_ui, info),
-            PanelRenderer.BuildCommandBarString(commands));
+        var truncate = true;
 
         while (true)
         {
-            var key = Console.ReadKey(true);
-            if (_ui.HandleDetailScroll(key)) continue;
-            switch (key.Key)
+            _ui.TruncationEnabled = truncate;
+            var commands = new List<CommandBarItem>
             {
-                case ConsoleKey.B:
-                    return new NavAction.Push(new TestBuildsPage(page.Org, page.Project, page.TestName));
-                case ConsoleKey.A:
-                    BrowserUI.CreateAgentTask(_db, info);
-                    return NavAction.Refresh.Instance;
-                case ConsoleKey.H when info.HelixJobName is not null:
-                    ShowHelixWorkItemDetail(info);
-                    return NavAction.Refresh.Instance;
-                case ConsoleKey.Escape:
-                    return NavAction.Back.Instance;
+                new("Builds with failure", ConsoleKey.B, -2),
+                new("Agent task", ConsoleKey.A, -3),
+                new(truncate ? "Truncate: off" : "Truncate: on", ConsoleKey.T, -5),
+            };
+            if (info.HelixJobName is not null)
+            {
+                commands.Add(new("Helix", ConsoleKey.H, -4));
+            }
+
+            _ui.RenderDetailPanel(
+                ["Builds", "Tests", Markup.Escape(shortTitle)],
+                null,
+                () => BrowserUI.RenderTestDetailInPanel(_ui, info),
+                PanelRenderer.BuildCommandBarString(commands));
+
+            while (true)
+            {
+                var key = Console.ReadKey(true);
+                if (_ui.HandleDetailScroll(key)) continue;
+                switch (key.Key)
+                {
+                    case ConsoleKey.B:
+                        _ui.TruncationEnabled = true;
+                        return new NavAction.Push(new TestBuildsPage(page.Org, page.Project, page.TestName));
+                    case ConsoleKey.A:
+                        BrowserUI.CreateAgentTask(_db, info);
+                        _ui.TruncationEnabled = true;
+                        return NavAction.Refresh.Instance;
+                    case ConsoleKey.H when info.HelixJobName is not null:
+                        ShowHelixWorkItemDetail(info);
+                        _ui.TruncationEnabled = true;
+                        return NavAction.Refresh.Instance;
+                    case ConsoleKey.T:
+                        truncate = !truncate;
+                        break;
+                    case ConsoleKey.Escape:
+                        _ui.TruncationEnabled = true;
+                        return NavAction.Back.Instance;
+                }
+                break; // re-render with updated truncate setting
             }
         }
     }

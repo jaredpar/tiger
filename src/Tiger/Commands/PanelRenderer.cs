@@ -76,6 +76,12 @@ public class PanelRenderer
     /// </summary>
     public int ContentWidth => Math.Max(40, Width - 4);
 
+    /// <summary>
+    /// When true (default), lines are truncated to fit panel width.
+    /// When false, lines are allowed to wrap.
+    /// </summary>
+    public bool TruncationEnabled { get; set; } = true;
+
     // ── Content building ────────────────────────────────────────────
 
     /// <summary>
@@ -786,7 +792,7 @@ public class PanelRenderer
 
     private void RenderPanelLineDirect(string markupContent)
     {
-        var displayContent = TruncateToFit(markupContent);
+        var displayContent = TruncationEnabled ? TruncateToFit(markupContent) : markupContent;
 
         _console.Markup($"[{BorderStyle}]{Vertical}[/] ");
         _console.Markup(displayContent);
