@@ -9,6 +9,8 @@ namespace Tiger.Commands;
 /// </summary>
 public sealed class HealthCommand : AsyncCommand
 {
+    private readonly PanelRenderer _ui = PanelRenderer.Create();
+
     public async Task RunAsync(CancellationToken ct)
     {
         await ExecuteAsync(null!, ct);
@@ -36,17 +38,17 @@ public sealed class HealthCommand : AsyncCommand
     /// <summary>
     /// Top-level page: list of repo + pipeline combos that have health reports.
     /// </summary>
-    private static void ShowCombosPage(HealthAgentService agent)
+    private void ShowCombosPage(HealthAgentService agent)
     {
         while (true)
         {
             var runs = agent.GetRecentRuns();
             if (runs.Count == 0)
             {
-                PanelLayout.RenderDetailPanel(
+                _ui.RenderDetailPanel(
                     ["Health"],
                     null,
-                    () => PanelLayout.RenderPanelLine("[yellow]No health reports available yet. The agent runs every 15 minutes.[/]"),
+                    () => _ui.RenderPanelLine("[yellow]No health reports available yet. The agent runs every 15 minutes.[/]"),
                     "[blue]Esc[/] Back");
                 Console.ReadKey(true);
                 return;
@@ -59,7 +61,7 @@ public sealed class HealthCommand : AsyncCommand
 
             var items = combos.Select(c => $"{c.Repository} / {c.Definition}").ToList();
 
-            var selected = PanelLayout.SelectInPanel(
+            var selected = _ui.SelectInPanel(
                 ["Health"],
                 $"[dim]{combos.Count} pipeline(s)[/]",
                 items,
@@ -78,13 +80,13 @@ public sealed class HealthCommand : AsyncCommand
     /// Second level: shows the current state-of-the-build for a combo.
     /// User can drill into individual agent runs from here.
     /// </summary>
-    private static void ShowStatePage(HealthAgentService agent, string repository, string definition)
+    private void ShowStatePage(HealthAgentService agent, string repository, string definition)
     {
         while (true)
         {
             var state = agent.GetCurrentState(repository, definition);
 
-            PanelLayout.RenderDetailPanel(
+            _ui.RenderDetailPanel(
                 ["Health", $"{Markup.Escape(repository)} / {Markup.Escape(definition)}"],
                 null,
                 () =>
@@ -95,19 +97,19 @@ public sealed class HealthCommand : AsyncCommand
                         var lines = state.ReplaceLineEndings("\n").Split('\n');
                         foreach (var line in lines.Take(30))
                         {
-                            PanelLayout.RenderPanelLine(Markup.Escape(line));
+                            _ui.RenderPanelLine(Markup.Escape(line));
                         }
                         if (lines.Length > 30)
                         {
-                            PanelLayout.RenderPanelLine($"[dim]... ({lines.Length - 30} more lines)[/]");
+                            _ui.RenderPanelLine($"[dim]... ({lines.Length - 30} more lines)[/]");
                         }
                     }
                     else
                     {
-                        PanelLayout.RenderPanelLine("[dim]No state summary available yet.[/]");
+                        _ui.RenderPanelLine("[dim]No state summary available yet.[/]");
                     }
                 },
-                PanelLayout.BuildCommandBarString(new List<CommandBarItem>
+                PanelRenderer.BuildCommandBarString(new List<CommandBarItem>
                 {
                     new("Re-run", ConsoleKey.R, -2),
                     new("Gist", ConsoleKey.G, -3),
@@ -199,17 +201,17 @@ public sealed class HealthCommand : AsyncCommand
     /// <summary>
     /// Third level: list of individual agent runs for a combo, most recent first.
     /// </summary>
-    private static void ShowRunsPage(HealthAgentService agent, string repository, string definition)
+    private void ShowRunsPage(HealthAgentService agent, string repository, string definition)
     {
         while (true)
         {
             var runs = agent.GetRecentRuns(repository, definition);
             if (runs.Count == 0)
             {
-                PanelLayout.RenderDetailPanel(
+                _ui.RenderDetailPanel(
                     ["Health", $"{Markup.Escape(repository)}", "Runs"],
                     null,
-                    () => PanelLayout.RenderPanelLine("[dim]No runs found.[/]"),
+                    () => _ui.RenderPanelLine("[dim]No runs found.[/]"),
                     "[blue]Esc[/] Back");
                 Console.ReadKey(true);
                 return;
@@ -217,7 +219,7 @@ public sealed class HealthCommand : AsyncCommand
 
             var items = runs.Select(r => r.Timestamp.Replace("_", " ")).ToList();
 
-            var selected = PanelLayout.SelectInPanel(
+            var selected = _ui.SelectInPanel(
                 ["Health", $"{Markup.Escape(repository)}", "Runs"],
                 $"[dim]{runs.Count} run(s)[/]",
                 items,
@@ -231,9 +233,9 @@ public sealed class HealthCommand : AsyncCommand
         }
     }
 
-    private static void ShowRunDetail(HealthRunInfo run)
+    private void ShowRunDetail(HealthRunInfo run)
     {
-        PanelLayout.RenderDetailPanel(
+        _ui.RenderDetailPanel(
             ["Health", "Run", Markup.Escape(run.Timestamp.Replace("_", " "))],
             null,
             () =>
@@ -244,16 +246,16 @@ public sealed class HealthCommand : AsyncCommand
                     var lines = content.ReplaceLineEndings("\n").Split('\n');
                     foreach (var line in lines.Take(40))
                     {
-                        PanelLayout.RenderPanelLine(Markup.Escape(line));
+                        _ui.RenderPanelLine(Markup.Escape(line));
                     }
                     if (lines.Length > 40)
                     {
-                        PanelLayout.RenderPanelLine($"[dim]... ({lines.Length - 40} more lines)[/]");
+                        _ui.RenderPanelLine($"[dim]... ({lines.Length - 40} more lines)[/]");
                     }
                 }
                 else
                 {
-                    PanelLayout.RenderPanelLine("[red]Log file not found.[/]");
+                    _ui.RenderPanelLine("[red]Log file not found.[/]");
                 }
             },
             "[blue]Esc[/] Back");
@@ -261,3 +263,5 @@ public sealed class HealthCommand : AsyncCommand
         Console.ReadKey(true);
     }
 }
+
+

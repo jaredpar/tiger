@@ -9,6 +9,8 @@ namespace Tiger.Commands;
 /// </summary>
 public sealed class DashboardCommand : AsyncCommand
 {
+    private readonly PanelRenderer _ui = PanelRenderer.Create();
+
     private const int MenuBuilds = 0;
     private const int MenuTests = 1;
     private const int MenuHealth = 2;
@@ -70,7 +72,7 @@ public sealed class DashboardCommand : AsyncCommand
         return 0;
     }
 
-    private static async Task RunMenuLoopAsync(
+    private async Task RunMenuLoopAsync(
         TigerContext tigerContext, TigerDatabase db,
         AzdoClientFactory clientFactory,
         BuildBackfillService backfill,
@@ -91,7 +93,7 @@ public sealed class DashboardCommand : AsyncCommand
 
         while (!ct.IsCancellationRequested)
         {
-            var choice = PanelLayout.ShowMainMenu(commands);
+            var choice = _ui.ShowMainMenu(commands);
 
             switch (choice)
             {
@@ -140,7 +142,7 @@ public sealed class DashboardCommand : AsyncCommand
     /// Hotkeys: E = toggle errors only, Escape = return to menu,
     /// Up/Down = scroll, End = jump to latest (live tail).
     /// </summary>
-    private static async Task ShowLiveStatusAsync(ServiceLog serviceLog, CancellationToken ct)
+    private async Task ShowLiveStatusAsync(ServiceLog serviceLog, CancellationToken ct)
     {
         var errorsOnly = false;
         var scrollOffset = 0;
@@ -165,14 +167,14 @@ public sealed class DashboardCommand : AsyncCommand
             var start = Math.Max(0, end - maxVisible);
             var visible = filtered.Skip(start).Take(end - start).ToList();
 
-            PanelLayout.RenderDetailPanel(
+            _ui.RenderDetailPanel(
                 ["Status", "Service Log"],
                 context,
                 () =>
                 {
                     if (visible.Count == 0)
                     {
-                        PanelLayout.RenderPanelLine("[dim]No log entries yet...[/]");
+                        _ui.RenderPanelLine("[dim]No log entries yet...[/]");
                     }
                     else
                     {
@@ -188,11 +190,11 @@ public sealed class DashboardCommand : AsyncCommand
                             };
                             var service = Markup.Escape(entry.Service);
                             var message = Markup.Escape(entry.Message);
-                            PanelLayout.RenderPanelLine($"[dim]{time}[/] [{levelColor}]{service}[/] {message}");
+                            _ui.RenderPanelLine($"[dim]{time}[/] [{levelColor}]{service}[/] {message}");
                         }
                     }
                 },
-                PanelLayout.BuildCommandBarString(new List<CommandBarItem>
+                PanelRenderer.BuildCommandBarString(new List<CommandBarItem>
                 {
                     new("Errors toggle", ConsoleKey.E, -2),
                 }) + "  [blue]Up/Dn[/] Scroll  [blue]End[/] Latest  [blue]Esc[/] Back");
@@ -266,3 +268,5 @@ public sealed class DashboardCommand : AsyncCommand
         }
     }
 }
+
+

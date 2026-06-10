@@ -8,6 +8,8 @@ namespace Tiger.Commands;
 /// </summary>
 public sealed class AnalysisBrowser
 {
+    private readonly PanelRenderer _ui = PanelRenderer.Create();
+
     private readonly TigerDatabase _db;
     private readonly BuildAnalysisService? _analysisService;
     private readonly AzdoClientFactory _clientFactory;
@@ -28,10 +30,10 @@ public sealed class AnalysisBrowser
             var analyses = _db.GetRecentAnalyses(50);
             if (analyses.Count == 0)
             {
-                PanelLayout.RenderDetailPanel(
+                _ui.RenderDetailPanel(
                     ["Analysis"],
                     null,
-                    () => PanelLayout.RenderPanelLine("[dim]No analyses yet. Failed builds will be analyzed automatically.[/]"),
+                    () => _ui.RenderPanelLine("[dim]No analyses yet. Failed builds will be analyzed automatically.[/]"),
                     "[blue]Esc[/] Back");
                 Console.ReadKey(true);
                 return;
@@ -66,7 +68,7 @@ public sealed class AnalysisBrowser
 
             var commands = new List<CommandBarItem>();
 
-            var selected = PanelLayout.SelectInPanel(
+            var selected = _ui.SelectInPanel(
                 ["Analysis"],
                 $"[dim]{analyses.Count} analysis result(s)[/]",
                 items,
@@ -244,3 +246,5 @@ public sealed class AnalysisBrowser
         _ => Markup.Escape(status),
     };
 }
+
+

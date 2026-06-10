@@ -10,6 +10,8 @@ namespace Tiger.Commands;
 /// </summary>
 public sealed class AgentBrowser
 {
+    private readonly PanelRenderer _ui = PanelRenderer.Create();
+
     private readonly TigerDatabase _db;
 
     public AgentBrowser(TigerDatabase db)
@@ -24,10 +26,10 @@ public sealed class AgentBrowser
             var tasks = LoadTasks();
             if (tasks is null)
             {
-                PanelLayout.RenderDetailPanel(
+                _ui.RenderDetailPanel(
                     ["Agents"],
                     null,
-                    () => PanelLayout.RenderPanelLine("[red]Failed to load agent tasks from gh CLI.[/]"),
+                    () => _ui.RenderPanelLine("[red]Failed to load agent tasks from gh CLI.[/]"),
                     "[blue]Esc[/] Back");
                 Console.ReadKey(true);
                 return;
@@ -35,11 +37,11 @@ public sealed class AgentBrowser
 
             if (tasks.Count == 0)
             {
-                PanelLayout.RenderDetailPanel(
+                _ui.RenderDetailPanel(
                     ["Agents"],
                     null,
-                    () => PanelLayout.RenderPanelLine("[dim]No agent tasks found.[/]"),
-                    PanelLayout.BuildCommandBarString(new List<CommandBarItem>
+                    () => _ui.RenderPanelLine("[dim]No agent tasks found.[/]"),
+                    PanelRenderer.BuildCommandBarString(new List<CommandBarItem>
                     {
                         new("Refresh", ConsoleKey.R, -2),
                     }));
@@ -84,7 +86,7 @@ public sealed class AgentBrowser
                 new("Refresh", ConsoleKey.R, -2),
             };
 
-            var selected = PanelLayout.SelectInPanel(
+            var selected = _ui.SelectInPanel(
                 ["Agents"],
                 $"[dim]{tasks.Count} task(s)[/]  [yellow]*[/] = submitted from Tiger",
                 items,
@@ -129,41 +131,41 @@ public sealed class AgentBrowser
             actions.Add("refresh");
 
             // Use RenderDetailPanel for the header info, then SelectInPanel for menu
-            PanelLayout.RenderDetailPanel(
+            _ui.RenderDetailPanel(
                 ["Agents", Markup.Escape(task.Name ?? "unnamed")],
                 $"{FormatState(task.State)}  {Markup.Escape(task.Repository ?? "unknown")}",
                 () =>
                 {
-                    PanelLayout.RenderField("Name", Markup.Escape(task.Name ?? "unnamed"));
-                    PanelLayout.RenderField("State", FormatState(task.State));
-                    PanelLayout.RenderField("Repository", Markup.Escape(task.Repository ?? "unknown"));
+                    _ui.RenderField("Name", Markup.Escape(task.Name ?? "unnamed"));
+                    _ui.RenderField("State", FormatState(task.State));
+                    _ui.RenderField("Repository", Markup.Escape(task.Repository ?? "unknown"));
                     if (task.Id is not null)
                     {
-                        PanelLayout.RenderField("Session", Markup.Escape(task.Id));
+                        _ui.RenderField("Session", Markup.Escape(task.Id));
                     }
                     if (task.CreatedAt is not null)
                     {
-                        PanelLayout.RenderField("Created", BrowserUI.FormatTime(task.CreatedAt));
+                        _ui.RenderField("Created", BrowserUI.FormatTime(task.CreatedAt));
                     }
                     if (task.UpdatedAt is not null)
                     {
-                        PanelLayout.RenderField("Updated", BrowserUI.FormatTime(task.UpdatedAt));
+                        _ui.RenderField("Updated", BrowserUI.FormatTime(task.UpdatedAt));
                     }
                     if (task.PullRequestNumber is not null && task.PullRequestUrl is not null)
                     {
-                        PanelLayout.RenderField("Pull Request",
+                        _ui.RenderField("Pull Request",
                             $"{BrowserUI.FormatLink(task.PullRequestUrl, $"PR #{task.PullRequestNumber}")} ({Markup.Escape(task.PullRequestState ?? "unknown")})");
                     }
                     else if (task.PullRequestNumber is not null)
                     {
-                        PanelLayout.RenderField("Pull Request", $"#{task.PullRequestNumber}");
+                        _ui.RenderField("Pull Request", $"#{task.PullRequestNumber}");
                     }
                     if (isTracked)
                     {
-                        PanelLayout.RenderField("Source", "[yellow]Submitted from Tiger[/]");
+                        _ui.RenderField("Source", "[yellow]Submitted from Tiger[/]");
                     }
                 },
-                PanelLayout.BuildCommandBarString(new List<CommandBarItem>
+                PanelRenderer.BuildCommandBarString(new List<CommandBarItem>
                 {
                     new("Open PR", ConsoleKey.O, -2),
                     new("View logs", ConsoleKey.V, -3),
@@ -349,3 +351,5 @@ public sealed class AgentBrowser
         public string? PullRequestState { get; set; }
     }
 }
+
+
