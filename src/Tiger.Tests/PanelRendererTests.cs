@@ -529,6 +529,138 @@ public class PanelRendererTests
         // is rendered with Markup (not MarkupLine) to prevent scroll
         Assert.False(output.EndsWith("\n"), "Frame should not end with trailing newline");
     }
+
+    // ── PromptInPanel ────────────────────────────────────────────────
+
+    [Fact]
+    public void PromptInPanel_PromptTextNotOverwritten()
+    {
+        // Verifies the prompt text line is rendered intact — the "> " input cursor
+        // must NOT overwrite part of the prompt text (regression: was writing at row -4
+        // which landed on the prompt line instead of the empty input line at row -3).
+        var console = new TestConsole().Width(80).Height(24);
+        // Press Escape immediately to exit the prompt
+        console.Input.PushKey(new ConsoleKeyInfo('\x1b', ConsoleKey.Escape, false, false, false));
+
+        var renderer = new PanelRenderer(console);
+        var result = renderer.PromptInPanel(["Builds", "Filter"], "Definition pattern (e.g. ci, roslyn-CI*)");
+
+        Assert.Null(result);
+
+        var output = console.Output;
+        // The prompt text must appear fully intact (not overwritten by "> ")
+        Assert.Contains("Definition pattern (e.g. ci, roslyn-CI*)", output);
+        // Breadcrumbs must appear
+        Assert.Contains("Builds", output);
+        Assert.Contains("Filter", output);
+    }
+
+    [Fact]
+    public void PromptInPanel_CursorPosition_TargetsInputLine()
+    {
+        // Verifies SetPosition targets the empty input line (row 5 with no currentValue)
+        // Layout: row1=border, row2=header, row3=separator, row4=prompt, row5=input line
+        var spy = new SpyConsole(width: 80, height: 24);
+        spy.Inner.Input.PushKey(new ConsoleKeyInfo('\x1b', ConsoleKey.Escape, false, false, false));
+
+        var renderer = new PanelRenderer(spy);
+        renderer.PromptInPanel(["Builds", "Filter"], "Definition pattern");
+
+        // SetPosition should target row 5 (the empty input line), NOT row 4 (prompt text)
+        Assert.Contains(spy.SetPositionCalls, call => call.Line == 5);
+        Assert.DoesNotContain(spy.SetPositionCalls, call => call.Line == 4);
+    }
+
+    [Fact]
+    public void PromptInPanel_EnterReturnsTypedText()
+    {
+        var console = new TestConsole().Width(80).Height(24);
+        // Type "roslyn" then press Enter
+        foreach (var c in "roslyn")
+        {
+            console.Input.PushKey(new ConsoleKeyInfo(c, ConsoleKey.A, false, false, false));
+        }
+        console.Input.PushKey(new ConsoleKeyInfo('\r', ConsoleKey.Enter, false, false, false));
+
+        var renderer = new PanelRenderer(console);
+        var result = renderer.PromptInPanel(["Builds", "Filter"], "Definition pattern");
+
+        Assert.Equal("roslyn", result);
+    }
+
+    [Fact]
+    public void PromptInPanel_EmptyInput_ReturnsNull()
+    {
+        var console = new TestConsole().Width(80).Height(24);
+        // Just press Enter with no text
+        console.Input.PushKey(new ConsoleKeyInfo('\r', ConsoleKey.Enter, false, false, false));
+
+        var renderer = new PanelRenderer(console);
+        var result = renderer.PromptInPanel(["Builds", "Filter"], "Definition pattern");
+
+        Assert.Null(result);
+    }
+
+    // ── PromptKindFilter ─────────────────────────────────────────────
+
+    [Fact]
+    public void PromptKindFilter_Escape_ReturnsNull()
+    {
+        var console = new TestConsole().Width(80).Height(24);
+        console.Input.PushKey(new ConsoleKeyInfo('\x1b', ConsoleKey.Escape, false, false, false));
+
+        var renderer = new PanelRenderer(console);
+        var result = BrowserUI.PromptKindFilter(renderer);
+
+        Assert.Null(result);
+    }
+
+    [Fact]
+    public void PromptKindFilter_SelectPr_ReturnsPr()
+    {
+        var console = new TestConsole().Width(80).Height(24);
+        // Items are: all, pr, ci — "pr" is at index 1, so press Down then Enter
+        console.Input.PushKey(new ConsoleKeyInfo('\0', ConsoleKey.DownArrow, false, false, false));
+        console.Input.PushKey(new ConsoleKeyInfo('\r', ConsoleKey.Enter, false, false, false));
+
+        var renderer = new PanelRenderer(console);
+        var result = BrowserUI.PromptKindFilter(renderer);
+
+        Assert.Equal("pr", result);
+    }
+
+    [Fact]
+    public void PromptKindFilter_SelectAll_ReturnsNull()
+    {
+        var console = new TestConsole().Width(80).Height(24);
+        // "all" is at index 0 (default selection), just press Enter
+        console.Input.PushKey(new ConsoleKeyInfo('\r', ConsoleKey.Enter, false, false, false));
+
+        var renderer = new PanelRenderer(console);
+        var result = BrowserUI.PromptKindFilter(renderer);
+
+        Assert.Null(result);
+    }
+
+    [Fact]
+    public void PromptKindFilter_RendersInPanel_WithBreadcrumbs()
+    {
+        var console = new TestConsole().Width(80).Height(24);
+        console.Input.PushKey(new ConsoleKeyInfo('\x1b', ConsoleKey.Escape, false, false, false));
+
+        var renderer = new PanelRenderer(console);
+        BrowserUI.PromptKindFilter(renderer);
+
+        var output = console.Output;
+        // Breadcrumbs should appear in header
+        Assert.Contains("Builds", output);
+        Assert.Contains("Filter", output);
+        Assert.Contains("Kind", output);
+        // Items should appear in content
+        Assert.Contains("all", output);
+        Assert.Contains("pr", output);
+        Assert.Contains("ci", output);
+    }
 }
 
 /// <summary>

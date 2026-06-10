@@ -631,29 +631,32 @@ public class PanelRenderer
         _console.Cursor.Show(true);
         var width = Width - 2;
 
+        int row = 1; // 1-based row tracking
         _console.MarkupLine($"[{BorderStyle}]{TopLeft}{new string(Horizontal, width)}{TopRight}[/]");
+        row++; // row 2: header
         var crumbText = string.Join($" {Separator} ", breadcrumbs);
         RenderPanelLineDirect($"[bold orange1]TIGER[/] [dim]{Separator}[/] {crumbText}");
-
+        row++; // row 3: mid separator
         _console.MarkupLine($"[{BorderStyle}]{MiddleLeft}{new string(Horizontal, width)}{MiddleRight}[/]");
-
+        row++; // row 4: prompt text
         RenderPanelLineDirect($"[bold]{prompt}[/]");
         if (currentValue is not null)
         {
+            row++; // current value line
             RenderPanelLineDirect($"[dim]Current: {Markup.Escape(currentValue)}[/]");
         }
+        row++; // empty input line
+        var inputRow = row;
         RenderEmptyLineDirect();
-
+        row++; // mid separator
         _console.MarkupLine($"[{BorderStyle}]{MiddleLeft}{new string(Horizontal, width)}{MiddleRight}[/]");
+        row++; // footer
         RenderPanelLineDirect("[blue]Enter[/] Confirm  [blue]Esc[/] Cancel");
         // Use Markup (no trailing newline) to prevent terminal scroll when frame fills the screen
         _console.Markup($"[{BorderStyle}]{BottomLeft}{new string(Horizontal, width)}{BottomRight}[/]");
 
-        // For text input we need System.Console since IAnsiConsole doesn't support
-        // character-by-character echo with backspace. This is the one place we
-        // fall back to System.Console for input handling.
-        var inputRow = System.Console.CursorTop - 4;
-        System.Console.SetCursorPosition(4, inputRow);
+        // Position cursor on the empty input line and render the "> " prompt
+        _console.Cursor.SetPosition(2, inputRow);
         _console.Markup("[blue]>[/] ");
 
         var buffer = new System.Text.StringBuilder();
@@ -674,14 +677,14 @@ public class PanelRenderer
                 if (buffer.Length > 0)
                 {
                     buffer.Remove(buffer.Length - 1, 1);
-                    System.Console.Write("\b \b");
+                    _console.Markup("\b \b");
                 }
                 continue;
             }
             if (key.KeyChar >= 32)
             {
                 buffer.Append(key.KeyChar);
-                System.Console.Write(key.KeyChar);
+                _console.Markup(Markup.Escape(key.KeyChar.ToString()));
             }
         }
     }

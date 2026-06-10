@@ -411,7 +411,7 @@ public sealed class TestBrowser
                     SaveFilter();
                     continue;
                 case ConsoleKey.K:
-                    _filter.KindPattern = BrowserUI.PromptKindFilter();
+                    _filter.KindPattern = BrowserUI.PromptKindFilter(_ui);
                     SaveFilter();
                     continue;
                 case ConsoleKey.P:
@@ -422,8 +422,10 @@ public sealed class TestBrowser
                     _filter.Clear();
                     SaveFilter();
                     continue;
-                default:
+                case ConsoleKey.Escape:
                     return;
+                default:
+                    continue;
             }
         }
     }

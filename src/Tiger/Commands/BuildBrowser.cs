@@ -383,7 +383,7 @@ public sealed class BuildBrowser
                     SaveFilter();
                     continue;
                 case ConsoleKey.K:
-                    _filter.KindPattern = BrowserUI.PromptKindFilter();
+                    _filter.KindPattern = BrowserUI.PromptKindFilter(_ui);
                     SaveFilter();
                     continue;
                 case ConsoleKey.B:
@@ -398,8 +398,10 @@ public sealed class BuildBrowser
                     _filter.Clear();
                     SaveFilter();
                     continue;
-                default:
+                case ConsoleKey.Escape:
                     return;
+                default:
+                    continue;
             }
         }
     }

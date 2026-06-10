@@ -160,11 +160,15 @@ public static class BrowserUI
     /// <summary>
     /// Selection menu for build kind filter (pr/ci). Returns null if cancelled or "all" selected.
     /// </summary>
-    public static string? PromptKindFilter()
+    public static string? PromptKindFilter(PanelRenderer ui)
     {
-        AnsiConsole.WriteLine();
-        var choices = new[] { "all", "pr", "ci" };
-        var selected = SelectWithEscape("Select build kind:", choices.ToList(), pageSize: 5);
+        var choices = new List<string> { "all", "pr", "ci" };
+        var commands = new List<CommandBarItem>();
+        var selected = ui.SelectInPanel(
+            ["Builds", "Filter", "Kind"],
+            "[dim]Select build kind to filter on[/]",
+            choices,
+            commands);
         if (selected < 0) return null;
         return choices[selected] == "all" ? null : choices[selected];
     }
