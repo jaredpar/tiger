@@ -61,15 +61,41 @@ pass before presenting changes for review.
 
 ## UI Conventions
 
-- **Menus** use `BrowserUI.SelectWithEscape` with hotkey support (the `extraKeys` parameter). Menu items embed the hotkey letter in blue within the label text: `[blue]E[/]dit filter`. This gives both arrow-key scrolling and single-keypress shortcuts.
-- Inline hotkey bars (e.g. `[blue]T[/]ests   [blue]J[/]obs   [blue]Esc[/] Back`) follow the same format.
-- **All menu locations** (update all when changing the format convention):
-  - `DashboardCommand.cs` — main menu, status view hotkey bar
-  - `BuildBrowser.cs` — build list hotkey bar, empty-list hotkey bar, filter menu, filter help, build detail hotkey bar, test failure hotkey bar, timeline issues hotkey bar
-  - `TestBrowser.cs` — test list hotkey bar, empty-list hotkey bar, filter menu, test detail hotkey bar
-  - `AnalysisBrowser.cs` — analysis detail menu, full log menu
-  - `AgentBrowser.cs` — agent list hotkey bar, agent detail menu
-  - `HealthCommand.cs` — state page menu, run detail menu
-  - `ConfigEditor.cs` — config menu
-- **Escape** always means "go back" or "cancel" in any interactive context.
+### Panel Layout
+
+All screens use `PanelLayout` for a consistent "command and control" look:
+- **Header**: `TIGER ▸ Section ▸ Subsection` breadcrumb trail
+- **Content area**: List selection or detail view
+- **Command bar**: Bottom bar with hotkey commands, focusable via Tab
+
+### Command Bar (`CommandBarItem`)
+
+The command bar is the standard way to expose actions on any screen. It uses `List<CommandBarItem>` where each item has a label, hotkey, and return value.
+
+- **Hotkey display**: Bracket style — `[B]uilds  [T]ests  [H]ealth` — with the bracketed letter rendered in blue.
+- **Focus model**: Tab toggles focus between the list and the command bar. When the bar is focused, ←→ moves the highlight and Enter executes. Hotkey letters work regardless of focus.
+- **Focused item**: Shown as `[bold white on blue] Label [/]` (inverted highlight).
+- **Main menu**: Uses `PanelLayout.ShowMainMenu(commands)` — displays Figlet ASCII art + TIGER branding, navigation only via command bar.
+- **List screens**: Use `PanelLayout.SelectInPanel(..., commands)` — list + Tab-focusable command bar.
+- **Detail screens**: Use `PanelLayout.RenderDetailPanel(...)` with a static hotkey string footer (detail views handle their own key loops).
+
+### Hotkey Conventions
+
+- Hotkeys use the `[X]` bracket format in labels (e.g., `[E]dit filter`, `[R]efresh`)
+- The bracket letter is highlighted in blue via Spectre markup: `[blue][[X]][/]`
+- Escape always means "go back" or "cancel"
+- Tab always switches focus to the command bar (on list screens)
+
+### All menu locations (update all when changing the format convention):
+  - `DashboardCommand.cs` — main menu (ShowMainMenu)
+  - `BuildBrowser.cs` — build list command bar, empty-list detail, filter menu, filter help, build detail, test failures, timeline issues
+  - `TestBrowser.cs` — test list command bar, empty-list detail, filter menu, test detail
+  - `AnalysisBrowser.cs` — analysis list command bar, analysis detail menu, full log menu
+  - `AgentBrowser.cs` — agent list command bar, agent detail menu
+  - `HealthCommand.cs` — health list command bar, runs list command bar, state page menu, run detail
+  - `ConfigEditor.cs` — config menu (still uses `BrowserUI.SelectWithEscape`)
+
+### Code Style
+
 - **if/try/catch** bodies and braces must be on separate lines — never on the same line as the keyword.
+- **Escape** always means "go back" or "cancel" in any interactive context.

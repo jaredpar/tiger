@@ -8,6 +8,8 @@ namespace Tiger.Commands;
 /// </summary>
 public sealed class AnalysisBrowser
 {
+    private readonly PanelRenderer _ui = PanelRenderer.Create();
+
     private readonly TigerDatabase _db;
     private readonly BuildAnalysisService? _analysisService;
     private readonly AzdoClientFactory _clientFactory;
@@ -25,15 +27,14 @@ public sealed class AnalysisBrowser
     {
         while (true)
         {
-            AnsiConsole.Clear();
-            AnsiConsole.MarkupLine("[bold]Build Failure Analysis[/]");
-            AnsiConsole.WriteLine();
-
             var analyses = _db.GetRecentAnalyses(50);
             if (analyses.Count == 0)
             {
-                AnsiConsole.MarkupLine("[dim]No analyses yet. Failed builds will be analyzed automatically.[/]");
-                AnsiConsole.MarkupLine("[dim]Press Escape to go back.[/]");
+                _ui.RenderDetailPanel(
+                    ["Analysis"],
+                    null,
+                    () => _ui.RenderPanelLine("[dim]No analyses yet. Failed builds will be analyzed automatically.[/]"),
+                    "[blue]Esc[/] Back");
                 Console.ReadKey(true);
                 return;
             }
@@ -42,17 +43,16 @@ public sealed class AnalysisBrowser
             {
                 var statusIcon = a.Status switch
                 {
-                    "complete" => "[green]✓[/]",
-                    "running" => "[yellow]⟳[/]",
-                    "pending" => "[dim]…[/]",
-                    "skipped" => "[blue]⊘[/]",
-                    "failed" => "[red]✗[/]",
+                    "complete" => "[green]+[/]",
+                    "running" => "[yellow]~[/]",
+                    "pending" => "[dim]...[/]",
+                    "skipped" => "[blue]-[/]",
+                    "failed" => "[red]X[/]",
                     _ => "[dim]?[/]",
                 };
                 var category = a.Category is not null ? $"[dim]({Markup.Escape(a.Category)})[/]" : "";
                 var label = $"{statusIcon} {Markup.Escape(a.DefinitionName)} #{a.BuildId} {category}";
 
-                // Add a brief one-line summary
                 if (a.DiagnosisSummary is not null)
                 {
                     var firstLine = a.DiagnosisSummary.Split('\n')[0].Trim();
@@ -66,7 +66,13 @@ public sealed class AnalysisBrowser
                 return label;
             }).ToList();
 
-            var selected = BrowserUI.SelectWithEscape("", items, useMarkup: true);
+            var commands = new List<CommandBarItem>();
+
+            var selected = _ui.SelectInPanel(
+                ["Analysis"],
+                $"[dim]{analyses.Count} analysis result(s)[/]",
+                items,
+                commands);
             if (selected < 0)
             {
                 return;
@@ -240,3 +246,5 @@ public sealed class AnalysisBrowser
         _ => Markup.Escape(status),
     };
 }
+
+

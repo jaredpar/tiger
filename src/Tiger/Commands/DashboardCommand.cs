@@ -9,14 +9,16 @@ namespace Tiger.Commands;
 /// </summary>
 public sealed class DashboardCommand : AsyncCommand
 {
-    private const string MenuStatus = "Status";
-    private const string MenuBuilds = "Builds";
-    private const string MenuTests = "Tests";
-    private const string MenuHealth = "Health";
-    private const string MenuAnalysis = "Analysis";
-    private const string MenuAgents = "Agents";
-    private const string MenuConfig = "Configuration";
-    private const string MenuQuit = "Quit";
+    private readonly PanelRenderer _ui = PanelRenderer.Create();
+
+    private const int MenuBuilds = 0;
+    private const int MenuTests = 1;
+    private const int MenuHealth = 2;
+    private const int MenuAnalysis = 3;
+    private const int MenuAgents = 4;
+    private const int MenuConfig = 5;
+    private const int MenuStatus = 6;
+    private const int MenuQuit = 7;
 
     protected override async Task<int> ExecuteAsync(CommandContext context, CancellationToken ct)
     {
@@ -70,95 +72,28 @@ public sealed class DashboardCommand : AsyncCommand
         return 0;
     }
 
-    private static void RenderBanner()
-    {
-        AnsiConsole.Write(new FigletText("tiger").Color(Color.Orange1));
-        AnsiConsole.MarkupLine("[dim]CI/CD Infrastructure Management[/]");
-        AnsiConsole.WriteLine();
-    }
-
-    private static async Task RunMenuLoopAsync(
+    private async Task RunMenuLoopAsync(
         TigerContext tigerContext, TigerDatabase db,
         AzdoClientFactory clientFactory,
         BuildBackfillService backfill,
         BuildAnalysisService analysisAgent,
         ServiceLog serviceLog, CancellationToken ct)
     {
-        var menuLabels = new[]
+        var commands = new List<CommandBarItem>
         {
-            $"[blue]B[/]uilds",
-            $"[blue]T[/]ests",
-            $"[blue]H[/]ealth",
-            $"[blue]A[/]nalysis",
-            $"A[blue]g[/]ents",
-            $"[blue]C[/]onfiguration",
-            $"[blue]S[/]tatus",
-            $"[blue]Q[/]uit",
+            new("Builds", ConsoleKey.B, MenuBuilds),
+            new("Tests", ConsoleKey.T, MenuTests),
+            new("Health", ConsoleKey.H, MenuHealth),
+            new("Analysis", ConsoleKey.A, MenuAnalysis),
+            new("Agents", ConsoleKey.G, MenuAgents),
+            new("Config", ConsoleKey.C, MenuConfig),
+            new("Status", ConsoleKey.S, MenuStatus),
+            new("Quit", ConsoleKey.Q, MenuQuit),
         };
 
-        var selected = 0;
         while (!ct.IsCancellationRequested)
         {
-            AnsiConsole.Clear();
-            RenderBanner();
-
-            AnsiConsole.MarkupLine("[bold]What would you like to do?[/]");
-            for (var i = 0; i < menuLabels.Length; i++)
-            {
-                if (i == selected)
-                {
-                    AnsiConsole.MarkupLine($"  [blue]>[/] {menuLabels[i]}");
-                }
-                else
-                {
-                    AnsiConsole.MarkupLine($"    {menuLabels[i]}");
-                }
-            }
-            AnsiConsole.MarkupLine("  [blue]↑↓[/] Navigate   [blue]Enter[/] Select");
-
-            var key = Console.ReadKey(true);
-
-            // Hotkeys
-            var hotkey = char.ToUpperInvariant(key.KeyChar) switch
-            {
-                'B' => 0, 'T' => 1, 'H' => 2, 'A' => 3, 'G' => 4, 'C' => 5, 'S' => 6, 'Q' => 7,
-                _ => -1,
-            };
-            if (hotkey >= 0)
-            {
-                selected = hotkey;
-            }
-            else
-            {
-                switch (key.Key)
-                {
-                    case ConsoleKey.UpArrow:
-                        selected = (selected - 1 + menuLabels.Length) % menuLabels.Length;
-                        continue;
-                    case ConsoleKey.DownArrow:
-                        selected = (selected + 1) % menuLabels.Length;
-                        continue;
-                    case ConsoleKey.Enter:
-                        break;
-                    case ConsoleKey.Escape:
-                        return;
-                    default:
-                        continue;
-                }
-            }
-
-            var choice = selected switch
-            {
-                0 => MenuBuilds,
-                1 => MenuTests,
-                2 => MenuHealth,
-                3 => MenuAnalysis,
-                4 => MenuAgents,
-                5 => MenuConfig,
-                6 => MenuStatus,
-                7 => MenuQuit,
-                _ => MenuQuit,
-            };
+            var choice = _ui.ShowMainMenu(commands);
 
             switch (choice)
             {
@@ -196,6 +131,7 @@ public sealed class DashboardCommand : AsyncCommand
                     }
                     break;
                 case MenuQuit:
+                case -1:
                     return;
             }
         }
@@ -206,26 +142,23 @@ public sealed class DashboardCommand : AsyncCommand
     /// Hotkeys: E = toggle errors only, Escape = return to menu,
     /// Up/Down = scroll, End = jump to latest (live tail).
     /// </summary>
-    private static async Task ShowLiveStatusAsync(ServiceLog serviceLog, CancellationToken ct)
+    private async Task ShowLiveStatusAsync(ServiceLog serviceLog, CancellationToken ct)
     {
         var errorsOnly = false;
-        var scrollOffset = 0; // 0 = live tail (showing latest), >0 = scrolled back N entries
-        var maxVisible = Math.Max(Console.WindowHeight - 5, 10);
+        var scrollOffset = 0;
+        var maxVisible = Math.Max(Console.WindowHeight - 10, 10);
 
         void Render()
         {
-            AnsiConsole.Clear();
-            var filterLabel = errorsOnly ? " [yellow](errors only)[/]" : "";
-            var scrollLabel = scrollOffset > 0 ? $" [dim](scrolled back {scrollOffset})[/]" : " [dim](live)[/]";
-            AnsiConsole.MarkupLine($"[bold underline]Service Log[/]{filterLabel}{scrollLabel}");
-            AnsiConsole.WriteLine();
+            var filterLabel = errorsOnly ? "[yellow](errors only)[/]" : "";
+            var scrollLabel = scrollOffset > 0 ? $"[dim](scrolled back {scrollOffset})[/]" : "[dim](live)[/]";
+            var context = $"{filterLabel} {scrollLabel}".Trim();
 
             var all = serviceLog.GetRecent(500);
             var filtered = errorsOnly
                 ? all.Where(e => e.Level is ServiceLogLevel.Error or ServiceLogLevel.Warning).ToList()
                 : all;
 
-            // Apply scroll offset from the end
             var end = filtered.Count - scrollOffset;
             if (end < 0)
             {
@@ -234,9 +167,37 @@ public sealed class DashboardCommand : AsyncCommand
             var start = Math.Max(0, end - maxVisible);
             var visible = filtered.Skip(start).Take(end - start).ToList();
 
-            RenderLogEntries(visible);
-            AnsiConsole.WriteLine();
-            AnsiConsole.MarkupLine("  [blue]E[/]rrors toggle   [blue]↑/↓[/] Scroll   [blue]End[/] Latest   [blue]Esc[/] Back");
+            _ui.RenderDetailPanel(
+                ["Status", "Service Log"],
+                context,
+                () =>
+                {
+                    if (visible.Count == 0)
+                    {
+                        _ui.RenderPanelLine("[dim]No log entries yet...[/]");
+                    }
+                    else
+                    {
+                        foreach (var entry in visible)
+                        {
+                            var time = entry.Timestamp.ToLocalTime().ToString("HH:mm:ss");
+                            var levelColor = entry.Level switch
+                            {
+                                ServiceLogLevel.Success => "green",
+                                ServiceLogLevel.Warning => "yellow",
+                                ServiceLogLevel.Error => "red",
+                                _ => "blue",
+                            };
+                            var service = Markup.Escape(entry.Service);
+                            var message = Markup.Escape(entry.Message);
+                            _ui.RenderPanelLine($"[dim]{time}[/] [{levelColor}]{service}[/] {message}");
+                        }
+                    }
+                },
+                PanelRenderer.BuildCommandBarString(new List<CommandBarItem>
+                {
+                    new("Errors toggle", ConsoleKey.E, -2),
+                }) + "  [blue]Up/Dn[/] Scroll  [blue]End[/] Latest  [blue]Esc[/] Back");
         }
 
         Render();
@@ -306,28 +267,6 @@ public sealed class DashboardCommand : AsyncCommand
             serviceLog.EntryAdded -= OnEntry;
         }
     }
-
-    private static void RenderLogEntries(List<ServiceLogEntry> entries)
-    {
-        if (entries.Count == 0)
-        {
-            AnsiConsole.MarkupLine("[dim]No log entries yet...[/]");
-            return;
-        }
-
-        foreach (var entry in entries)
-        {
-            var time = entry.Timestamp.ToLocalTime().ToString("HH:mm:ss");
-            var levelColor = entry.Level switch
-            {
-                ServiceLogLevel.Success => "green",
-                ServiceLogLevel.Warning => "yellow",
-                ServiceLogLevel.Error => "red",
-                _ => "blue",
-            };
-            var service = Markup.Escape(entry.Service);
-            var message = Markup.Escape(entry.Message);
-            AnsiConsole.MarkupLine($"[dim]{time}[/] [{levelColor}]{service}[/] {message}");
-        }
-    }
 }
+
+

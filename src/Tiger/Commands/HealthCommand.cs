@@ -9,6 +9,8 @@ namespace Tiger.Commands;
 /// </summary>
 public sealed class HealthCommand : AsyncCommand
 {
+    private readonly PanelRenderer _ui = PanelRenderer.Create();
+
     public async Task RunAsync(CancellationToken ct)
     {
         await ExecuteAsync(null!, ct);
@@ -36,24 +38,22 @@ public sealed class HealthCommand : AsyncCommand
     /// <summary>
     /// Top-level page: list of repo + pipeline combos that have health reports.
     /// </summary>
-    private static void ShowCombosPage(HealthAgentService agent)
+    private void ShowCombosPage(HealthAgentService agent)
     {
         while (true)
         {
-            AnsiConsole.Clear();
-            AnsiConsole.MarkupLine("[bold underline]Tiger Health Reports[/]");
-            AnsiConsole.WriteLine();
-
             var runs = agent.GetRecentRuns();
             if (runs.Count == 0)
             {
-                AnsiConsole.MarkupLine("[yellow]No health reports available yet. The agent runs every 15 minutes.[/]");
-                AnsiConsole.MarkupLine("[dim]Press any key to exit...[/]");
+                _ui.RenderDetailPanel(
+                    ["Health"],
+                    null,
+                    () => _ui.RenderPanelLine("[yellow]No health reports available yet. The agent runs every 15 minutes.[/]"),
+                    "[blue]Esc[/] Back");
                 Console.ReadKey(true);
                 return;
             }
 
-            // Get distinct combos
             var combos = runs
                 .Select(r => (r.Repository, r.Definition))
                 .Distinct()
@@ -61,9 +61,15 @@ public sealed class HealthCommand : AsyncCommand
 
             var items = combos.Select(c => $"{c.Repository} / {c.Definition}").ToList();
 
-            var selected = BrowserUI.SelectWithEscape("Select a pipeline:", items);
+            var selected = _ui.SelectInPanel(
+                ["Health"],
+                $"[dim]{combos.Count} pipeline(s)[/]",
+                items,
+                new List<CommandBarItem>());
             if (selected < 0)
+            {
                 return;
+            }
 
             var (repo, def) = combos[selected];
             ShowStatePage(agent, repo, def);
@@ -74,45 +80,46 @@ public sealed class HealthCommand : AsyncCommand
     /// Second level: shows the current state-of-the-build for a combo.
     /// User can drill into individual agent runs from here.
     /// </summary>
-    private static void ShowStatePage(HealthAgentService agent, string repository, string definition)
+    private void ShowStatePage(HealthAgentService agent, string repository, string definition)
     {
         while (true)
         {
-            AnsiConsole.Clear();
-            AnsiConsole.MarkupLine($"[bold underline]{Markup.Escape(repository)} / {Markup.Escape(definition)}[/]");
-            AnsiConsole.WriteLine();
-
             var state = agent.GetCurrentState(repository, definition);
-            if (state is not null)
-            {
-                MarkdownRenderer.Render(state);
-            }
-            else
-            {
-                AnsiConsole.MarkupLine("[dim]No state summary available yet.[/]");
-            }
 
-            AnsiConsole.WriteLine();
+            _ui.RenderDetailPanel(
+                ["Health", $"{Markup.Escape(repository)} / {Markup.Escape(definition)}"],
+                null,
+                () =>
+                {
+                    if (state is not null)
+                    {
+                        // Render markdown content line-by-line inside panel
+                        var lines = state.ReplaceLineEndings("\n").Split('\n');
+                        foreach (var line in lines.Take(30))
+                        {
+                            _ui.RenderPanelLine(Markup.Escape(line));
+                        }
+                        if (lines.Length > 30)
+                        {
+                            _ui.RenderPanelLine($"[dim]... ({lines.Length - 30} more lines)[/]");
+                        }
+                    }
+                    else
+                    {
+                        _ui.RenderPanelLine("[dim]No state summary available yet.[/]");
+                    }
+                },
+                PanelRenderer.BuildCommandBarString(new List<CommandBarItem>
+                {
+                    new("Re-run", ConsoleKey.R, -2),
+                    new("Gist", ConsoleKey.G, -3),
+                    new("View runs", ConsoleKey.V, -4),
+                }));
 
-            var menuItems = new List<string>
+            var key = Console.ReadKey(true);
+            switch (key.Key)
             {
-                $"[blue]R[/]e-run health analysis",
-                $"[blue]G[/]ist (create public)",
-                $"[blue]V[/]iew agent runs",
-            };
-
-            var extraKeys = new Dictionary<ConsoleKey, int>
-            {
-                [ConsoleKey.R] = 0,
-                [ConsoleKey.G] = 1,
-                [ConsoleKey.V] = 2,
-            };
-
-            var menuChoice = BrowserUI.SelectWithEscape("", menuItems, useMarkup: true, extraKeys: extraKeys);
-
-            switch (menuChoice)
-            {
-                case 0:
+                case ConsoleKey.R:
                     AnsiConsole.MarkupLine("[dim]Running health analysis...[/]");
                     try
                     {
@@ -124,13 +131,13 @@ public sealed class HealthCommand : AsyncCommand
                         AnsiConsole.MarkupLine($"[red]Analysis failed: {Markup.Escape(ex.Message)}[/]");
                     }
                     break;
-                case 1:
+                case ConsoleKey.G:
                     CreateGist(repository, definition, state);
                     break;
-                case 2:
+                case ConsoleKey.V:
                     ShowRunsPage(agent, repository, definition);
                     break;
-                default:
+                case ConsoleKey.Escape:
                     return;
             }
         }
@@ -194,64 +201,67 @@ public sealed class HealthCommand : AsyncCommand
     /// <summary>
     /// Third level: list of individual agent runs for a combo, most recent first.
     /// </summary>
-    private static void ShowRunsPage(HealthAgentService agent, string repository, string definition)
+    private void ShowRunsPage(HealthAgentService agent, string repository, string definition)
     {
         while (true)
         {
-            AnsiConsole.Clear();
-            AnsiConsole.MarkupLine($"[bold underline]Agent Runs — {Markup.Escape(repository)} / {Markup.Escape(definition)}[/]");
-            AnsiConsole.WriteLine();
-
             var runs = agent.GetRecentRuns(repository, definition);
             if (runs.Count == 0)
             {
-                AnsiConsole.MarkupLine("[dim]No runs found.[/]");
-                AnsiConsole.MarkupLine("[dim]Press any key to go back...[/]");
+                _ui.RenderDetailPanel(
+                    ["Health", $"{Markup.Escape(repository)}", "Runs"],
+                    null,
+                    () => _ui.RenderPanelLine("[dim]No runs found.[/]"),
+                    "[blue]Esc[/] Back");
                 Console.ReadKey(true);
                 return;
             }
 
             var items = runs.Select(r => r.Timestamp.Replace("_", " ")).ToList();
 
-            var selected = BrowserUI.SelectWithEscape("Select a run:", items);
+            var selected = _ui.SelectInPanel(
+                ["Health", $"{Markup.Escape(repository)}", "Runs"],
+                $"[dim]{runs.Count} run(s)[/]",
+                items,
+                new List<CommandBarItem>());
             if (selected < 0)
+            {
                 return;
+            }
 
             ShowRunDetail(runs[selected]);
         }
     }
 
-    /// <summary>
-    /// Fourth level: full log of a single agent run.
-    /// </summary>
-    private static void ShowRunDetail(HealthRunInfo run)
+    private void ShowRunDetail(HealthRunInfo run)
     {
-        AnsiConsole.Clear();
-        AnsiConsole.MarkupLine($"[bold underline]Health Report — {Markup.Escape(run.Timestamp.Replace("_", " "))}[/]");
-        AnsiConsole.WriteLine();
+        _ui.RenderDetailPanel(
+            ["Health", "Run", Markup.Escape(run.Timestamp.Replace("_", " "))],
+            null,
+            () =>
+            {
+                if (File.Exists(run.LogPath))
+                {
+                    var content = File.ReadAllText(run.LogPath);
+                    var lines = content.ReplaceLineEndings("\n").Split('\n');
+                    foreach (var line in lines.Take(40))
+                    {
+                        _ui.RenderPanelLine(Markup.Escape(line));
+                    }
+                    if (lines.Length > 40)
+                    {
+                        _ui.RenderPanelLine($"[dim]... ({lines.Length - 40} more lines)[/]");
+                    }
+                }
+                else
+                {
+                    _ui.RenderPanelLine("[red]Log file not found.[/]");
+                }
+            },
+            "[blue]Esc[/] Back");
 
-        if (File.Exists(run.LogPath))
-        {
-            var content = File.ReadAllText(run.LogPath);
-            MarkdownRenderer.Render(content);
-        }
-        else
-        {
-            AnsiConsole.MarkupLine("[red]Log file not found.[/]");
-        }
-
-        AnsiConsole.WriteLine();
-
-        var menuItems = new List<string>
-        {
-            $"[blue]B[/]ack",
-        };
-
-        var extraKeys = new Dictionary<ConsoleKey, int>
-        {
-            [ConsoleKey.B] = 0,
-        };
-
-        BrowserUI.SelectWithEscape("", menuItems, useMarkup: true, extraKeys: extraKeys);
+        Console.ReadKey(true);
     }
 }
+
+

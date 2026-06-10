@@ -66,7 +66,7 @@ public static class BrowserUI
 
             Console.Write(new string(' ', Console.WindowWidth));
             Console.SetCursorPosition(0, Console.CursorTop);
-            var builtIn = "[blue]↑↓[/] Navigate  [blue]Enter[/] Select  [blue]Esc[/] Back";
+            var builtIn = "[blue]Up/Dn[/] Navigate  [blue]Enter[/] Select  [blue]Esc[/] Back";
             var footer = hotkeys is not null
                 ? $"  {hotkeys}   {builtIn}"
                 : $"  {builtIn}";
@@ -160,11 +160,15 @@ public static class BrowserUI
     /// <summary>
     /// Selection menu for build kind filter (pr/ci). Returns null if cancelled or "all" selected.
     /// </summary>
-    public static string? PromptKindFilter()
+    public static string? PromptKindFilter(PanelRenderer ui)
     {
-        AnsiConsole.WriteLine();
-        var choices = new[] { "all", "pr", "ci" };
-        var selected = SelectWithEscape("Select build kind:", choices.ToList(), pageSize: 5);
+        var choices = new List<string> { "all", "pr", "ci" };
+        var commands = new List<CommandBarItem>();
+        var selected = ui.SelectInPanel(
+            ["Builds", "Filter", "Kind"],
+            "[dim]Select build kind to filter on[/]",
+            choices,
+            commands);
         if (selected < 0) return null;
         return choices[selected] == "all" ? null : choices[selected];
     }
@@ -191,21 +195,21 @@ public static class BrowserUI
 
     public static string FormatResult(string? result) => result switch
     {
-        "succeeded" => "[green]✓ succeeded[/]",
-        "failed" => "[red]✗ failed[/]",
-        "partiallySucceeded" => "[yellow]⚠ partial[/]",
+        "succeeded" => "[green]+ succeeded[/]",
+        "failed" => "[red]X failed[/]",
+        "partiallySucceeded" => "[yellow]! partial[/]",
         "canceled" => "[dim]canceled[/]",
-        null => "[dim]—[/]",
+        null => "[dim]-[/]",
         _ => result,
     };
 
     public static string FormatResultIcon(string? result) => result switch
     {
-        "succeeded" => "[green]✓[/]",
-        "failed" => "[red]✗[/]",
-        "partiallySucceeded" => "[yellow]⚠[/]",
-        "canceled" => "[dim]⊘[/]",
-        _ => "[dim]—[/]",
+        "succeeded" => "[green]+[/]",
+        "failed" => "[red]X[/]",
+        "partiallySucceeded" => "[yellow]![/]",
+        "canceled" => "[dim]-[/]",
+        _ => "[dim]-[/]",
     };
 
     /// <summary>
@@ -217,7 +221,7 @@ public static class BrowserUI
         var icon = FormatResultIcon(result);
         var pr = prNumber is not null ? $" PR#{prNumber}" : "";
         var time = FormatTime(finishTime);
-        var pendingIcon = pending ? " ⏳" : "";
+        var pendingIcon = pending ? " [dim]...[/]" : "";
         return $"{icon} {buildId} {Markup.Escape(definitionName)} {time}{pr}{pendingIcon}";
     }
 
@@ -229,7 +233,7 @@ public static class BrowserUI
         // Deadletter banner
         if (info.IsHelixDeadletter)
         {
-            AnsiConsole.MarkupLine("[bold red on yellow] ⚠ HELIX DEAD LETTER — Infrastructure failure, not a real test failure [/]");
+            AnsiConsole.MarkupLine("[bold red on yellow] !! HELIX DEAD LETTER — Infrastructure failure, not a real test failure [/]");
             AnsiConsole.WriteLine();
         }
 
@@ -281,7 +285,7 @@ public static class BrowserUI
         {
             if (info.IsHelixDeadletter)
             {
-                AnsiConsole.MarkupLine("  [bold red]⚠ DEAD LETTER[/]");
+                AnsiConsole.MarkupLine("  [bold red]!! DEAD LETTER[/]");
             }
             AnsiConsole.MarkupLine($"  [bold]Job:[/] {Markup.Escape(info.HelixJobName)}");
             if (info.HelixWorkItemName is not null)
@@ -315,10 +319,103 @@ public static class BrowserUI
     }
 
     /// <summary>
-    /// Converts a user pattern to a SQL LIKE pattern or exact match.
-    /// Default: contains match (ros → %ros%). Trailing ! means exact match.
-    /// * is a wildcard (dotnet/* → dotnet/%).
+    /// Renders test detail info using PanelRenderer (for use inside RenderDetailPanel content delegates).
     /// </summary>
+    public static void RenderTestDetailInPanel(PanelRenderer ui, TestDetailInfo info)
+    {
+        if (info.IsHelixDeadletter)
+        {
+            ui.RenderPanelLine("[bold red on yellow] !! HELIX DEAD LETTER — Infrastructure failure, not a real test failure [/]");
+            ui.RenderEmptyLine();
+        }
+
+        ui.RenderField("Test Name", Markup.Escape(info.TestName));
+        var buildUrl = $"https://dev.azure.com/{Uri.EscapeDataString(info.Org)}/{Uri.EscapeDataString(info.Project)}/_build/results?buildId={info.BuildId}";
+        ui.RenderField("Last Failed Build", Markup.Escape(buildUrl));
+        ui.RenderField("Run", Markup.Escape(info.RunName));
+        ui.RenderField("Failed In", $"{info.BuildCount} build(s)");
+        ui.RenderEmptyLine();
+
+        ui.RenderSectionTitle("Error");
+        if (!string.IsNullOrWhiteSpace(info.ErrorMessage))
+        {
+            var errorLines = info.ErrorMessage.ReplaceLineEndings("\n").Split('\n');
+            foreach (var line in errorLines.Take(5))
+            {
+                ui.RenderPanelLine($"  [red]{Markup.Escape(line)}[/]");
+            }
+            if (errorLines.Length > 5)
+            {
+                ui.RenderPanelLine($"  [dim]... ({errorLines.Length - 5} more lines)[/]");
+            }
+        }
+        else
+        {
+            ui.RenderPanelLine("  [dim]No error message available[/]");
+        }
+        ui.RenderEmptyLine();
+
+        ui.RenderSectionTitle("Stack Trace");
+        if (!string.IsNullOrWhiteSpace(info.StackTrace))
+        {
+            var stackLines = info.StackTrace.ReplaceLineEndings("\n").Split('\n');
+            foreach (var line in stackLines.Take(10))
+            {
+                ui.RenderPanelLine($"  [dim]{Markup.Escape(line)}[/]");
+            }
+            if (stackLines.Length > 10)
+            {
+                ui.RenderPanelLine($"  [dim]... ({stackLines.Length - 10} more lines)[/]");
+            }
+        }
+        else
+        {
+            ui.RenderPanelLine("  [dim]No stack trace available[/]");
+        }
+        ui.RenderEmptyLine();
+
+        ui.RenderSectionTitle("Helix");
+        if (info.HelixJobName is not null)
+        {
+            if (info.IsHelixDeadletter)
+            {
+                ui.RenderPanelLine("  [bold red]!! DEAD LETTER[/]");
+            }
+            ui.RenderField("Job", Markup.Escape(info.HelixJobName));
+            if (info.HelixWorkItemName is not null)
+            {
+                ui.RenderField("Work Item", Markup.Escape(info.HelixWorkItemName));
+                if (info.HelixExitCode is not null)
+                {
+                    var exitColor = info.HelixExitCode == 0 ? "green" : "red";
+                    ui.RenderField("Exit Code", $"[{exitColor}]{info.HelixExitCode}[/]");
+                }
+                var consoleUrl = HelixClient.GetConsoleUrl(info.HelixJobName, info.HelixWorkItemName);
+                ui.RenderField("Console", FormatLink(consoleUrl, "Console Log"));
+
+                if (info.HelixFiles is { Count: > 0 })
+                {
+                    ui.RenderPanelLine($"  [bold]Files ({info.HelixFiles.Count}):[/]");
+                    foreach (var (name, uri) in info.HelixFiles)
+                    {
+                        if (uri is not null)
+                        {
+                            ui.RenderPanelLine($"    {FormatLink(uri, name)}");
+                        }
+                        else
+                        {
+                            ui.RenderPanelLine($"    {Markup.Escape(name)}");
+                        }
+                    }
+                }
+            }
+        }
+        else
+        {
+            ui.RenderPanelLine("  [dim]No Helix information available[/]");
+        }
+    }
+
     public static (string Pattern, bool IsExact) ToSqlPattern(string input)
     {
         if (input.EndsWith('!'))
@@ -356,7 +453,8 @@ public static class BrowserUI
         string? ErrorMessage, string? StackTrace,
         string? HelixJobName, string? HelixWorkItemName,
         List<(string Name, string? Uri)>? HelixFiles = null,
-        bool IsHelixDeadletter = false);
+        bool IsHelixDeadletter = false,
+        int? HelixExitCode = null);
 
     /// <summary>
     /// Loads test detail info from the database.
@@ -419,12 +517,13 @@ public static class BrowserUI
         // Load helix files and deadletter status if available
         List<(string Name, string? Uri)>? helixFiles = null;
         var isDeadletter = false;
+        int? helixExitCode = null;
         if (detail.HelixJob is not null && detail.HelixWorkItem is not null)
         {
             var helixInfo = db.WithCommand(cmd =>
             {
                 cmd.CommandText = """
-                    SELECT files, is_deadletter FROM helix_work_items
+                    SELECT files, is_deadletter, exit_code FROM helix_work_items
                     WHERE job_name = @job AND work_item_name = @wi
                     """;
                 cmd.Parameters.AddWithValue("@job", detail.HelixJob);
@@ -434,12 +533,14 @@ public static class BrowserUI
                 {
                     return (
                         FilesJson: reader.IsDBNull(0) ? null : reader.GetString(0),
-                        IsDeadletter: !reader.IsDBNull(1) && reader.GetInt32(1) != 0);
+                        IsDeadletter: !reader.IsDBNull(1) && reader.GetInt32(1) != 0,
+                        ExitCode: reader.IsDBNull(2) ? (int?)null : reader.GetInt32(2));
                 }
-                return (FilesJson: (string?)null, IsDeadletter: false);
+                return (FilesJson: (string?)null, IsDeadletter: false, ExitCode: (int?)null);
             });
 
             isDeadletter = helixInfo.IsDeadletter;
+            helixExitCode = helixInfo.ExitCode;
 
             if (!string.IsNullOrWhiteSpace(helixInfo.FilesJson))
             {
@@ -459,7 +560,7 @@ public static class BrowserUI
         }
 
         return new TestDetailInfo(testName, org, project, detail.BuildId, detail.RunName, buildCount,
-            detail.ErrorMessage, detail.StackTrace, detail.HelixJob, detail.HelixWorkItem, helixFiles, isDeadletter);
+            detail.ErrorMessage, detail.StackTrace, detail.HelixJob, detail.HelixWorkItem, helixFiles, isDeadletter, helixExitCode);
     }
 
     /// <summary>
@@ -660,3 +761,5 @@ public static class BrowserUI
         return match.Success ? match.Value : null;
     }
 }
+
+

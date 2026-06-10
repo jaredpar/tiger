@@ -704,8 +704,9 @@ public sealed class TigerDatabase : IDisposable
 
     public void Dispose()
     {
-        // Connection pooling: no shared connection to dispose.
-        // Microsoft.Data.Sqlite manages the pool internally.
+        // Clear the connection pool so pooled connections release the file lock.
+        // This is critical for tests that delete the DB file after use.
+        SqliteConnection.ClearPool(new SqliteConnection(ConnectionString));
     }
 }
 

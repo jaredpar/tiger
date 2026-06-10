@@ -8,6 +8,8 @@ namespace Tiger.Commands;
 /// </summary>
 public sealed class BuildBrowser
 {
+    private readonly PanelRenderer _ui = PanelRenderer.Create();
+
     private readonly TigerDatabase _db;
     private readonly AzdoClientFactory _clientFactory;
     private readonly BuildAnalysisService? _analysisService;
@@ -53,7 +55,6 @@ public sealed class BuildBrowser
     {
         while (_position >= 0)
         {
-            AnsiConsole.Clear();
             var action = Render(_history[_position]);
 
             switch (action)
@@ -108,26 +109,30 @@ public sealed class BuildBrowser
     {
         while (true)
         {
-            AnsiConsole.Clear();
-            AnsiConsole.MarkupLine("[bold underline]Builds[/]");
-            if (_filter.IsActive)
-            {
-                AnsiConsole.MarkupLine($"Filter: {Markup.Escape(_filter.ToString())}");
-            }
-            else
-            {
-                AnsiConsole.MarkupLine("[dim]Filter: (none)[/]");
-            }
-            AnsiConsole.WriteLine();
-
             var builds = QueryBuilds();
+
+            var filterText = _filter.IsActive
+                ? $"Filter: {Markup.Escape(_filter.ToString())}"
+                : "[dim]Filter: (none)[/]";
+            var context = builds.Count > 0
+                ? $"{filterText}  [dim]({builds.Count} builds)[/]"
+                : filterText;
 
             if (builds.Count == 0)
             {
-                AnsiConsole.MarkupLine(_filter.IsActive
+                var emptyMsg = _filter.IsActive
                     ? "[yellow]No builds match the current filter.[/]"
-                    : "[yellow]No builds ingested yet.[/]");
-                AnsiConsole.MarkupLine("  [blue]E[/]dit filter   [blue]F[/]ilter menu   [blue]Esc[/] Back");
+                    : "[yellow]No builds ingested yet.[/]";
+
+                _ui.RenderDetailPanel(
+                    ["Builds"],
+                    context,
+                    () => _ui.RenderPanelLine(emptyMsg),
+                    PanelRenderer.BuildCommandBarString(new List<CommandBarItem>
+                    {
+                        new("Edit filter", ConsoleKey.E, -5),
+                        new("Filter menu", ConsoleKey.F, -2),
+                    }));
 
                 var emptyKey = Console.ReadKey(true);
                 if (emptyKey.Key == ConsoleKey.E)
@@ -154,14 +159,11 @@ public sealed class BuildBrowser
                 return NavAction.Back.Instance;
             }
 
-            AnsiConsole.MarkupLine($"[dim]{builds.Count} builds[/]");
-            AnsiConsole.WriteLine();
-
             var choices = builds.Select(b =>
             {
                 var resultIcon = b.Result switch
                 {
-                    "succeeded" => "[green]✓[/]",
+                    "succeeded" => "[green]+[/]",
                     "failed" => "[red]X[/]",
                     "partiallySucceeded" => "[yellow]![/]",
                     "canceled" => "[dim]-[/]",
@@ -176,20 +178,23 @@ public sealed class BuildBrowser
 
             _lastBuilds = builds;
 
-            var hotkeys = _filter.IsActive
-                ? "[blue]E[/]dit filter   [blue]F[/]ilter menu   [blue]C[/]lear   [blue]H[/]elp"
-                : "[blue]E[/]dit filter   [blue]F[/]ilter menu   [blue]H[/]elp";
+            var commands = new List<CommandBarItem>
+            {
+                new("Edit filter", ConsoleKey.E, -5),
+                new("Filter menu", ConsoleKey.F, -2),
+                new("Help", ConsoleKey.H, -3),
+            };
+            if (_filter.IsActive)
+            {
+                commands.Add(new("Clear", ConsoleKey.C, -4));
+            }
 
-            var selected = BrowserUI.SelectWithEscape("Select a build:", choices,
-                extraKeys: new Dictionary<ConsoleKey, int> {
-                    { ConsoleKey.E, -5 },
-                    { ConsoleKey.F, -2 },
-                    { ConsoleKey.H, -3 },
-                    { ConsoleKey.C, -4 },
-                },
-                useMarkup: true,
-                startIndex: _selectedBuildIndex,
-                hotkeys: hotkeys);
+            var selected = _ui.SelectInPanel(
+                ["Builds"],
+                context,
+                choices,
+                commands,
+                startIndex: _selectedBuildIndex);
 
             if (selected == -5) // E pressed
             {
@@ -213,7 +218,9 @@ public sealed class BuildBrowser
                 continue;
             }
             if (selected < 0)
+            {
                 return NavAction.Back.Instance;
+            }
 
             _selectedBuildIndex = selected;
             var b2 = builds[selected];
@@ -304,115 +311,131 @@ public sealed class BuildBrowser
 
     private void EditFilter()
     {
-        AnsiConsole.Clear();
-        AnsiConsole.MarkupLine("[bold underline]Edit Filter[/]");
-        AnsiConsole.MarkupLine("[dim]Syntax: repo:VALUE def:VALUE num:VALUE result:VALUE pr:NUMBER[/]");
-        AnsiConsole.MarkupLine("[dim]Examples: repo:roslyn  result:failed  repo:dotnet/* def:*-CI[/]");
-        AnsiConsole.MarkupLine("[dim]Append ! for exact match: repo:dotnet/roslyn![/]");
-        AnsiConsole.MarkupLine("[dim]Press Esc to cancel[/]");
-        AnsiConsole.WriteLine();
-        if (_filter.IsActive)
-            AnsiConsole.MarkupLine($"[dim]Current: {Markup.Escape(_filter.ToString())}[/]");
-        AnsiConsole.Markup("[blue]> [/]");
+        var currentValue = _filter.IsActive ? _filter.ToString() : null;
+        var result = _ui.PromptInPanel(
+            ["Builds", "Edit Filter"],
+            "Enter filter expression (e.g. repo:roslyn def:ci result:failed)",
+            currentValue);
 
-        var buffer = new System.Text.StringBuilder();
-        while (true)
+        if (result is not null)
         {
-            var key = Console.ReadKey(true);
-            if (key.Key == ConsoleKey.Escape)
-                return; // keep existing filter
-            if (key.Key == ConsoleKey.Enter)
-            {
-                AnsiConsole.WriteLine();
-                var input = buffer.ToString().Trim();
-                if (!string.IsNullOrEmpty(input))
-                    _filter.ParseExpression(input);
-                SaveFilter();
-                return;
-            }
-            if (key.Key == ConsoleKey.Backspace)
-            {
-                if (buffer.Length > 0)
-                {
-                    buffer.Remove(buffer.Length - 1, 1);
-                    Console.Write("\b \b");
-                }
-                continue;
-            }
-            if (key.KeyChar >= 32)
-            {
-                buffer.Append(key.KeyChar);
-                Console.Write(key.KeyChar);
-            }
+            _filter.ParseExpression(result);
+            SaveFilter();
         }
     }
 
     private void ShowFilterMenu()
     {
-        AnsiConsole.Clear();
-        AnsiConsole.MarkupLine("[bold underline]Set Filter[/]");
-        AnsiConsole.MarkupLine($"[dim]Current: {Markup.Escape(_filter.ToString())}[/]");
-        AnsiConsole.WriteLine();
-        AnsiConsole.MarkupLine("  [blue]R[/]epository");
-        AnsiConsole.MarkupLine("  [blue]D[/]efinition");
-        AnsiConsole.MarkupLine("  Build [blue]I[/]D");
-        AnsiConsole.MarkupLine("  [blue]O[/]utcome (failed, succeeded, partiallySucceeded)");
-        AnsiConsole.MarkupLine("  [blue]K[/]ind (pr, ci)");
-        AnsiConsole.MarkupLine("  [blue]B[/]ranch");
-        AnsiConsole.MarkupLine("  [blue]P[/]R number");
-        AnsiConsole.MarkupLine("  [blue]C[/]lear all filters");
-        AnsiConsole.MarkupLine("  [blue]Esc[/] Cancel");
-
-        var key = Console.ReadKey(true);
-        switch (key.Key)
+        while (true)
         {
-            case ConsoleKey.R:
-                _filter.RepoPattern = BrowserUI.PromptPattern("Repository pattern (e.g. roslyn, dotnet/*):");
-                break;
-            case ConsoleKey.D:
-                _filter.DefinitionPattern = BrowserUI.PromptPattern("Definition pattern (e.g. ci, roslyn-CI*):");
-                break;
-            case ConsoleKey.I:
-                _filter.IdPattern = BrowserUI.PromptPattern("Build ID pattern (e.g. 1423*, 142333):");
-                break;
-            case ConsoleKey.O:
-                _filter.ResultPattern = PromptResultFilter();
-                break;
-            case ConsoleKey.K:
-                _filter.KindPattern = BrowserUI.PromptKindFilter();
-                break;
-            case ConsoleKey.B:
-                _filter.BranchPattern = BrowserUI.PromptPattern("Branch pattern (e.g. main, release/*):");
-                break;
-            case ConsoleKey.P:
-                _filter.PrNumber = PromptPrNumber();
-                break;
-            case ConsoleKey.C:
-                _filter.Clear();
-                break;
+            var commands = new List<CommandBarItem>
+            {
+                new("Repository", ConsoleKey.R, 1),
+                new("Definition", ConsoleKey.D, 2),
+                new("Build ID", ConsoleKey.I, 3),
+                new("Outcome", ConsoleKey.O, 4),
+                new("Kind", ConsoleKey.K, 5),
+                new("Branch", ConsoleKey.B, 6),
+                new("PR number", ConsoleKey.P, 7),
+                new("Clear", ConsoleKey.C, 8),
+            };
+
+            _ui.RenderDetailPanel(
+                ["Builds", "Filter"],
+                null,
+                () =>
+                {
+                    _ui.RenderPanelLine("Filter available builds by repository, definition, kind, branch, etc.");
+                    _ui.RenderEmptyLine();
+
+                    if (_filter.IsActive)
+                    {
+                        _ui.RenderPanelLine($"[bold]Current filter:[/] {Markup.Escape(_filter.ToString())}");
+                    }
+                    else
+                    {
+                        _ui.RenderPanelLine("[dim]No filter active[/]");
+                    }
+
+                    _ui.RenderEmptyLine();
+                    _ui.RenderPanelLine("[dim]Syntax: substring match by default, * for wildcards, ! suffix for exact[/]");
+                    _ui.RenderPanelLine("[dim]Example: repo:roslyn  def:*-CI  result:failed  branch:main[/]");
+                },
+                PanelRenderer.BuildCommandBarString(commands));
+
+            var key = Console.ReadKey(true);
+            switch (key.Key)
+            {
+                case ConsoleKey.R:
+                    _filter.RepoPattern = PromptFilterField("Repository pattern (e.g. roslyn, dotnet/*)");
+                    SaveFilter();
+                    continue;
+                case ConsoleKey.D:
+                    _filter.DefinitionPattern = PromptFilterField("Definition pattern (e.g. ci, roslyn-CI*)");
+                    SaveFilter();
+                    continue;
+                case ConsoleKey.I:
+                    _filter.IdPattern = PromptFilterField("Build ID pattern (e.g. 1423*, 142333)");
+                    SaveFilter();
+                    continue;
+                case ConsoleKey.O:
+                    _filter.ResultPattern = PromptResultFilter();
+                    SaveFilter();
+                    continue;
+                case ConsoleKey.K:
+                    _filter.KindPattern = BrowserUI.PromptKindFilter(_ui);
+                    SaveFilter();
+                    continue;
+                case ConsoleKey.B:
+                    _filter.BranchPattern = PromptFilterField("Branch pattern (e.g. main, release/*)");
+                    SaveFilter();
+                    continue;
+                case ConsoleKey.P:
+                    _filter.PrNumber = PromptPrNumber();
+                    SaveFilter();
+                    continue;
+                case ConsoleKey.C:
+                    _filter.Clear();
+                    SaveFilter();
+                    continue;
+                case ConsoleKey.Escape:
+                    return;
+                default:
+                    continue;
+            }
         }
-        SaveFilter();
+    }
+
+    private string? PromptFilterField(string prompt)
+    {
+        return _ui.PromptInPanel(["Builds", "Filter"], prompt);
     }
 
     /// <summary>
     /// Selection menu for outcome filter. Returns null if cancelled.
     /// </summary>
-    private static string? PromptResultFilter()
+    private string? PromptResultFilter()
     {
-        AnsiConsole.WriteLine();
-        var choices = new[] { "all", "failed", "succeeded", "partiallySucceeded" };
-        var selected = BrowserUI.SelectWithEscape("Select outcome:", choices.ToList(), pageSize: 5);
-        if (selected < 0) return null; // cancelled
-        return choices[selected] == "all" ? null : choices[selected];
+        var outcomes = new List<string> { "all", "failed", "succeeded", "partiallySucceeded" };
+        var commands = new List<CommandBarItem>();
+        var selected = _ui.SelectInPanel(
+            ["Builds", "Filter", "Outcome"],
+            "[dim]Select build outcome to filter on[/]",
+            outcomes,
+            commands);
+        if (selected < 0)
+        {
+            return null;
+        }
+        return outcomes[selected] == "all" ? null : outcomes[selected];
     }
 
     /// <summary>
     /// Prompts the user to enter a PR number. Returns null if cancelled or invalid.
     /// </summary>
-    private static int? PromptPrNumber()
+    private int? PromptPrNumber()
     {
-        AnsiConsole.WriteLine();
-        var raw = BrowserUI.PromptPattern("PR number (e.g. 12345):");
+        var raw = _ui.PromptInPanel(["Builds", "Filter"], "PR number (e.g. 12345)");
         if (raw is null)
         {
             return null;
@@ -420,33 +443,36 @@ public sealed class BuildBrowser
         return int.TryParse(raw, out var pr) ? pr : null;
     }
 
-    private static void ShowFilterHelp()
+    private void ShowFilterHelp()
     {
-        AnsiConsole.Clear();
-        AnsiConsole.MarkupLine("[bold underline]Filter Help[/]");
-        AnsiConsole.WriteLine();
-        AnsiConsole.MarkupLine("[bold]Quick filter (E):[/]");
-        AnsiConsole.MarkupLine("  Type an expression like: [blue]repo:roslyn def:ci[/]");
-        AnsiConsole.WriteLine();
-        AnsiConsole.MarkupLine("[bold]Matching (default: contains / LIKE):[/]");
-        AnsiConsole.MarkupLine("  [dim]ros → matches 'dotnet/roslyn', 'roslyn-CI', etc.[/]");
-        AnsiConsole.MarkupLine("  [dim]dotnet/* → matches 'dotnet/roslyn', 'dotnet/runtime'[/]");
-        AnsiConsole.MarkupLine("  [dim]14* → matches build numbers starting with '14'[/]");
-        AnsiConsole.MarkupLine("  [dim]*-CI → matches definition names ending with '-CI'[/]");
-        AnsiConsole.WriteLine();
-        AnsiConsole.MarkupLine("[bold]Exact match (append !):[/]");
-        AnsiConsole.MarkupLine("  [dim]dotnet/roslyn! → matches exactly 'dotnet/roslyn'[/]");
-        AnsiConsole.WriteLine();
-        AnsiConsole.MarkupLine("[bold]Filter prefixes:[/]");
-        AnsiConsole.MarkupLine("  [blue]repo:[/]    Repository name");
-        AnsiConsole.MarkupLine("  [blue]def:[/]     Definition/pipeline name");
-        AnsiConsole.MarkupLine("  [blue]id:[/]      Build ID (e.g. 1423*, 142333)");
-        AnsiConsole.MarkupLine("  [blue]result:[/]  Outcome (failed, succeeded, partiallySucceeded)");
-        AnsiConsole.MarkupLine("  [blue]kind:[/]    Build kind (pr, ci)");
-        AnsiConsole.MarkupLine("  [blue]branch:[/]  Source branch (e.g. main, release/*)");
-        AnsiConsole.MarkupLine("  [blue]pr:[/]      PR number (e.g. 12345)");        AnsiConsole.WriteLine();
-        AnsiConsole.MarkupLine("[bold]Multiple filters combine with AND.[/]");
-        AnsiConsole.MarkupLine("[dim]Press any key to continue...[/]");
+        _ui.RenderDetailPanel(
+            ["Builds", "Filter Help"],
+            null,
+            () =>
+            {
+                _ui.RenderPanelLine("[bold]Quick filter (E):[/]");
+                _ui.RenderPanelLine("  Type an expression like: [blue]repo:roslyn def:ci[/]");
+                _ui.RenderEmptyLine();
+                _ui.RenderPanelLine("[bold]Matching (default: contains / LIKE):[/]");
+                _ui.RenderPanelLine("  [dim]ros - matches 'dotnet/roslyn', 'roslyn-CI', etc.[/]");
+                _ui.RenderPanelLine("  [dim]dotnet/* - matches 'dotnet/roslyn', 'dotnet/runtime'[/]");
+                _ui.RenderPanelLine("  [dim]*-CI - matches definition names ending with '-CI'[/]");
+                _ui.RenderEmptyLine();
+                _ui.RenderPanelLine("[bold]Exact match (append !):[/]");
+                _ui.RenderPanelLine("  [dim]dotnet/roslyn! - matches exactly 'dotnet/roslyn'[/]");
+                _ui.RenderEmptyLine();
+                _ui.RenderPanelLine("[bold]Filter prefixes:[/]");
+                _ui.RenderPanelLine("  [blue]repo:[/]    Repository name");
+                _ui.RenderPanelLine("  [blue]def:[/]     Definition/pipeline name");
+                _ui.RenderPanelLine("  [blue]id:[/]      Build ID");
+                _ui.RenderPanelLine("  [blue]result:[/]  Outcome (failed, succeeded, partiallySucceeded)");
+                _ui.RenderPanelLine("  [blue]kind:[/]    Build kind (pr, ci)");
+                _ui.RenderPanelLine("  [blue]branch:[/]  Source branch");
+                _ui.RenderPanelLine("  [blue]pr:[/]      PR number");
+                _ui.RenderEmptyLine();
+                _ui.RenderPanelLine("[bold]Multiple filters combine with AND.[/]");
+            },
+            "[blue]Esc[/] Back");
         Console.ReadKey(true);
     }
 
@@ -454,8 +480,6 @@ public sealed class BuildBrowser
 
     private NavAction RenderBuildDetail(BuildDetailPage page)
     {
-        Console.SetCursorPosition(0, 0);
-
         // Header info from DB
         var buildInfo = _db.WithCommand(cmd =>
         {
@@ -488,7 +512,11 @@ public sealed class BuildBrowser
 
         if (!buildInfo.Found)
         {
-            AnsiConsole.MarkupLine("[red]Build not found.[/]");
+            _ui.RenderDetailPanel(
+                ["Builds", $"#{page.BuildId}"],
+                null,
+                () => _ui.RenderPanelLine("[red]Build not found.[/]"),
+                "[blue]Esc[/] Back");
             Console.ReadKey(true);
             return NavAction.Back.Instance;
         }
@@ -503,218 +531,262 @@ public sealed class BuildBrowser
 
         var url = $"https://dev.azure.com/{Uri.EscapeDataString(page.Org)}/{Uri.EscapeDataString(page.Project)}/_build/results?buildId={page.BuildId}";
 
-        // Build header
-        var headerTable = new Table().Border(TableBorder.Rounded).Expand();
-        headerTable.AddColumn(new TableColumn("").NoWrap());
-        headerTable.AddColumn(new TableColumn(""));
-        headerTable.HideHeaders();
-
-        headerTable.AddRow("[bold]Build[/]", $"#{page.BuildId} — {defName} {buildNumber}");
-        headerTable.AddRow("[bold]Result[/]", BrowserUI.FormatResult(result));
-        if (prNumber is not null && repoName is not null)
-        {
-            var prUrl = $"https://github.com/{repoName}/pull/{prNumber}";
-
-            // Try to get cached PR info
-            var prInfo = _db.WithCommand(cmd =>
-            {
-                cmd.CommandText = "SELECT title, author FROM pull_requests WHERE repository = @repo AND pr_number = @pr";
-                cmd.Parameters.AddWithValue("@repo", repoName);
-                cmd.Parameters.AddWithValue("@pr", prNumber);
-                using var reader = cmd.ExecuteReader();
-                if (reader.Read() && !reader.IsDBNull(0))
-                {
-                    return (Found: true, Title: reader.GetString(0), Author: reader.IsDBNull(1) ? string.Empty : reader.GetString(1));
-                }
-
-                return (Found: false, Title: string.Empty, Author: string.Empty);
-            });
-
-            if (prInfo.Found)
-            {
-                // Truncate title to fit: "PR Info" col + "#123 author " leaves room for title
-                var prefix = $"#{prNumber} {prInfo.Author} ";
-                var maxTitleLen = Math.Max(10, Console.WindowWidth - prefix.Length - 20);
-                var truncatedTitle = prInfo.Title.Length > maxTitleLen ? prInfo.Title[..maxTitleLen] + "..." : prInfo.Title;
-                headerTable.AddRow("[bold]PR Info[/]", $"#{prNumber} [blue]{Markup.Escape(prInfo.Author)}[/] {Markup.Escape(truncatedTitle)}");
-            }
-            else
-            {
-                headerTable.AddRow("[bold]PR Info[/]", $"#{prNumber}");
-            }
-            headerTable.AddRow("[bold]PR Url[/]", BrowserUI.FormatLink(prUrl, $"PR #{prNumber}"));
-        }
-        else if (prNumber is not null)
-        {
-            headerTable.AddRow("[bold]PR Info[/]", $"#{prNumber}");
-        }
-        else
-        {
-            headerTable.AddRow("[bold]Branch[/]", branch);
-        }
-        if (finishTime is not null)
-            headerTable.AddRow("[bold]Finished[/]", BrowserUI.FormatTime(finishTime));
-        headerTable.AddRow("[bold]URL[/]", BrowserUI.FormatLink(url, url));
-
-        // Ingestion status line: Timeline, Tests, Helix with status icons
+        // Ingestion status
         var taskStatuses = GetIngestionTaskStatuses(page.Org, page.Project, page.BuildId);
         var taskStatusMap = taskStatuses.ToDictionary(t => t.TaskType, t => t);
         string TaskIcon(string taskType)
         {
             if (!taskStatusMap.TryGetValue(taskType, out var t))
+            {
                 return "[yellow]...[/]";
+            }
             return t.Status switch
             {
-                "complete" => "[green]✓[/]",
+                "complete" => "[green]+[/]",
                 "running" => "[blue]...[/]",
                 "failed" => $"[yellow]X retry {t.Attempts}/5[/]",
                 "abandoned" => "[red]abandoned[/]",
                 _ => "[yellow]...[/]",
             };
         }
-        headerTable.AddRow("[bold]Data[/]",
-            $"Timeline: {TaskIcon("timeline")}  Tests: {TaskIcon("tests")}  Helix: {TaskIcon("helix")}");
-
-        AnsiConsole.Write(headerTable);
-        AnsiConsole.WriteLine();
 
         var timelineStatus = taskStatusMap.GetValueOrDefault("timeline").Status;
         var testsStatus = taskStatusMap.GetValueOrDefault("tests").Status;
 
-        // Failed jobs section (from DB timeline issues, when timeline is ingested)
-        if (timelineStatus == "complete")
-        {
-            var failedJobNames = _db.WithCommand(cmd =>
-            {
-                cmd.CommandText = """
-                    SELECT DISTINCT parent_name
-                    FROM build_timeline_issues
-                    WHERE organization = @org AND build_id = @buildId
-                      AND parent_name IS NOT NULL AND issue_type = 'error'
-                    ORDER BY parent_name
-                    """;
-                cmd.Parameters.AddWithValue("@org", page.Org);
-                cmd.Parameters.AddWithValue("@proj", page.Project);
-                cmd.Parameters.AddWithValue("@buildId", page.BuildId);
-
-                var failedJobNames = new List<string>();
-                using var reader = cmd.ExecuteReader();
-                while (reader.Read())
-                {
-                    failedJobNames.Add(reader.GetString(0));
-                }
-                return failedJobNames;
-            });
-
-            AnsiConsole.MarkupLine("[bold underline]Failed Jobs[/]");
-            if (failedJobNames.Count > 0)
-            {
-                foreach (var jobName in failedJobNames.Take(15))
-                    AnsiConsole.MarkupLine($"  [red]X[/] {Markup.Escape(jobName)}");
-            }
-            else
-            {
-                AnsiConsole.MarkupLine("  [green]No failed jobs[/]");
-            }
-            AnsiConsole.WriteLine();
-        }
-
-        // Failed tests section
-        AnsiConsole.MarkupLine("[bold underline]Failed Tests[/]");
-        if (testsStatus != "complete")
-        {
-            AnsiConsole.MarkupLine("  [yellow]Tests not available yet[/]");
-        }
-        else
-        {
-            var failedTests = _db.WithCommand(cmd =>
-            {
-                cmd.CommandText = """
-                    SELECT r.run_name, tr.test_case_title, tr.error_message
-                    FROM test_results tr
-                    JOIN test_runs r ON tr.organization = r.organization AND tr.run_id = r.run_id
-                    WHERE r.organization = @org AND r.project = @proj AND r.build_id = @buildId
-                          AND tr.outcome = 'Failed'
-                    ORDER BY r.run_name, tr.test_case_title
-                    LIMIT 50
-                    """;
-                cmd.Parameters.AddWithValue("@org", page.Org);
-                cmd.Parameters.AddWithValue("@proj", page.Project);
-                cmd.Parameters.AddWithValue("@buildId", page.BuildId);
-
-                var failedTests = new List<(string RunName, string Title, string Error)>();
-                using var reader = cmd.ExecuteReader();
-                while (reader.Read())
-                {
-                    var runName = reader.GetString(0);
-                    var title = reader.GetString(1);
-                    var error = reader.IsDBNull(2) ? string.Empty : reader.GetString(2);
-                    failedTests.Add((runName, title, error));
-                }
-                return failedTests;
-            });
-
-            if (failedTests.Count == 0)
-            {
-                AnsiConsole.MarkupLine("  [green]All tests passed[/]");
-            }
-            else
-            {
-                foreach (var group in failedTests.GroupBy(t => t.RunName))
-                {
-                    AnsiConsole.MarkupLine($"  [bold yellow]{Markup.Escape(group.Key)}[/]");
-                    var shown = 0;
-                    var total = group.Count();
-                    foreach (var test in group.Take(5))
-                    {
-                        var title = test.Title.Length > 68 ? test.Title[..65] + "..." : test.Title;
-                        var error = test.Error;
-                        if (error.Length > 60) error = error[..57] + "...";
-                        error = error.ReplaceLineEndings(" ");
-                        AnsiConsole.MarkupLine($"    [red]X[/] {Markup.Escape(title)}");
-                        if (!string.IsNullOrWhiteSpace(error))
-                            AnsiConsole.MarkupLine($"      [dim]{Markup.Escape(error)}[/]");
-                        shown++;
-                    }
-                    if (total > shown)
-                        AnsiConsole.MarkupLine($"    [dim]... {total - shown} more failure(s), press T to see all[/]");
-                }
-            }
-        }
-
-        // Helix work items count
-        var helixCount = _db.WithCommand(cmd =>
-        {
-            cmd.CommandText = """
-                SELECT COUNT(DISTINCT hw.job_name || '/' || hw.work_item_name)
-                FROM test_results tr
-                JOIN test_runs trn ON tr.organization = trn.organization
-                    AND tr.project = trn.project AND tr.run_id = trn.run_id
-                JOIN helix_work_items hw ON tr.helix_job_name = hw.job_name
-                    AND tr.helix_work_item_name = hw.work_item_name
-                WHERE trn.organization = @org AND trn.project = @proj AND trn.build_id = @buildId
-                  AND tr.outcome = 'Failed'
-                """;
-            cmd.Parameters.AddWithValue("@org", page.Org);
-            cmd.Parameters.AddWithValue("@proj", page.Project);
-            cmd.Parameters.AddWithValue("@buildId", page.BuildId);
-            return Convert.ToInt32(cmd.ExecuteScalar());
-        });
-        if (helixCount > 0)
-        {
-            AnsiConsole.MarkupLine($"  [bold]Helix Work Items:[/] {helixCount}");
-        }
-
-        AnsiConsole.WriteLine();
         var canForward = _position < _history.Count - 1;
         var buildIndex = _lastBuilds.FindIndex(b => b.BuildId == page.BuildId && b.Org == page.Org && b.Project == page.Project);
         var canNext = buildIndex >= 0 && buildIndex < _lastBuilds.Count - 1;
         var canPrev = buildIndex > 0;
-        AnsiConsole.MarkupLine("[bold]Navigation:[/]");
-        AnsiConsole.MarkupLine("  [blue]T[/]ests   [blue]J[/]obs   [blue]H[/]elix   [blue]A[/]nalysis   [blue]B[/]ack" +
-            (canForward ? "   [blue]F[/]orward" : "") +
-            (canNext ? "   [blue]N[/]ext" : "") +
-            (canPrev ? "   [blue]P[/]rev" : ""));
+
+        var detailCommands = new List<CommandBarItem>
+        {
+            new("Tests", ConsoleKey.T, -10),
+            new("Jobs", ConsoleKey.J, -11),
+            new("Helix", ConsoleKey.H, -12),
+            new("Analysis", ConsoleKey.A, -13),
+        };
+        if (canForward)
+        {
+            detailCommands.Add(new("Forward", ConsoleKey.F, -14));
+        }
+        if (canNext)
+        {
+            detailCommands.Add(new("Next", ConsoleKey.N, -15));
+        }
+        if (canPrev)
+        {
+            detailCommands.Add(new("Prev", ConsoleKey.P, -16));
+        }
+
+        _ui.RenderDetailPanel(
+            ["Builds", $"#{page.BuildId} {defName}"],
+            $"{BrowserUI.FormatResult(result)}  {BrowserUI.FormatTime(finishTime)}",
+            () =>
+            {
+                // Build info fields
+                _ui.RenderField("Build", $"#{page.BuildId} — {defName} {buildNumber}");
+                _ui.RenderField("Result", BrowserUI.FormatResult(result));
+                if (prNumber is not null && repoName is not null)
+                {
+                    var prUrl = $"https://github.com/{repoName}/pull/{prNumber}";
+                    var prInfo = _db.WithCommand(cmd =>
+                    {
+                        cmd.CommandText = "SELECT title, author FROM pull_requests WHERE repository = @repo AND pr_number = @pr";
+                        cmd.Parameters.AddWithValue("@repo", repoName);
+                        cmd.Parameters.AddWithValue("@pr", prNumber);
+                        using var reader = cmd.ExecuteReader();
+                        if (reader.Read() && !reader.IsDBNull(0))
+                        {
+                            return (Found: true, Title: reader.GetString(0), Author: reader.IsDBNull(1) ? string.Empty : reader.GetString(1));
+                        }
+                        return (Found: false, Title: string.Empty, Author: string.Empty);
+                    });
+
+                    if (prInfo.Found)
+                    {
+                        var prefix = $"#{prNumber} {prInfo.Author} ";
+                        var maxTitleLen = Math.Max(10, _ui.ContentWidth - prefix.Length - 20);
+                        var truncatedTitle = prInfo.Title.Length > maxTitleLen ? prInfo.Title[..maxTitleLen] + "..." : prInfo.Title;
+                        _ui.RenderField("PR", $"#{prNumber} [blue]{Markup.Escape(prInfo.Author)}[/] {Markup.Escape(truncatedTitle)}");
+                    }
+                    else
+                    {
+                        _ui.RenderField("PR", $"#{prNumber}");
+                    }
+                    _ui.RenderField("PR URL", BrowserUI.FormatLink(prUrl, $"PR #{prNumber}"));
+                }
+                else if (prNumber is not null)
+                {
+                    _ui.RenderField("PR", $"#{prNumber}");
+                }
+                else
+                {
+                    _ui.RenderField("Branch", branch);
+                }
+                if (finishTime is not null)
+                {
+                    _ui.RenderField("Finished", BrowserUI.FormatTime(finishTime));
+                }
+                _ui.RenderField("URL", BrowserUI.FormatLink(url, url));
+                _ui.RenderField("Data", $"Timeline: {TaskIcon("timeline")}  Tests: {TaskIcon("tests")}  Helix: {TaskIcon("helix")}");
+                _ui.RenderEmptyLine();
+
+                // Failed jobs section
+                if (timelineStatus == "complete")
+                {
+                    var failedJobNames = _db.WithCommand(cmd =>
+                    {
+                        cmd.CommandText = """
+                            SELECT DISTINCT parent_name
+                            FROM build_timeline_issues
+                            WHERE organization = @org AND build_id = @buildId
+                              AND parent_name IS NOT NULL AND issue_type = 'error'
+                            ORDER BY parent_name
+                            """;
+                        cmd.Parameters.AddWithValue("@org", page.Org);
+                        cmd.Parameters.AddWithValue("@proj", page.Project);
+                        cmd.Parameters.AddWithValue("@buildId", page.BuildId);
+
+                        var names = new List<string>();
+                        using var reader = cmd.ExecuteReader();
+                        while (reader.Read())
+                        {
+                            names.Add(reader.GetString(0));
+                        }
+                        return names;
+                    });
+
+                    _ui.RenderSectionTitle("Failed Jobs");
+                    if (failedJobNames.Count > 0)
+                    {
+                        foreach (var jobName in failedJobNames.Take(15))
+                        {
+                            _ui.RenderPanelLine($"  [red]X[/] {Markup.Escape(jobName)}");
+                        }
+                    }
+                    else
+                    {
+                        _ui.RenderPanelLine("  [green]No failed jobs[/]");
+                    }
+                    _ui.RenderEmptyLine();
+                }
+
+                // Failed tests section
+                _ui.RenderSectionTitle("Failed Tests");
+                if (testsStatus != "complete")
+                {
+                    _ui.RenderPanelLine("  [yellow]Tests not available yet[/]");
+                }
+                else
+                {
+                    var failedTests = _db.WithCommand(cmd =>
+                    {
+                        cmd.CommandText = """
+                            SELECT r.run_name, tr.test_case_title, tr.error_message
+                            FROM test_results tr
+                            JOIN test_runs r ON tr.organization = r.organization AND tr.run_id = r.run_id
+                            WHERE r.organization = @org AND r.project = @proj AND r.build_id = @buildId
+                                  AND tr.outcome = 'Failed'
+                            ORDER BY r.run_name, tr.test_case_title
+                            LIMIT 50
+                            """;
+                        cmd.Parameters.AddWithValue("@org", page.Org);
+                        cmd.Parameters.AddWithValue("@proj", page.Project);
+                        cmd.Parameters.AddWithValue("@buildId", page.BuildId);
+
+                        var tests = new List<(string RunName, string Title, string Error)>();
+                        using var reader = cmd.ExecuteReader();
+                        while (reader.Read())
+                        {
+                            tests.Add((reader.GetString(0), reader.GetString(1),
+                                reader.IsDBNull(2) ? string.Empty : reader.GetString(2)));
+                        }
+                        return tests;
+                    });
+
+                    if (failedTests.Count == 0)
+                    {
+                        _ui.RenderPanelLine("  [green]All tests passed[/]");
+                    }
+                    else
+                    {
+                        foreach (var group in failedTests.GroupBy(t => t.RunName))
+                        {
+                            _ui.RenderPanelLine($"  [bold yellow]{Markup.Escape(group.Key)}[/]");
+                            var shown = 0;
+                            var total = group.Count();
+                            foreach (var test in group.Take(5))
+                            {
+                                var title = test.Title.Length > 68 ? test.Title[..65] + "..." : test.Title;
+                                var error = test.Error;
+                                if (error.Length > 60)
+                                {
+                                    error = error[..57] + "...";
+                                }
+                                error = error.ReplaceLineEndings(" ");
+                                _ui.RenderPanelLine($"    [red]X[/] {Markup.Escape(title)}");
+                                if (!string.IsNullOrWhiteSpace(error))
+                                {
+                                    _ui.RenderPanelLine($"      [dim]{Markup.Escape(error)}[/]");
+                                }
+                                shown++;
+                            }
+                            if (total > shown)
+                            {
+                                _ui.RenderPanelLine($"    [dim]... {total - shown} more failure(s), press T to see all[/]");
+                            }
+                        }
+                    }
+                }
+
+                // Helix work items
+                var helixItems = _db.WithCommand(cmd =>
+                {
+                    cmd.CommandText = """
+                        SELECT DISTINCT tr.helix_job_name, tr.helix_work_item_name, hw.state, hw.exit_code, hw.is_deadletter
+                        FROM test_results tr
+                        JOIN test_runs trn ON tr.organization = trn.organization
+                            AND tr.project = trn.project AND tr.run_id = trn.run_id
+                        LEFT JOIN helix_work_items hw ON tr.helix_job_name = hw.job_name
+                            AND tr.helix_work_item_name = hw.work_item_name
+                        WHERE trn.organization = @org AND trn.project = @proj AND trn.build_id = @buildId
+                          AND tr.outcome = 'Failed'
+                          AND tr.helix_job_name IS NOT NULL
+                        ORDER BY tr.helix_job_name, tr.helix_work_item_name
+                        LIMIT 15
+                        """;
+                    cmd.Parameters.AddWithValue("@org", page.Org);
+                    cmd.Parameters.AddWithValue("@proj", page.Project);
+                    cmd.Parameters.AddWithValue("@buildId", page.BuildId);
+
+                    var items = new List<(string Job, string Wi, string? State, int? ExitCode, bool IsDeadletter)>();
+                    using var reader = cmd.ExecuteReader();
+                    while (reader.Read())
+                    {
+                        items.Add((
+                            reader.GetString(0),
+                            reader.GetString(1),
+                            reader.IsDBNull(2) ? null : reader.GetString(2),
+                            reader.IsDBNull(3) ? (int?)null : reader.GetInt32(3),
+                            !reader.IsDBNull(4) && reader.GetInt32(4) != 0));
+                    }
+                    return items;
+                });
+
+                if (helixItems.Count > 0)
+                {
+                    _ui.RenderEmptyLine();
+                    _ui.RenderSectionTitle($"Failed Helix Work Items ({helixItems.Count})");
+                    foreach (var (job, wi, state, exitCode, isDeadletter) in helixItems)
+                    {
+                        var exitInfo = exitCode is not null ? $" exit {exitCode}" : "";
+                        var extra = isDeadletter ? " [red]deadletter[/]" : "";
+                        var color = (exitCode ?? 1) == 0 ? "green" : "red";
+                        _ui.RenderPanelLine($"  [{color}]X[/] {Markup.Escape(wi)}  [dim]{Markup.Escape(job)}[/]{exitInfo}{extra}");
+                    }
+                }
+            },
+            PanelRenderer.BuildCommandBarString(detailCommands));
 
         return ReadNavKey(page);
     }
@@ -723,9 +795,6 @@ public sealed class BuildBrowser
 
     private NavAction RenderTestList(TestListPage page)
     {
-        AnsiConsole.MarkupLine($"[bold underline]Failed Tests — Build #{page.BuildId}[/]");
-        AnsiConsole.WriteLine();
-
         var tests = _db.WithCommand(cmd =>
         {
             var tests = new List<(string RunName, string Title)>();
@@ -751,18 +820,23 @@ public sealed class BuildBrowser
 
         if (tests.Count == 0)
         {
-            AnsiConsole.MarkupLine("[green]No failed tests in this build.[/]");
-            AnsiConsole.MarkupLine("[dim]Press any key to go back...[/]");
+            _ui.RenderDetailPanel(
+                ["Builds", $"#{page.BuildId}", "Tests"],
+                null,
+                () => _ui.RenderPanelLine("[green]No failed tests in this build.[/]"),
+                "[blue]Esc[/] Back");
             Console.ReadKey(true);
             return NavAction.Back.Instance;
         }
 
         // Build grouped display: run name headers are non-selectable, tests are selectable
         var choices = new List<string>();
-        var selectableIndices = new List<int>(); // maps choice index → tests list index
+        var selectableIndices = new List<int>(); // maps choice index -> tests list index
+        var skipIndices = new HashSet<int>();
         var grouped = tests.Select((t, i) => (t, i)).GroupBy(x => x.t.RunName);
         foreach (var group in grouped)
         {
+            skipIndices.Add(choices.Count);
             choices.Add($"[bold yellow]{Markup.Escape(group.Key)}[/]");
             selectableIndices.Add(-1); // header, not selectable
 
@@ -775,11 +849,19 @@ public sealed class BuildBrowser
         }
 
         var totalFailed = tests.Select(t => t.Title).Distinct().Count();
-        var selected = BrowserUI.SelectWithEscape($"{totalFailed} failed test(s) across {grouped.Count()} run(s):",
-            choices, useMarkup: true, skipIndices: selectableIndices.Select((v, i) => (v, i)).Where(x => x.v == -1).Select(x => x.i).ToHashSet());
+        var commands = new List<CommandBarItem>();
+
+        var selected = _ui.SelectInPanel(
+            ["Builds", $"#{page.BuildId}", "Tests"],
+            $"[dim]{totalFailed} failed test(s) across {grouped.Count()} run(s)[/]",
+            choices,
+            commands,
+            skipIndices: skipIndices);
 
         if (selected < 0)
+        {
             return NavAction.Back.Instance;
+        }
 
         var testTitle = tests[selectableIndices[selected]].Title;
         return new NavAction.Push(
@@ -793,30 +875,110 @@ public sealed class BuildBrowser
         var info = BrowserUI.LoadTestDetail(_db, page.Org, page.Project, page.TestName);
         if (info is null)
         {
-            AnsiConsole.MarkupLine("[yellow]No test failure data found.[/]");
-            AnsiConsole.MarkupLine("[dim]Press any key to go back...[/]");
+            _ui.RenderDetailPanel(
+                ["Builds", "Tests", "Detail"],
+                null,
+                () => _ui.RenderPanelLine("[yellow]No test failure data found.[/]"),
+                "[blue]Esc[/] Back");
             Console.ReadKey(true);
             return NavAction.Back.Instance;
         }
 
-        BrowserUI.RenderTestDetail(info);
-
-        AnsiConsole.MarkupLine("[bold]Navigation:[/]");
-        AnsiConsole.MarkupLine("  [blue]B[/]uilds with this failure   [blue]A[/]gent task   [blue]Esc[/] Back");
+        var shortTitle = page.TestName.Length > 60 ? page.TestName[..57] + "..." : page.TestName;
+        var truncate = true;
 
         while (true)
         {
-            var key = Console.ReadKey(true);
-            switch (key.Key)
+            _ui.TruncationEnabled = truncate;
+            var commands = new List<CommandBarItem>
             {
-                case ConsoleKey.B:
-                    return new NavAction.Push(new TestBuildsPage(page.Org, page.Project, page.TestName));
-                case ConsoleKey.A:
-                    BrowserUI.CreateAgentTask(_db, info);
-                    return NavAction.Refresh.Instance;
-                case ConsoleKey.Escape:
-                    return NavAction.Back.Instance;
+                new("Builds with failure", ConsoleKey.B, -2),
+                new("Agent task", ConsoleKey.A, -3),
+                new(truncate ? "Truncate: off" : "Truncate: on", ConsoleKey.T, -5),
+            };
+            if (info.HelixJobName is not null)
+            {
+                commands.Add(new("Helix", ConsoleKey.H, -4));
             }
+
+            _ui.RenderDetailPanel(
+                ["Builds", "Tests", Markup.Escape(shortTitle)],
+                null,
+                () => BrowserUI.RenderTestDetailInPanel(_ui, info),
+                PanelRenderer.BuildCommandBarString(commands));
+
+            while (true)
+            {
+                var key = Console.ReadKey(true);
+                if (_ui.HandleDetailScroll(key)) continue;
+                switch (key.Key)
+                {
+                    case ConsoleKey.B:
+                        _ui.TruncationEnabled = true;
+                        return new NavAction.Push(new TestBuildsPage(page.Org, page.Project, page.TestName));
+                    case ConsoleKey.A:
+                        BrowserUI.CreateAgentTask(_db, info);
+                        _ui.TruncationEnabled = true;
+                        return NavAction.Refresh.Instance;
+                    case ConsoleKey.H when info.HelixJobName is not null:
+                        ShowHelixWorkItemDetail(info);
+                        _ui.TruncationEnabled = true;
+                        return NavAction.Refresh.Instance;
+                    case ConsoleKey.T:
+                        truncate = !truncate;
+                        break;
+                    case ConsoleKey.Escape:
+                        _ui.TruncationEnabled = true;
+                        return NavAction.Back.Instance;
+                }
+                break; // re-render with updated truncate setting
+            }
+        }
+    }
+
+    private void ShowHelixWorkItemDetail(BrowserUI.TestDetailInfo info)
+    {
+        var commands = new List<CommandBarItem>();
+        _ui.RenderDetailPanel(
+            ["Tests", "Helix Work Item"],
+            null,
+            () =>
+            {
+                if (info.IsHelixDeadletter)
+                {
+                    _ui.RenderPanelLine("[bold red on yellow] !! HELIX DEAD LETTER — Infrastructure failure [/]");
+                    _ui.RenderEmptyLine();
+                }
+                _ui.RenderField("Job", Markup.Escape(info.HelixJobName!));
+                if (info.HelixWorkItemName is not null)
+                {
+                    _ui.RenderField("Work Item", Markup.Escape(info.HelixWorkItemName));
+                    var url = HelixClient.GetConsoleUrl(info.HelixJobName!, info.HelixWorkItemName);
+                    _ui.RenderField("Console", BrowserUI.FormatLink(url, "Console Log"));
+                }
+                if (info.HelixFiles is { Count: > 0 })
+                {
+                    _ui.RenderEmptyLine();
+                    _ui.RenderSectionTitle($"Files ({info.HelixFiles.Count})");
+                    foreach (var (name, uri) in info.HelixFiles)
+                    {
+                        if (uri is not null)
+                        {
+                            _ui.RenderPanelLine($"  {BrowserUI.FormatLink(uri, name)}");
+                        }
+                        else
+                        {
+                            _ui.RenderPanelLine($"  {Markup.Escape(name)}");
+                        }
+                    }
+                }
+            },
+            "[blue]Esc[/] Back");
+        while (true)
+        {
+            var key = Console.ReadKey(true);
+            if (_ui.HandleDetailScroll(key)) continue;
+            if (key.Key == ConsoleKey.Escape) return;
         }
     }
 
@@ -825,9 +987,6 @@ public sealed class BuildBrowser
     private NavAction RenderTestBuilds(TestBuildsPage page)
     {
         var shortTitle = page.TestName.Length > 60 ? page.TestName[..57] + "..." : page.TestName;
-        AnsiConsole.MarkupLine($"[bold underline]Builds with failure[/]");
-        AnsiConsole.MarkupLine($"[bold]{Markup.Escape(shortTitle)}[/]");
-        AnsiConsole.WriteLine();
 
         var builds = _db.WithCommand(cmd =>
         {
@@ -867,8 +1026,11 @@ public sealed class BuildBrowser
 
         if (builds.Count == 0)
         {
-            AnsiConsole.MarkupLine("[yellow]No builds found with this test failure.[/]");
-            AnsiConsole.MarkupLine("[dim]Press any key to go back...[/]");
+            _ui.RenderDetailPanel(
+                ["Builds", "Tests", "Builds with failure"],
+                null,
+                () => _ui.RenderPanelLine("[yellow]No builds found with this test failure.[/]"),
+                "[blue]Esc[/] Back");
             Console.ReadKey(true);
             return NavAction.Back.Instance;
         }
@@ -877,7 +1039,7 @@ public sealed class BuildBrowser
         {
             var resultIcon = b.Result switch
             {
-                "succeeded" => "[green]✓[/]",
+                "succeeded" => "[green]+[/]",
                 "failed" => "[red]X[/]",
                 "partiallySucceeded" => "[yellow]![/]",
                 _ => "[dim]-[/]",
@@ -887,10 +1049,17 @@ public sealed class BuildBrowser
             return $"{resultIcon} {b.BuildId} {Markup.Escape(b.DefinitionName)} {time}{pr}";
         }).ToList();
 
-        var selected = BrowserUI.SelectWithEscape("Select a build:", choices, useMarkup: true);
+        var commands = new List<CommandBarItem>();
+        var selected = _ui.SelectInPanel(
+            ["Builds", "Tests", Markup.Escape(shortTitle), "Builds"],
+            $"[dim]{builds.Count} build(s) with this failure[/]",
+            choices,
+            commands);
 
         if (selected < 0)
+        {
             return NavAction.Back.Instance;
+        }
 
         var b2 = builds[selected];
         return new NavAction.Push(new BuildDetailPage(b2.Org, b2.Project, b2.BuildId));
@@ -937,8 +1106,11 @@ public sealed class BuildBrowser
 
         if (jobIssues.Count == 0)
         {
-            AnsiConsole.MarkupLine("[green]No timeline issues recorded for this build.[/]");
-            AnsiConsole.MarkupLine("[dim]Press any key to go back...[/]");
+            _ui.RenderDetailPanel(
+                ["Builds", $"#{page.BuildId}", "Jobs"],
+                null,
+                () => _ui.RenderPanelLine("[green]No timeline issues recorded for this build.[/]"),
+                "[blue]Esc[/] Back");
             Console.ReadKey(true);
             return NavAction.Back.Instance;
         }
@@ -948,55 +1120,75 @@ public sealed class BuildBrowser
 
         while (true)
         {
-            AnsiConsole.Clear();
-            AnsiConsole.MarkupLine($"[bold underline]Failed Jobs — Build #{page.BuildId}[/]");
-            if (errorsOnly)
-                AnsiConsole.MarkupLine("[dim]Showing errors only[/]");
-            AnsiConsole.WriteLine();
-
-            foreach (var (jobName, issues) in jobIssues)
+            var commands = new List<CommandBarItem>
             {
-                var filtered = errorsOnly
-                    ? issues.Where(i => i.Type == "error").ToList()
-                    : issues;
+                new(errorsOnly ? "Errors: showing" : "Errors only", ConsoleKey.E, -2),
+                new(truncate ? "Truncate: off" : "Truncate: on", ConsoleKey.T, -3),
+            };
 
-                if (filtered.Count == 0)
-                    continue;
-
-                var errorCount = issues.Count(i => i.Type == "error");
-                var warnCount = issues.Count(i => i.Type == "warning");
-                var summary = new List<string>();
-                if (errorCount > 0) summary.Add($"[red]{errorCount} error(s)[/]");
-                if (warnCount > 0) summary.Add($"[yellow]{warnCount} warning(s)[/]");
-                AnsiConsole.MarkupLine($"[bold]{Markup.Escape(jobName)}[/]  {string.Join(" ", summary)}");
-
-                foreach (var (type, message) in filtered.Take(10))
+            _ui.RenderDetailPanel(
+                ["Builds", $"#{page.BuildId}", "Jobs"],
+                errorsOnly ? "[dim]Showing errors only[/]" : null,
+                () =>
                 {
-                    var icon = type == "error" ? "[red]error[/]" : "[yellow]warn[/]";
-                    var msg = message.ReplaceLineEndings(" ");
-                    if (truncate && msg.Length > 120)
-                        msg = msg[..117] + "...";
-                    AnsiConsole.MarkupLine($"  {icon}: {Markup.Escape(msg)}");
-                }
+                    foreach (var (jobName, issues) in jobIssues)
+                    {
+                        var filtered = errorsOnly
+                            ? issues.Where(i => i.Type == "error").ToList()
+                            : issues;
 
-                if (filtered.Count > 10)
-                    AnsiConsole.MarkupLine($"  [dim]... and {filtered.Count - 10} more[/]");
+                        if (filtered.Count == 0)
+                        {
+                            continue;
+                        }
 
-                AnsiConsole.WriteLine();
-            }
+                        var errorCount = issues.Count(i => i.Type == "error");
+                        var warnCount = issues.Count(i => i.Type == "warning");
+                        var summary = new List<string>();
+                        if (errorCount > 0)
+                        {
+                            summary.Add($"[red]{errorCount} error(s)[/]");
+                        }
+                        if (warnCount > 0)
+                        {
+                            summary.Add($"[yellow]{warnCount} warning(s)[/]");
+                        }
+                        _ui.RenderPanelLine($"[bold]{Markup.Escape(jobName)}[/]  {string.Join(" ", summary)}");
 
-            // Hotkey menu at the bottom
-            var errorsLabel = errorsOnly ? "[blue]E[/]rrors: showing" : "[blue]E[/]rrors only";
-            var truncateLabel = truncate ? "[blue]T[/]runcate: off" : "[blue]T[/]runcate: on";
-            AnsiConsole.MarkupLine($"  {errorsLabel}   {truncateLabel}   [blue]Esc[/] Back");
+                        foreach (var (type, message) in filtered.Take(10))
+                        {
+                            var icon = type == "error" ? "[red]error[/]" : "[yellow]warn[/]";
+                            var msg = message.ReplaceLineEndings(" ");
+                            if (truncate && msg.Length > 120)
+                            {
+                                msg = msg[..117] + "...";
+                            }
+                            _ui.RenderPanelLine($"  {icon}: {Markup.Escape(msg)}");
+                        }
+
+                        if (filtered.Count > 10)
+                        {
+                            _ui.RenderPanelLine($"  [dim]... and {filtered.Count - 10} more[/]");
+                        }
+
+                        _ui.RenderEmptyLine();
+                    }
+                },
+                PanelRenderer.BuildCommandBarString(commands));
 
             var key = Console.ReadKey(true);
             if (key.Key is ConsoleKey.Escape or ConsoleKey.B)
+            {
                 return NavAction.Back.Instance;
+            }
             if (key.Key == ConsoleKey.T)
+            {
                 truncate = !truncate;
+            }
             if (key.Key == ConsoleKey.E)
+            {
                 errorsOnly = !errorsOnly;
+            }
         }
     }
 
@@ -1007,6 +1199,7 @@ public sealed class BuildBrowser
         while (true)
         {
             var key = Console.ReadKey(true);
+            if (_ui.HandleDetailScroll(key)) continue;
 
             switch (key.Key)
             {
@@ -1049,10 +1242,6 @@ public sealed class BuildBrowser
 
     private void ShowHelixInfo(BuildDetailPage page)
     {
-        AnsiConsole.Clear();
-        AnsiConsole.MarkupLine($"[bold underline]Helix Work Items — Build #{page.BuildId}[/]");
-        AnsiConsole.WriteLine();
-
         var helixItems = _db.WithCommand(cmd =>
         {
             cmd.CommandText = """
@@ -1086,32 +1275,35 @@ public sealed class BuildBrowser
             return helixItems;
         });
 
-        var hasHelix = false;
-        foreach (var (job, wi, state, exitCode, consoleUri, isDeadletter) in helixItems)
-        {
-            hasHelix = true;
-            if (isDeadletter)
+        _ui.RenderDetailPanel(
+            ["Builds", $"#{page.BuildId}", "Failed Helix Work Items"],
+            $"[dim]{helixItems.Count} work item(s)[/]",
+            () =>
             {
-                AnsiConsole.MarkupLine($"  [bold red]⚠ DEAD LETTER[/] [bold]{Markup.Escape(wi)}[/]");
-            }
-            else
-            {
-                var stateInfo = state is not null ? $" [{(exitCode == 0 ? "green" : "red")}]{state} (exit {exitCode})[/]" : "";
-                AnsiConsole.MarkupLine($"  [bold]{Markup.Escape(wi)}[/]{stateInfo}");
-            }
+                if (helixItems.Count == 0)
+                {
+                    _ui.RenderPanelLine("[yellow]No Helix work items found for failed tests in this build.[/]");
+                    return;
+                }
 
-            var url = consoleUri ?? HelixClient.GetConsoleUrl(job, wi);
-            AnsiConsole.MarkupLine($"    {BrowserUI.FormatLink(url, "Console Log")}");
-        }
+                foreach (var (job, wi, state, exitCode, consoleUri, isDeadletter) in helixItems)
+                {
+                    var exitInfo = exitCode is not null ? $" exit {exitCode}" : "";
+                    var extra = isDeadletter ? " [red]deadletter[/]" : "";
+                    var color = (exitCode ?? 1) == 0 ? "green" : "red";
+                    _ui.RenderPanelLine($"  [{color}]X[/] {Markup.Escape(wi)}  [dim]{Markup.Escape(job)}[/]{exitInfo}{extra}");
 
-        if (!hasHelix)
+                    var url = consoleUri ?? HelixClient.GetConsoleUrl(job, wi);
+                    _ui.RenderPanelLine($"    {BrowserUI.FormatLink(url, "Console Log")}");
+                }
+            },
+            "[blue]Esc[/] Back");
+        while (true)
         {
-            AnsiConsole.MarkupLine("[yellow]No Helix work items found for failed tests in this build.[/]");
+            var key = Console.ReadKey(true);
+            if (_ui.HandleDetailScroll(key)) continue;
+            if (key.Key == ConsoleKey.Escape) return;
         }
-
-        AnsiConsole.WriteLine();
-        AnsiConsole.MarkupLine("[dim]Press any key to go back...[/]");
-        Console.ReadKey(true);
     }
 
     private void ShowAnalysis(BuildDetailPage page)
@@ -1319,3 +1511,5 @@ public sealed class BuildBrowser
         int? PrNumber, string? FinishTime, string IngestionStatus = "pending",
         int DefinitionId = 0, string? RepositoryName = null);
 }
+
+
