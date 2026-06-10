@@ -500,7 +500,45 @@ public class PanelRenderer
 
             if (selected != prevSelected || scrollOffset != prevScrollOffset)
             {
-                needsFullRedraw = true;
+                if (scrollOffset != prevScrollOffset)
+                {
+                    // Scroll changed — need full redraw
+                    needsFullRedraw = true;
+                }
+                else
+                {
+                    // Only cursor moved within same page — redraw just the two affected lines
+                    // Row calculation: 0-based row index of first list item
+                    var listStartRow = 1 + 1 + (context is not null ? 1 : 0) + 1; // top border + header + context? + mid border
+                    if (renderAboveList is not null)
+                    {
+                        // renderAboveList adds content before the list; we can't easily count lines
+                        // so fall back to full redraw
+                        needsFullRedraw = true;
+                    }
+                    else
+                    {
+                        // SetPosition uses 1-based coordinates (ANSI CUP), so add 1
+                        var prevRow = listStartRow + (prevSelected - scrollOffset) + 1;
+                        var newRow = listStartRow + (selected - scrollOffset) + 1;
+
+                        // Redraw old line (remove cursor)
+                        _console.Cursor.SetPosition(0, prevRow);
+                        RenderPanelLineDirect($"  {items[prevSelected]}");
+
+                        // Redraw new line (add cursor)
+                        _console.Cursor.SetPosition(0, newRow);
+                        RenderPanelLineDirect($"[blue]>[/] {items[selected]}");
+
+                        // Update counter if visible
+                        if (items.Count > visibleCount)
+                        {
+                            var counterRow = listStartRow + visibleCount + 1;
+                            _console.Cursor.SetPosition(0, counterRow);
+                            RenderPanelLineDirect($"[dim]({selected + 1}/{items.Count})[/]");
+                        }
+                    }
+                }
             }
         }
     }
@@ -602,7 +640,8 @@ public class PanelRenderer
 
         _console.MarkupLine($"[{BorderStyle}]{MiddleLeft}{new string(Horizontal, width)}{MiddleRight}[/]");
         RenderPanelLineDirect("[blue]Enter[/] Confirm  [blue]Esc[/] Cancel");
-        _console.MarkupLine($"[{BorderStyle}]{BottomLeft}{new string(Horizontal, width)}{BottomRight}[/]");
+        // Use Markup (no trailing newline) to prevent terminal scroll when frame fills the screen
+        _console.Markup($"[{BorderStyle}]{BottomLeft}{new string(Horizontal, width)}{BottomRight}[/]");
 
         // For text input we need System.Console since IAnsiConsole doesn't support
         // character-by-character echo with backspace. This is the one place we
@@ -675,7 +714,8 @@ public class PanelRenderer
             ? $"  [dim]({scrollOffset + 1}-{Math.Min(scrollOffset + availableHeight, contentLines.Count)}/{contentLines.Count} Up/Dn)[/]"
             : "";
         RenderPanelLineDirect($"{hotkeys}{scrollHint}");
-        _console.MarkupLine($"[{BorderStyle}]{BottomLeft}{new string(Horizontal, width)}{BottomRight}[/]");
+        // Use Markup (no trailing newline) to prevent terminal scroll when frame fills the screen
+        _console.Markup($"[{BorderStyle}]{BottomLeft}{new string(Horizontal, width)}{BottomRight}[/]");
     }
 
     private void RenderMainMenuFrame(List<CommandBarItem> commands, int barIndex)
@@ -690,7 +730,8 @@ public class PanelRenderer
 
         _console.MarkupLine($"[{BorderStyle}]{MiddleLeft}{new string(Horizontal, width)}{MiddleRight}[/]");
         RenderPanelLineDirect(BuildCommandBarMarkup(commands, barIndex, true));
-        _console.MarkupLine($"[{BorderStyle}]{BottomLeft}{new string(Horizontal, width)}{BottomRight}[/]");
+        // Use Markup (no trailing newline) to prevent terminal scroll when frame fills the screen
+        _console.Markup($"[{BorderStyle}]{BottomLeft}{new string(Horizontal, width)}{BottomRight}[/]");
     }
 
     private void RenderListFrame(string[] breadcrumbs, string? context, List<string> items,
@@ -737,7 +778,8 @@ public class PanelRenderer
 
         _console.MarkupLine($"[{BorderStyle}]{MiddleLeft}{new string(Horizontal, width)}{MiddleRight}[/]");
         RenderPanelLineDirect(BuildCommandBarMarkup(commands, barIndex, barFocused));
-        _console.MarkupLine($"[{BorderStyle}]{BottomLeft}{new string(Horizontal, width)}{BottomRight}[/]");
+        // Use Markup (no trailing newline) to prevent terminal scroll when frame fills the screen
+        _console.Markup($"[{BorderStyle}]{BottomLeft}{new string(Horizontal, width)}{BottomRight}[/]");
     }
 
     // ── Direct rendering helpers ────────────────────────────────────

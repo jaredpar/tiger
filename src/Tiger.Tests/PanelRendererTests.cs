@@ -1,4 +1,5 @@
 using Spectre.Console;
+using Spectre.Console.Rendering;
 using Spectre.Console.Testing;
 using Tiger.Commands;
 using Xunit;
@@ -395,5 +396,187 @@ public class PanelRendererTests
         Assert.Contains("job-def456", plain);
         Assert.Contains("exit -1", plain);
         Assert.Contains("deadletter", plain);
+    }
+
+    // ── Cursor Redraw (partial update) ──────────────────────────────
+
+    [Fact]
+    public void SelectInPanel_CursorMove_PreservesSeparator()
+    {
+        // Simulates: list with context, press Down, then Escape
+        // Verifies the partial redraw targets correct rows (not the separator)
+        var console = new TestConsole().Width(80).Height(24);
+        // Push keys: Down to move cursor, then Escape to exit
+        console.Input.PushKey(new ConsoleKeyInfo('\0', ConsoleKey.DownArrow, false, false, false));
+        console.Input.PushKey(new ConsoleKeyInfo('\x1b', ConsoleKey.Escape, false, false, false));
+
+        var renderer = new PanelRenderer(console);
+        var items = new List<string> { "Item A", "Item B", "Item C" };
+        var commands = new List<CommandBarItem> { new("Back", ConsoleKey.Escape, -1) };
+
+        var result = renderer.SelectInPanel(
+            ["Builds"],
+            "[dim]3 items[/]",
+            items,
+            commands);
+
+        Assert.Equal(-1, result); // escaped
+
+        var output = console.Output;
+
+        // Verify the partial redraw wrote "Item B" with ">" prefix (cursor moved to it)
+        var lastItemB = output.LastIndexOf("Item B");
+        Assert.True(lastItemB > 0);
+        // The last "Item B" should have > before it (the cursor indicator)
+        var segmentAroundB = output[(lastItemB - 10)..lastItemB];
+        Assert.Contains(">", segmentAroundB);
+    }
+
+    [Fact]
+    public void SelectInPanel_CursorMove_SetPosition_Uses1BasedRows()
+    {
+        // Verifies that SetPosition is called with 1-based row coordinates.
+        // With context, the layout is:
+        //   Row 1 (1-based): top border
+        //   Row 2: header
+        //   Row 3: context
+        //   Row 4: mid separator
+        //   Row 5: first list item (initially selected)
+        //   Row 6: second list item
+        //   Row 7: third list item
+        //
+        // After pressing Down, partial redraw should call:
+        //   SetPosition(0, 5) to deselect first item
+        //   SetPosition(0, 6) to select second item
+        // NOT row 4 (the separator) or row 3!
+
+        var spy = new SpyConsole(width: 80, height: 24);
+        spy.Inner.Input.PushKey(new ConsoleKeyInfo('\0', ConsoleKey.DownArrow, false, false, false));
+        spy.Inner.Input.PushKey(new ConsoleKeyInfo('\x1b', ConsoleKey.Escape, false, false, false));
+
+        var renderer = new PanelRenderer(spy);
+        var items = new List<string> { "Item A", "Item B", "Item C" };
+        var commands = new List<CommandBarItem> { new("Back", ConsoleKey.Escape, -1) };
+
+        renderer.SelectInPanel(["Builds"], "[dim]3 items[/]", items, commands);
+
+        // Verify SetPosition calls target the correct 1-based rows
+        Assert.True(spy.SetPositionCalls.Count >= 2,
+            $"Expected at least 2 SetPosition calls, got {spy.SetPositionCalls.Count}");
+
+        // First call: deselect first item at row 5 (1-based)
+        var (col1, row1) = spy.SetPositionCalls[0];
+        Assert.Equal(5, row1); // row 5 = first list item (1-based)
+
+        // Second call: select second item at row 6 (1-based)
+        var (col2, row2) = spy.SetPositionCalls[1];
+        Assert.Equal(6, row2); // row 6 = second list item (1-based)
+
+        // Crucially: no SetPosition should target row 4 (the separator)
+        Assert.DoesNotContain(spy.SetPositionCalls, call => call.Line == 4);
+    }
+
+    [Fact]
+    public void SelectInPanel_CursorMove_NoContext_SetPosition_Uses1BasedRows()
+    {
+        // Without context, layout is:
+        //   Row 1: top border
+        //   Row 2: header
+        //   Row 3: mid separator
+        //   Row 4: first list item
+        //   Row 5: second list item
+        //
+        // After Down, SetPosition should target rows 4 and 5.
+
+        var spy = new SpyConsole(width: 80, height: 24);
+        spy.Inner.Input.PushKey(new ConsoleKeyInfo('\0', ConsoleKey.DownArrow, false, false, false));
+        spy.Inner.Input.PushKey(new ConsoleKeyInfo('\x1b', ConsoleKey.Escape, false, false, false));
+
+        var renderer = new PanelRenderer(spy);
+        var items = new List<string> { "Item A", "Item B", "Item C" };
+        var commands = new List<CommandBarItem> { new("Back", ConsoleKey.Escape, -1) };
+
+        renderer.SelectInPanel(["Test"], null, items, commands);
+
+        Assert.True(spy.SetPositionCalls.Count >= 2);
+
+        // First call: deselect first item at row 4 (1-based, no context)
+        Assert.Equal(4, spy.SetPositionCalls[0].Line);
+        // Second call: select second item at row 5
+        Assert.Equal(5, spy.SetPositionCalls[1].Line);
+        // No call should target row 3 (the separator)
+        Assert.DoesNotContain(spy.SetPositionCalls, call => call.Line == 3);
+    }
+
+    [Fact]
+    public void SelectInPanel_BottomBorder_NoTrailingNewline()
+    {
+        // Verifies that the frame doesn't emit a trailing newline after the bottom border.
+        // A trailing newline would cause terminal scroll when the frame fills the screen,
+        // which breaks absolute cursor positioning for partial redraws.
+        var console = new TestConsole().Width(80).Height(24);
+        console.Input.PushKey(new ConsoleKeyInfo('\x1b', ConsoleKey.Escape, false, false, false));
+
+        var renderer = new PanelRenderer(console);
+        var items = new List<string> { "Item A", "Item B" };
+        var commands = new List<CommandBarItem> { new("Back", ConsoleKey.Escape, -1) };
+
+        renderer.SelectInPanel(["Test"], null, items, commands);
+
+        var output = console.Output;
+
+        // The output should NOT end with a newline — the bottom border
+        // is rendered with Markup (not MarkupLine) to prevent scroll
+        Assert.False(output.EndsWith("\n"), "Frame should not end with trailing newline");
+    }
+}
+
+/// <summary>
+/// A wrapper around TestConsole that records Cursor.SetPosition calls
+/// for verifying cursor positioning in tests.
+/// </summary>
+file class SpyConsole : IAnsiConsole
+{
+    public TestConsole Inner { get; }
+    public List<(int Column, int Line)> SetPositionCalls { get; } = new();
+
+    private readonly SpyCursor _cursor;
+
+    public SpyConsole(int width = 80, int height = 24)
+    {
+        Inner = new TestConsole().Width(width).Height(height);
+        _cursor = new SpyCursor(Inner.Cursor, this);
+    }
+
+    public string Output => Inner.Output;
+    public IAnsiConsoleCursor Cursor => _cursor;
+    public IAnsiConsoleInput Input => Inner.Input;
+    public IExclusivityMode ExclusivityMode => Inner.ExclusivityMode;
+    public RenderPipeline Pipeline => Inner.Pipeline;
+    public Profile Profile => Inner.Profile;
+
+    public void Clear(bool home) => Inner.Clear(home);
+    public void Write(IRenderable renderable) => Inner.Write(renderable);
+    public void WriteAnsi(Action<AnsiWriter> action) => Inner.WriteAnsi(action);
+
+    private class SpyCursor : IAnsiConsoleCursor
+    {
+        private readonly IAnsiConsoleCursor _inner;
+        private readonly SpyConsole _spy;
+
+        public SpyCursor(IAnsiConsoleCursor inner, SpyConsole spy)
+        {
+            _inner = inner;
+            _spy = spy;
+        }
+
+        public void SetPosition(int column, int line)
+        {
+            _spy.SetPositionCalls.Add((column, line));
+            _inner.SetPosition(column, line);
+        }
+
+        public void Move(CursorDirection direction, int steps) => _inner.Move(direction, steps);
+        public void Show(bool show) => _inner.Show(show);
     }
 }
