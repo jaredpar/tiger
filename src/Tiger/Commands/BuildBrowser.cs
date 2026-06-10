@@ -774,7 +774,7 @@ public sealed class BuildBrowser
                 if (helixItems.Count > 0)
                 {
                     _ui.RenderEmptyLine();
-                    _ui.RenderSectionTitle($"Helix Work Items ({helixItems.Count})");
+                    _ui.RenderSectionTitle($"Failed Helix Work Items ({helixItems.Count})");
                     foreach (var (job, wi, state, exitCode, isDeadletter) in helixItems)
                     {
                         var exitInfo = exitCode is not null ? $" exit {exitCode}" : "";
@@ -1259,7 +1259,7 @@ public sealed class BuildBrowser
         });
 
         _ui.RenderDetailPanel(
-            ["Builds", $"#{page.BuildId}", "Helix Work Items"],
+            ["Builds", $"#{page.BuildId}", "Failed Helix Work Items"],
             $"[dim]{helixItems.Count} work item(s)[/]",
             () =>
             {
@@ -1271,15 +1271,10 @@ public sealed class BuildBrowser
 
                 foreach (var (job, wi, state, exitCode, consoleUri, isDeadletter) in helixItems)
                 {
-                    if (isDeadletter)
-                    {
-                        _ui.RenderPanelLine($"  [bold red]!! DEAD LETTER[/] [bold]{Markup.Escape(wi)}[/]");
-                    }
-                    else
-                    {
-                        var stateInfo = state is not null ? $" [{(exitCode == 0 ? "green" : "red")}]{state} (exit {exitCode})[/]" : "";
-                        _ui.RenderPanelLine($"  [bold]{Markup.Escape(wi)}[/]{stateInfo}");
-                    }
+                    var exitInfo = exitCode is not null ? $" exit {exitCode}" : "";
+                    var extra = isDeadletter ? " [red]deadletter[/]" : "";
+                    var color = (exitCode ?? 1) == 0 ? "green" : "red";
+                    _ui.RenderPanelLine($"  [{color}]X[/] {Markup.Escape(wi)}  [dim]{Markup.Escape(job)}[/]{exitInfo}{extra}");
 
                     var url = consoleUri ?? HelixClient.GetConsoleUrl(job, wi);
                     _ui.RenderPanelLine($"    {BrowserUI.FormatLink(url, "Console Log")}");

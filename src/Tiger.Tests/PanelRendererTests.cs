@@ -331,4 +331,69 @@ public class PanelRendererTests
                 $"Non-ASCII char U+{(int)text[i]:X4} ('{text[i]}') at position {i} in {context}: \"{text}\"");
         }
     }
+
+    // ── Helix Work Item Display Format ──────────────────────────────
+
+    [Fact]
+    public void HelixWorkItem_SectionTitle_IncludesFailed()
+    {
+        var renderer = CreateRenderer();
+        var lines = renderer.CaptureContent(() =>
+        {
+            // Mirrors BuildBrowser.RenderBuildDetail helix section
+            var count = 2;
+            renderer.RenderSectionTitle($"Failed Helix Work Items ({count})");
+        });
+
+        Assert.Single(lines);
+        Assert.Contains("Failed Helix Work Items", lines[0]);
+    }
+
+    [Fact]
+    public void HelixWorkItem_Format_IncludesExitCode()
+    {
+        var renderer = CreateRenderer();
+        var lines = renderer.CaptureContent(() =>
+        {
+            // Mirrors the per-item rendering in BuildBrowser
+            var wi = "workitem1";
+            var job = "job-abc123";
+            int? exitCode = 1;
+            var isDeadletter = false;
+            var exitInfo = exitCode is not null ? $" exit {exitCode}" : "";
+            var extra = isDeadletter ? " [red]deadletter[/]" : "";
+            var color = (exitCode ?? 1) == 0 ? "green" : "red";
+            renderer.RenderPanelLine($"  [{color}]X[/] {Markup.Escape(wi)}  [dim]{Markup.Escape(job)}[/]{exitInfo}{extra}");
+        });
+
+        Assert.Single(lines);
+        var plain = Markup.Remove(lines[0]);
+        Assert.Contains("workitem1", plain);
+        Assert.Contains("job-abc123", plain);
+        Assert.Contains("exit 1", plain);
+    }
+
+    [Fact]
+    public void HelixWorkItem_Deadletter_Format_IncludesExitCodeAndDeadletter()
+    {
+        var renderer = CreateRenderer();
+        var lines = renderer.CaptureContent(() =>
+        {
+            var wi = "workitem2";
+            var job = "job-def456";
+            int? exitCode = -1;
+            var isDeadletter = true;
+            var exitInfo = exitCode is not null ? $" exit {exitCode}" : "";
+            var extra = isDeadletter ? " [red]deadletter[/]" : "";
+            var color = (exitCode ?? 1) == 0 ? "green" : "red";
+            renderer.RenderPanelLine($"  [{color}]X[/] {Markup.Escape(wi)}  [dim]{Markup.Escape(job)}[/]{exitInfo}{extra}");
+        });
+
+        Assert.Single(lines);
+        var plain = Markup.Remove(lines[0]);
+        Assert.Contains("workitem2", plain);
+        Assert.Contains("job-def456", plain);
+        Assert.Contains("exit -1", plain);
+        Assert.Contains("deadletter", plain);
+    }
 }
