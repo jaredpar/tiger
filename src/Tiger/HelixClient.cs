@@ -3,7 +3,7 @@ using System.Text.Json;
 
 namespace Tiger;
 
-public sealed class HelixClient
+public sealed partial class HelixClient
 {
     private const string BaseUrl = "https://helix.dot.net/";
     private const string ApiVersion = "2019-06-17";
@@ -160,5 +160,56 @@ public sealed class HelixClient
         var json = await response.Content.ReadAsStringAsync();
         return JsonSerializer.Deserialize<T>(json, s_jsonOptions)
             ?? throw new InvalidOperationException($"Failed to deserialize response from {url}");
+    }
+
+    [System.Text.RegularExpressions.GeneratedRegex(@"^Helix work item '([^']+)' in job '([^']+)'", System.Text.RegularExpressions.RegexOptions.IgnoreCase)]
+    private static partial System.Text.RegularExpressions.Regex ExceededPattern();
+
+    /// <summary>
+    /// Attempts to parse helix work item information from a test result's comment and error message.
+    /// Returns (JobName, WorkItemName) if this is a helix work item, null otherwise.
+    /// </summary>
+    public static (string JobName, string WorkItemName)? TryParseHelixWorkItem(string? comment, string? errorMessage)
+    {
+        (string JobName, string WorkItemName)? FromComment()
+        {
+            if (comment is null || !comment.Contains("HelixJobId", StringComparison.OrdinalIgnoreCase))
+            {
+                return null;
+            }
+
+            try
+            {
+                using var doc = JsonDocument.Parse(comment);
+                var root = doc.RootElement;
+                var jobName = root.GetStringProperty("HelixJobId");
+                var workItemName = root.GetStringProperty("HelixWorkItemName");
+                if (jobName is not null && workItemName is not null)
+                {
+                    return (jobName, workItemName);
+                }
+            }
+            catch (JsonException) { }
+
+            return null;
+        }
+
+        (string JobName, string WorkItemName)? FromErrorMessage()
+        {
+            if (errorMessage is null)
+            {
+                return null;
+            }
+
+            var match = ExceededPattern().Match(errorMessage);
+            if (match.Success)
+            {
+                return (match.Groups[2].Value, match.Groups[1].Value);
+            }
+
+            return null;
+        }
+
+        return FromComment() ?? FromErrorMessage();
     }
 }

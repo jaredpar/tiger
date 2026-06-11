@@ -186,38 +186,22 @@ internal sealed class AzdoTestSubResultConverter : JsonConverter<AzdoTestSubResu
         using var doc = JsonDocument.ParseValue(ref reader);
         var root = doc.RootElement;
 
-        var comment = root.TryGetProperty("comment", out var c) ? c.GetString() : null;
+        var comment = root.GetStringProperty("comment");
+        var errorMessage = root.GetStringProperty("errorMessage");
 
-        string? helixJobName = null;
-        string? helixWorkItemName = null;
-        if (comment is not null && comment.Contains("HelixJobId", StringComparison.OrdinalIgnoreCase))
-        {
-            try
-            {
-                using var commentDoc = JsonDocument.Parse(comment);
-                var commentRoot = commentDoc.RootElement;
-                if (commentRoot.TryGetProperty("HelixJobId", out var jobId))
-                    helixJobName = jobId.GetString();
-                if (commentRoot.TryGetProperty("HelixWorkItemName", out var wiName))
-                    helixWorkItemName = wiName.GetString();
-            }
-            catch (JsonException) { }
-        }
-
-        var errorMessage = root.TryGetProperty("errorMessage", out var em) ? em.GetString() : null;
+        var helixInfo = HelixClient.TryParseHelixWorkItem(comment, errorMessage);
 
         return new AzdoTestSubResult
         {
-            Id = root.TryGetProperty("id", out var id) ? id.GetInt32() : 0,
-            DisplayName = root.TryGetProperty("displayName", out var dn) ? dn.GetString() ?? "Unknown" : "Unknown",
-            Outcome = root.TryGetProperty("outcome", out var o) ? o.GetString() ?? "Unknown" : "Unknown",
+            Id = root.GetInt32Property("id"),
+            DisplayName = root.GetStringProperty("displayName") ?? "Unknown",
+            Outcome = root.GetStringProperty("outcome") ?? "Unknown",
             ErrorMessage = errorMessage,
-            StackTrace = root.TryGetProperty("stackTrace", out var st) ? st.GetString() : null,
+            StackTrace = root.GetStringProperty("stackTrace"),
             Comment = comment,
-            HelixJobName = helixJobName,
-            HelixWorkItemName = helixWorkItemName,
-            IsHelixWorkItem = errorMessage is not null &&
-                errorMessage.StartsWith("The Helix Work Item failed.", StringComparison.OrdinalIgnoreCase),
+            HelixJobName = helixInfo?.JobName,
+            HelixWorkItemName = helixInfo?.WorkItemName,
+            IsHelixWorkItem = helixInfo is not null,
         };
     }
 
@@ -247,34 +231,17 @@ internal sealed class AzdoTestResultConverter : JsonConverter<AzdoTestResult>
         {
             testRunId = testRun.TryGetProperty("id", out var runIdEl) && runIdEl.ValueKind == JsonValueKind.String
                 ? int.Parse(runIdEl.GetString()!)
-                : testRun.TryGetProperty("id", out var runIdNum) ? runIdNum.GetInt32() : 0;
-            testRunName = testRun.TryGetProperty("name", out var nameEl) ? nameEl.GetString() ?? "" : "";
+                : testRun.GetInt32Property("id");
+            testRunName = testRun.GetStringProperty("name") ?? "";
         }
 
-        var comment = root.TryGetProperty("comment", out var c) ? c.GetString() : null;
+        var comment = root.GetStringProperty("comment");
+        var errorMessage = root.GetStringProperty("errorMessage");
 
-        string? helixJobName = null;
-        string? helixWorkItemName = null;
-        if (comment is not null && comment.Contains("HelixJobId", StringComparison.OrdinalIgnoreCase))
-        {
-            try
-            {
-                using var commentDoc = JsonDocument.Parse(comment);
-                var commentRoot = commentDoc.RootElement;
-                if (commentRoot.TryGetProperty("HelixJobId", out var jobId))
-                    helixJobName = jobId.GetString();
-                if (commentRoot.TryGetProperty("HelixWorkItemName", out var wiName))
-                    helixWorkItemName = wiName.GetString();
-            }
-            catch (JsonException)
-            {
-                // Comment is not JSON, ignore
-            }
-        }
+        var helixInfo = HelixClient.TryParseHelixWorkItem(comment, errorMessage);
 
-        var errorMessage = root.TryGetProperty("errorMessage", out var em) ? em.GetString() : null;
-        var subResultCount = root.TryGetProperty("subResultCount", out var src) ? src.GetInt32() : 0;
-        var resultGroupType = root.TryGetProperty("resultGroupType", out var rgt) ? rgt.GetString() : null;
+        var subResultCount = root.GetInt32Property("subResultCount");
+        var resultGroupType = root.GetStringProperty("resultGroupType");
 
         var subResults = new List<AzdoTestSubResult>();
         if (root.TryGetProperty("subResults", out var subArray))
@@ -293,13 +260,13 @@ internal sealed class AzdoTestResultConverter : JsonConverter<AzdoTestResult>
             TestCaseTitle = root.GetProperty("testCaseTitle").GetString()!,
             Outcome = root.GetProperty("outcome").GetString()!,
             ErrorMessage = errorMessage,
-            StackTrace = root.TryGetProperty("stackTrace", out var st) ? st.GetString() : null,
+            StackTrace = root.GetStringProperty("stackTrace"),
             Comment = comment,
             TestRunId = testRunId,
             TestRunName = testRunName,
-            HelixJobName = helixJobName,
-            HelixWorkItemName = helixWorkItemName,
-            IsHelixWorkItem = errorMessage is not null && errorMessage.StartsWith("The Helix Work Item failed.", StringComparison.OrdinalIgnoreCase),
+            HelixJobName = helixInfo?.JobName,
+            HelixWorkItemName = helixInfo?.WorkItemName,
+            IsHelixWorkItem = helixInfo is not null,
             SubResultCount = subResultCount,
             ResultGroupType = resultGroupType,
             SubResults = subResults,

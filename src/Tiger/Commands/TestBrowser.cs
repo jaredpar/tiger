@@ -258,6 +258,10 @@ public sealed class TestBrowser
             var tests = new List<TestRow>();
 
             var where = new List<string> { "tr.outcome = 'Failed'" };
+            if (!_filter.ShowHelixWorkItems)
+            {
+                where.Add("tr.is_helix_work_item = 0");
+            }
             if (_filter.TestNamePattern is not null)
             {
                 var (pattern, isExact) = BrowserUI.ToSqlPattern(_filter.TestNamePattern);
@@ -370,6 +374,7 @@ public sealed class TestBrowser
                 new("Definition", ConsoleKey.D, 3),
                 new("Kind", ConsoleKey.K, 4),
                 new("PR number", ConsoleKey.P, 5),
+                new(_filter.ShowHelixWorkItems ? "Helix: hide" : "Helix: show", ConsoleKey.X, 7),
                 new("Clear", ConsoleKey.C, 6),
             };
 
@@ -422,6 +427,10 @@ public sealed class TestBrowser
                     _filter.Clear();
                     SaveFilter();
                     continue;
+                case ConsoleKey.X:
+                    _filter.ShowHelixWorkItems = !_filter.ShowHelixWorkItems;
+                    SaveFilter();
+                    continue;
                 case ConsoleKey.Escape:
                     return;
                 default:
@@ -466,6 +475,7 @@ public sealed class TestBrowser
                 _ui.RenderPanelLine("  [blue]def:[/]   Definition/pipeline name");
                 _ui.RenderPanelLine("  [blue]kind:[/]  Build kind (pr, ci)");
                 _ui.RenderPanelLine("  [blue]pr:[/]    PR number");
+                _ui.RenderPanelLine("  [blue]helix:[/] Show helix work items (on/off, default: off)");
                 _ui.RenderEmptyLine();
                 _ui.RenderPanelLine("[bold]Multiple filters combine with AND.[/]");
             },
@@ -495,9 +505,11 @@ public sealed class TestBrowser
         public string? DefinitionPattern { get; set; }
         public string? KindPattern { get; set; }
         public int? PrNumber { get; set; }
+        public bool ShowHelixWorkItems { get; set; }
 
         public bool IsActive => TestNamePattern is not null || RepoPattern is not null
-            || DefinitionPattern is not null || KindPattern is not null || PrNumber is not null;
+            || DefinitionPattern is not null || KindPattern is not null || PrNumber is not null
+            || ShowHelixWorkItems;
 
         public void Clear()
         {
@@ -506,6 +518,7 @@ public sealed class TestBrowser
             DefinitionPattern = null;
             KindPattern = null;
             PrNumber = null;
+            ShowHelixWorkItems = false;
         }
 
         public void ParseExpression(string expression)
@@ -528,7 +541,12 @@ public sealed class TestBrowser
                     {
                         PrNumber = pr;
                     }
-                }            }
+                }
+                else if (part.Equals("helix:on", StringComparison.OrdinalIgnoreCase))
+                    ShowHelixWorkItems = true;
+                else if (part.Equals("helix:off", StringComparison.OrdinalIgnoreCase))
+                    ShowHelixWorkItems = false;
+            }
         }
 
         public override string ToString()
@@ -539,6 +557,7 @@ public sealed class TestBrowser
             if (DefinitionPattern is not null) parts.Add($"def:{DefinitionPattern}");
             if (KindPattern is not null) parts.Add($"kind:{KindPattern}");
             if (PrNumber is not null) parts.Add($"pr:{PrNumber}");
+            if (ShowHelixWorkItems) parts.Add("helix:on");
             return parts.Count > 0 ? string.Join(" ", parts) : "(none)";
         }
 
