@@ -283,8 +283,23 @@ public sealed class HealthAgentService : IDisposable
             sb.AppendLine("## Failing Tests (CI vs PR breakdown)");
             sb.AppendLine("Tests grouped by failure count in CI builds (refs/heads/*) vs PR builds (refs/pull/*).");
             sb.AppendLine("CI failures are more significant for infra health since they run on merged code.");
+            sb.AppendLine("NOTE: This section excludes synthetic Helix work item failures (reported separately below).");
             sb.AppendLine();
             foreach (var t in data.FailingTests)
+            {
+                sb.AppendLine($"- {t.TestName} — CI: {t.CiFailures}, PR: {t.PrFailures}");
+            }
+            sb.AppendLine();
+        }
+
+        if (data.HelixWorkItemFailures.Count > 0)
+        {
+            sb.AppendLine("## Helix Work Item Failures (infrastructure)");
+            sb.AppendLine("These are synthetic test results representing failed Helix work items — NOT real test failures.");
+            sb.AppendLine("They indicate infrastructure problems (machine issues, timeouts, dead letters) in the Helix test execution environment.");
+            sb.AppendLine("Do NOT mix these with actual test failures in your analysis.");
+            sb.AppendLine();
+            foreach (var t in data.HelixWorkItemFailures)
             {
                 sb.AppendLine($"- {t.TestName} — CI: {t.CiFailures}, PR: {t.PrFailures}");
             }
@@ -347,12 +362,16 @@ public sealed class HealthAgentService : IDisposable
                - New persistent failures (tests that started failing in CI and haven't recovered)
                - Known issue correlations (are known issues actively hitting builds?)
                - Tests failing only in CI (not PR) suggest possible merge-order or timing issues
+               - Helix work item failures (summarize infrastructure problems separately from test failures)
 
             2. **State of the Build** — Update the previous state (or create a new one) with:
                - Overall health: GREEN / YELLOW / RED
                - Active problems and when they started
                - Recently resolved issues
                - Trends (getting better/worse)
+
+            IMPORTANT: Keep Helix work item failures (infrastructure) separate from actual test failures
+            in your analysis. They represent different categories of problems — infrastructure vs code issues.
 
             Format your response as:
             
@@ -618,7 +637,7 @@ public sealed class HealthAgentService : IDisposable
             }
         });
 
-        // Top failing tests (split by CI vs PR)
+        // Top failing tests (split by CI vs PR) — excludes synthetic helix work items
         _db.WithCommand(cmd =>
         {
             cmd.CommandText = """
@@ -632,6 +651,7 @@ public sealed class HealthAgentService : IDisposable
                     AND trn.project = b.project AND trn.build_id = b.build_id
                 WHERE b.repository_name = @repo AND b.definition_name = @def
                   AND b.finish_time >= @since AND tr.outcome = 'Failed'
+                  AND tr.is_helix_work_item = 0
                 GROUP BY tr.test_case_title
                 ORDER BY (ci_failures + pr_failures) DESC LIMIT 30
                 """;
@@ -642,6 +662,37 @@ public sealed class HealthAgentService : IDisposable
             while (reader.Read())
             {
                 data.FailingTests.Add(new FailingTestInfo(
+                    reader.GetString(0),
+                    reader.GetInt32(1),
+                    reader.GetInt32(2)));
+            }
+        });
+
+        // Helix work item failures (synthetic results) — reported separately
+        _db.WithCommand(cmd =>
+        {
+            cmd.CommandText = """
+                SELECT tr.test_case_title,
+                    SUM(CASE WHEN b.source_branch LIKE 'refs/heads/%' THEN 1 ELSE 0 END) as ci_failures,
+                    SUM(CASE WHEN b.source_branch LIKE 'refs/pull/%' THEN 1 ELSE 0 END) as pr_failures
+                FROM test_results tr
+                JOIN test_runs trn ON tr.organization = trn.organization
+                    AND tr.project = trn.project AND tr.run_id = trn.run_id
+                JOIN builds b ON trn.organization = b.organization
+                    AND trn.project = b.project AND trn.build_id = b.build_id
+                WHERE b.repository_name = @repo AND b.definition_name = @def
+                  AND b.finish_time >= @since AND tr.outcome = 'Failed'
+                  AND tr.is_helix_work_item = 1
+                GROUP BY tr.test_case_title
+                ORDER BY (ci_failures + pr_failures) DESC LIMIT 20
+                """;
+            cmd.Parameters.AddWithValue("@repo", repository);
+            cmd.Parameters.AddWithValue("@def", definition);
+            cmd.Parameters.AddWithValue("@since", since);
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+            {
+                data.HelixWorkItemFailures.Add(new FailingTestInfo(
                     reader.GetString(0),
                     reader.GetInt32(1),
                     reader.GetInt32(2)));
@@ -892,6 +943,7 @@ internal sealed class BuildHealthData
     public int PartialBuilds { get; set; }
     public List<BuildFailureInfo> RecentFailures { get; } = [];
     public List<FailingTestInfo> FailingTests { get; } = [];
+    public List<FailingTestInfo> HelixWorkItemFailures { get; } = [];
     public List<TimelineErrorInfo> TimelineErrors { get; } = [];
     public List<KnownIssueInfo> KnownIssues { get; } = [];
 }
