@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using Microsoft.Data.Sqlite;
 
 namespace Tiger;
@@ -27,6 +28,7 @@ public sealed class BuildIngestionService : IDisposable
     private readonly TigerDatabase _db;
     private readonly AzdoClientFactory _clientFactory;
     private readonly ServiceLog? _log;
+    private readonly ConcurrentStack<IngestionTask> _priorityTasks = new();
     private CancellationTokenSource? _cts;
     private Task? _workerTask;
 
@@ -336,6 +338,45 @@ public sealed class BuildIngestionService : IDisposable
     }
 
     /// <summary>
+    /// Pushes all non-complete ingestion tasks for the specified build onto the
+    /// priority stack so they are picked up before the normal DB queue.
+    /// </summary>
+    public void PrioritizeBuild(string organization, int buildId)
+    {
+        var tasks = _db.WithCommand(cmd =>
+        {
+            cmd.CommandText = """
+                SELECT t.organization, b.project, t.build_id, t.task_type, t.status, t.attempts
+                FROM build_ingestion_tasks t
+                JOIN builds b ON t.organization = b.organization AND t.build_id = b.build_id
+                WHERE t.organization = @org AND t.build_id = @buildId
+                  AND t.is_complete = 0
+                """;
+            cmd.Parameters.AddWithValue("@org", organization);
+            cmd.Parameters.AddWithValue("@buildId", buildId);
+
+            var result = new List<IngestionTask>();
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+            {
+                result.Add(new IngestionTask(
+                    reader.GetString(0),
+                    reader.GetString(1),
+                    reader.GetInt32(2),
+                    reader.GetString(3),
+                    reader.GetString(4),
+                    reader.GetInt32(5)));
+            }
+            return result;
+        });
+
+        foreach (var task in tasks)
+        {
+            _priorityTasks.Push(task);
+        }
+    }
+
+    /// <summary>
     /// Maintains up to <see cref="MaxParallelism"/> in-flight tasks at all times,
     /// adapting concurrency based on AzDO rate-limit headers.
     /// When any task completes, its result is handled immediately and a new task
@@ -475,6 +516,24 @@ public sealed class BuildIngestionService : IDisposable
     /// </summary>
     private async Task<IngestionTask?> RunTaskAsync(IngestionTask task, CancellationToken ct)
     {
+        // Tolerate duplicate tasks (e.g. from priority stack) — if already complete, skip
+        var isComplete = _db.WithCommand(cmd =>
+        {
+            cmd.CommandText = """
+                SELECT 1 FROM build_ingestion_tasks
+                WHERE organization = @org AND build_id = @buildId AND task_type = @type
+                  AND is_complete = 1
+                """;
+            cmd.Parameters.AddWithValue("@org", task.Organization);
+            cmd.Parameters.AddWithValue("@buildId", task.BuildId);
+            cmd.Parameters.AddWithValue("@type", task.TaskType);
+            return cmd.ExecuteScalar() is not null;
+        });
+        if (isComplete)
+        {
+            return task;
+        }
+
         try
         {
             MarkRunning();
@@ -905,6 +964,12 @@ public sealed class BuildIngestionService : IDisposable
 
     private IngestionTask? GetNextReadyTask()
     {
+        // Priority tasks take precedence over the normal DB query
+        if (_priorityTasks.TryPop(out var priority))
+        {
+            return priority;
+        }
+
         return _db.WithCommand(cmd =>
         {
             cmd.CommandText = """

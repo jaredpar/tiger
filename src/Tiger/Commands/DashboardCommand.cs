@@ -56,7 +56,7 @@ public sealed class DashboardCommand : AsyncCommand
 
         try
         {
-            await RunMenuLoopAsync(tigerContext, db, clientFactory, backfill, analysisAgent, serviceLog, ct);
+            await RunMenuLoopAsync(tigerContext, db, clientFactory, backfill, analysisAgent, ingestion, serviceLog, ct);
         }
         finally
         {
@@ -75,6 +75,7 @@ public sealed class DashboardCommand : AsyncCommand
         AzdoClientFactory clientFactory,
         BuildBackfillService backfill,
         BuildAnalysisService analysisAgent,
+        BuildIngestionService ingestion,
         ServiceLog serviceLog, CancellationToken ct)
     {
         var commands = new List<CommandBarItem>
@@ -99,7 +100,7 @@ public sealed class DashboardCommand : AsyncCommand
                     await ShowLiveStatusAsync(serviceLog, ct);
                     break;
                 case MenuBuilds:
-                    var browser = new BuildBrowser(db, clientFactory, tigerContext.ConfigDirectory, analysisAgent);
+                    var browser = new BuildBrowser(db, clientFactory, tigerContext.ConfigDirectory, analysisAgent, ingestion);
                     browser.Browse();
                     break;
                 case MenuTests:
