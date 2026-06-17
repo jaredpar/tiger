@@ -370,4 +370,58 @@ public class MarkdownRendererTests
         Assert.Contains(lines, l => l == "[dim]└────────────────────────────────────────[/]");
         Assert.Contains(lines, l => l.Contains("After"));
     }
+
+    [Fact]
+    public void FormatInlineMarkup_PreservesBackslashes()
+    {
+        var input = """C:\h\w\AF600976\w\B51709B0\e\bincore""";
+        var result = MarkdownRenderer.FormatInlineMarkup(input);
+        Assert.Equal("""C:\h\w\AF600976\w\B51709B0\e\bincore""", result);
+    }
+
+    [Fact]
+    public void ToMarkupLines_PreservesBackslashesInCodeBlock()
+    {
+        var md = "```\nC:\\h\\w\\AF600976\\e\\bincore\n```";
+        var lines = MarkdownRenderer.ToMarkupLines(md);
+        var expected = """
+            [dim]┌────────────────────────────────────────[/]
+            [dim]│[/] [grey]C:\h\w\AF600976\e\bincore[/]
+            [dim]└────────────────────────────────────────[/]
+            """;
+        Assert.Equal(expected, string.Join(Environment.NewLine, lines), ignoreLineEndingDifferences: true);
+    }
+
+    [Fact]
+    public void RenderToLines_CodeBlockStateTrackedAcrossLines()
+    {
+        // This tests the fix for the Render code block state tracking bug.
+        // Error messages inside code blocks must be rendered with Markup.Escape
+        // (the [grey] code-block style), not through FormatInlineMarkup.
+        var markdown = "## Error\n\n```\nC:\\h\\w\\AF600976\\e\\bincore\n```";
+        var lines = MarkdownRenderer.RenderToLines(markdown);
+        var expected = """
+            [bold underline]Error[/]
+
+            [dim]┌────────────────────────────────────────[/]
+            [dim]│[/] [grey]C:\h\w\AF600976\e\bincore[/]
+            [dim]└────────────────────────────────────────[/]
+            """;
+        Assert.Equal(expected, string.Join(Environment.NewLine, lines), ignoreLineEndingDifferences: true);
+    }
+
+    [Fact]
+    public void RenderToLines_CodeBlockEndsCorrectly()
+    {
+        var markdown = "before\n```\ncode line\n```\nafter";
+        var lines = MarkdownRenderer.RenderToLines(markdown);
+        var expected = """
+              before
+            [dim]┌────────────────────────────────────────[/]
+            [dim]│[/] [grey]code line[/]
+            [dim]└────────────────────────────────────────[/]
+              after
+            """;
+        Assert.Equal(expected, string.Join(Environment.NewLine, lines), ignoreLineEndingDifferences: true);
+    }
 }

@@ -99,6 +99,7 @@ public sealed partial class AnalysisBrowser
             commands.Add(new("View log", ConsoleKey.V, 3));
             commands.Add(new("Build detail", ConsoleKey.B, 4));
 
+            _ui.TruncationEnabled = false;
             _ui.RenderDetailPanel(
                 ["Analysis", $"{Markup.Escape(analysis.DefinitionName)} #{analysis.BuildId}"],
                 $"{FormatStatus(analysis.Status)}  {Markup.Escape(analysis.Project)}",
@@ -200,6 +201,7 @@ public sealed partial class AnalysisBrowser
 
     private void ShowFullLog(BuildAnalysisInfo analysis)
     {
+        _ui.TruncationEnabled = false;
         _ui.RenderDetailPanel(
             ["Analysis", $"#{analysis.BuildId}", "Log"],
             $"[dim]{Markup.Escape(analysis.DefinitionName)}[/]",
