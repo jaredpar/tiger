@@ -94,7 +94,7 @@ public sealed class BuildIngestionService
     internal void CreateIngestionTasks(SqliteConnection conn, SqliteTransaction tx,
         string organization, AzdoBuild build)
     {
-        var taskTypes = new List<string> { "tests", "timeline", "helix" };
+        var taskTypes = new List<string> { "tests", "timeline" };
 
         // Only create pr_info task if this is a PR build and we don't already have the PR cached
         if (build.PrNumber is not null && build.RepositoryName is not null)
@@ -111,8 +111,7 @@ public sealed class BuildIngestionService
         foreach (var taskType in taskTypes)
         {
             var isSkipped = isCanceled && taskType == "timeline";
-            var isBlocked = taskType == "helix";
-            var status = isSkipped ? "complete" : isBlocked ? "blocked" : "pending";
+            var status = isSkipped ? "complete" : "pending";
             var isComplete = isSkipped ? 1 : 0;
             using var cmd = conn.CreateCommand();
             cmd.Transaction = tx;
@@ -146,52 +145,60 @@ public sealed class BuildIngestionService
         string runName, int total, int passed, int failed, int skipped, double? durationSeconds = null)
     {
         _db.WithCommand(cmd =>
-        {
-            cmd.CommandText = """
-                INSERT OR IGNORE INTO test_runs
-                    (organization, project, build_id, run_id, run_name, total_tests, passed_tests, failed_tests, skipped_tests, duration_seconds)
-                VALUES
-                    (@org, @proj, @buildId, @runId, @runName, @total, @passed, @failed, @skipped, @duration)
-                """;
-            cmd.Parameters.AddWithValue("@org", organization);
-            cmd.Parameters.AddWithValue("@proj", project);
-            cmd.Parameters.AddWithValue("@buildId", buildId);
-            cmd.Parameters.AddWithValue("@runId", runId);
-            cmd.Parameters.AddWithValue("@runName", runName);
-            cmd.Parameters.AddWithValue("@total", total);
-            cmd.Parameters.AddWithValue("@passed", passed);
-            cmd.Parameters.AddWithValue("@failed", failed);
-            cmd.Parameters.AddWithValue("@skipped", skipped);
-            cmd.Parameters.AddWithValue("@duration", durationSeconds.HasValue ? (object)durationSeconds.Value : DBNull.Value);
-            cmd.ExecuteNonQuery();
-        });
+            InsertTestRun(cmd, organization, project, buildId, runId, runName, total, passed, failed, skipped, durationSeconds));
+    }
+
+    internal static void InsertTestRun(SqliteCommand cmd, string organization, string project, int buildId, int runId,
+        string runName, int total, int passed, int failed, int skipped, double? durationSeconds = null)
+    {
+        cmd.CommandText = """
+            INSERT OR IGNORE INTO test_runs
+                (organization, project, build_id, run_id, run_name, total_tests, passed_tests, failed_tests, skipped_tests, duration_seconds)
+            VALUES
+                (@org, @proj, @buildId, @runId, @runName, @total, @passed, @failed, @skipped, @duration)
+            """;
+        cmd.Parameters.Clear();
+        cmd.Parameters.AddWithValue("@org", organization);
+        cmd.Parameters.AddWithValue("@proj", project);
+        cmd.Parameters.AddWithValue("@buildId", buildId);
+        cmd.Parameters.AddWithValue("@runId", runId);
+        cmd.Parameters.AddWithValue("@runName", runName);
+        cmd.Parameters.AddWithValue("@total", total);
+        cmd.Parameters.AddWithValue("@passed", passed);
+        cmd.Parameters.AddWithValue("@failed", failed);
+        cmd.Parameters.AddWithValue("@skipped", skipped);
+        cmd.Parameters.AddWithValue("@duration", durationSeconds.HasValue ? (object)durationSeconds.Value : DBNull.Value);
+        cmd.ExecuteNonQuery();
     }
 
     internal void InsertTestResult(string organization, string project, int runId, AzdoTestResult result)
     {
-        _db.WithCommand(cmd =>
-        {
-            cmd.CommandText = """
-                INSERT OR IGNORE INTO test_results
-                    (organization, project, run_id, result_id, test_case_title, outcome,
-                     error_message, stack_trace, helix_job_name, helix_work_item_name, is_helix_work_item)
-                VALUES
-                    (@org, @proj, @runId, @resultId, @title, @outcome,
-                     @errorMsg, @stack, @helixJob, @helixWi, @isHelixWi)
-                """;
-            cmd.Parameters.AddWithValue("@org", organization);
-            cmd.Parameters.AddWithValue("@proj", project);
-            cmd.Parameters.AddWithValue("@runId", runId);
-            cmd.Parameters.AddWithValue("@resultId", result.Id);
-            cmd.Parameters.AddWithValue("@title", result.TestCaseTitle);
-            cmd.Parameters.AddWithValue("@outcome", result.Outcome);
-            cmd.Parameters.AddWithValue("@errorMsg", (object?)result.ErrorMessage ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("@stack", (object?)result.StackTrace ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("@helixJob", (object?)result.HelixJobName ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("@helixWi", (object?)result.HelixWorkItemName ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("@isHelixWi", result.IsHelixWorkItem ? 1 : 0);
-            cmd.ExecuteNonQuery();
-        });
+        _db.WithCommand(cmd => InsertTestResult(cmd, organization, project, runId, result));
+    }
+
+    internal static void InsertTestResult(SqliteCommand cmd, string organization, string project, int runId, AzdoTestResult result)
+    {
+        cmd.CommandText = """
+            INSERT OR IGNORE INTO test_results
+                (organization, project, run_id, result_id, test_case_title, outcome,
+                 error_message, stack_trace, helix_job_name, helix_work_item_name, is_helix_work_item)
+            VALUES
+                (@org, @proj, @runId, @resultId, @title, @outcome,
+                 @errorMsg, @stack, @helixJob, @helixWi, @isHelixWi)
+            """;
+        cmd.Parameters.Clear();
+        cmd.Parameters.AddWithValue("@org", organization);
+        cmd.Parameters.AddWithValue("@proj", project);
+        cmd.Parameters.AddWithValue("@runId", runId);
+        cmd.Parameters.AddWithValue("@resultId", result.Id);
+        cmd.Parameters.AddWithValue("@title", result.TestCaseTitle);
+        cmd.Parameters.AddWithValue("@outcome", result.Outcome);
+        cmd.Parameters.AddWithValue("@errorMsg", (object?)result.ErrorMessage ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("@stack", (object?)result.StackTrace ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("@helixJob", (object?)result.HelixJobName ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("@helixWi", (object?)result.HelixWorkItemName ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("@isHelixWi", result.IsHelixWorkItem ? 1 : 0);
+        cmd.ExecuteNonQuery();
     }
 
     internal void IngestTimelineIssues(string organization, string project, int buildId, AzdoTimeline timeline)
