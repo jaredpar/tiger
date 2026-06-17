@@ -45,7 +45,7 @@ public sealed class DashboardCommand : AsyncCommand
         analysisAgent.Start();
 
         var poller = new BuildPoller(config, db, clientFactory, serviceLog);
-        poller.OnNewBuilds = ingestion.IngestBuildsAsync;
+        poller.OnNewBuilds = ingestion.InsertBuildsAsync;
         poller.Start();
 
         var healthAgent = new HealthAgentService(config, db, serviceLog);

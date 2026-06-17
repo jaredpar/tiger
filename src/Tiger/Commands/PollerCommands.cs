@@ -25,7 +25,7 @@ public sealed class PollStartCommand : AsyncCommand
         var clientFactory = new AzdoClientFactory(tigerContext.AzureCredential);
         var poller = new BuildPoller(config, db, clientFactory);
 
-        poller.OnNewBuilds = ingestion.IngestBuildsAsync;
+        poller.OnNewBuilds = ingestion.InsertBuildsAsync;
 
         AnsiConsole.MarkupLine("[green]Starting poller...[/]");
         foreach (var source in config.Sources)
