@@ -15,46 +15,10 @@ public static class MarkdownRenderer
     /// </summary>
     public static void Render(string markdown)
     {
-        var lines = markdown.Split('\n');
-        var i = 0;
-        var inCodeBlock = false;
-
-        while (i < lines.Length)
+        var markupLines = ToMarkupLines(markdown);
+        foreach (var ml in markupLines)
         {
-            var trimmed = lines[i].TrimEnd('\r');
-
-            // Code block fences must be tracked across lines
-            if (trimmed.StartsWith("```"))
-            {
-                inCodeBlock = !inCodeBlock;
-                AnsiConsole.MarkupLine(inCodeBlock
-                    ? "[dim]┌────────────────────────────────────────[/]"
-                    : "[dim]└────────────────────────────────────────[/]");
-                i++;
-                continue;
-            }
-
-            if (inCodeBlock)
-            {
-                AnsiConsole.MarkupLine($"[dim]│[/] [grey]{Markup.Escape(trimmed)}[/]");
-                i++;
-                continue;
-            }
-
-            // Detect table: line starts with | and has at least 2 |
-            if (IsTableRow(trimmed) && i + 1 < lines.Length && IsTableSeparator(lines[i + 1].TrimEnd('\r')))
-            {
-                i = RenderTable(lines, i);
-                continue;
-            }
-
-            // Fall through to line-by-line rendering
-            var markupLines = ToMarkupLines(trimmed);
-            foreach (var ml in markupLines)
-            {
-                AnsiConsole.MarkupLine(ml);
-            }
-            i++;
+            AnsiConsole.MarkupLine(ml);
         }
     }
 
@@ -258,17 +222,17 @@ public static class MarkdownRenderer
             // Headers
             if (trimmed.StartsWith("### "))
             {
-                result.Add($"[bold]{Markup.Escape(trimmed[4..])}[/]");
+                result.Add($"[bold]{FormatInlineMarkup(trimmed[4..])}[/]");
                 continue;
             }
             if (trimmed.StartsWith("## "))
             {
-                result.Add($"[bold underline]{Markup.Escape(trimmed[3..])}[/]");
+                result.Add($"[bold underline]{FormatInlineMarkup(trimmed[3..])}[/]");
                 continue;
             }
             if (trimmed.StartsWith("# "))
             {
-                result.Add($"[bold blue underline]{Markup.Escape(trimmed[2..])}[/]");
+                result.Add($"[bold blue underline]{FormatInlineMarkup(trimmed[2..])}[/]");
                 continue;
             }
 

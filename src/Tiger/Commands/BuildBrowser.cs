@@ -1338,14 +1338,8 @@ public sealed class BuildBrowser
 
     // ── Helpers ──────────────────────────────────────────────────────
 
-    private static string SimplifyBranch(string branch)
-    {
-        if (branch.StartsWith("refs/heads/", StringComparison.Ordinal))
-            return branch["refs/heads/".Length..];
-        if (branch.StartsWith("refs/pull/", StringComparison.Ordinal))
-            return branch["refs/pull/".Length..];
-        return branch;
-    }
+    private static string SimplifyBranch(string branch) =>
+        BrowserUI.SimplifyBranch(branch);
 
     private List<(string TaskType, string Status, int Attempts)> GetIngestionTaskStatuses(
         string org, string project, int buildId)

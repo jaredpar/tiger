@@ -82,6 +82,7 @@ Errors and warnings from the AzDO build timeline (jobs and tasks).
 | issue_type | TEXT | "error" or "warning" |
 | issue_message | TEXT | The error/warning message |
 | issue_category | TEXT | Issue category (may be NULL) |
+| log_url | TEXT | AzDO timeline log URL for the record (may be NULL) |
 
 ### build_ingestion_tasks
 Tracks async ingestion of detailed data per build.
