@@ -10,7 +10,7 @@ namespace Tiger;
 /// </summary>
 public sealed class TigerDatabase : IDisposable
 {
-    public const int CurrentSchemaVersion = 11;
+    public const int CurrentSchemaVersion = 12;
 
     public string DatabasePath { get; }
     private string ConnectionString { get; }
