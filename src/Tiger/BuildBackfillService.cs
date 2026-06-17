@@ -200,7 +200,7 @@ public sealed class BuildBackfillService : IDisposable
         foreach (var batch in Batch(newBuilds, 10))
         {
             ct.ThrowIfCancellationRequested();
-            await _ingestion.InsertBuildsAsync(client, source.Organization, source.Project, batch);
+            await _ingestion.InsertBuildsAsync(source.Organization, source.Project, batch);
             ingested += batch.Count;
             _log.Info("Backfill",
                 $"{source.Organization}/{source.Project} — {ingested}/{newBuilds.Count} builds ingested");
