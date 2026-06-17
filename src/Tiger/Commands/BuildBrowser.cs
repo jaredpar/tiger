@@ -628,7 +628,7 @@ public sealed class BuildBrowser
                     _ui.RenderField("Finished", BrowserUI.FormatTime(finishTime));
                 }
                 _ui.RenderField("URL", BrowserUI.FormatLink(url, url));
-                _ui.RenderField("Data", $"Timeline: {TaskIcon("timeline")}  Tests: {TaskIcon("tests")}  Helix: {TaskIcon("helix")}");
+                _ui.RenderField("Data", $"Timeline: {TaskIcon("timeline")}  Tests: {TaskIcon("tests")}");
                 _ui.RenderEmptyLine();
 
                 // Failed jobs section

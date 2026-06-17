@@ -1,3 +1,5 @@
+using Microsoft.Data.Sqlite;
+
 namespace Tiger;
 
 /// <summary>
@@ -15,7 +17,7 @@ public sealed class BuildIngestedEvent
 }
 
 /// <summary>
-/// Background worker that processes build ingestion tasks (tests, timeline, helix).
+/// Background worker that processes build ingestion tasks (tests + helix, timeline, pr_info).
 /// Picks up pending/failed tasks from the DB and processes them independently.
 /// Uses exponential backoff for retries and a circuit breaker to avoid hammering
 /// a broken API.
@@ -353,9 +355,6 @@ public sealed class TaskIngestionService : IDisposable
             case "timeline":
                 await ProcessTimelineAsync(client, task, ct);
                 break;
-            case "helix":
-                await ProcessHelixAsync(task, ct);
-                break;
             case "pr_info":
                 await ProcessPrInfoAsync(task, ct);
                 break;
@@ -369,177 +368,131 @@ public sealed class TaskIngestionService : IDisposable
     {
         _log?.Info("Worker", $"Fetching tests for build #{task.BuildId}...");
 
-        var testSummary = await client.GetTestSummaryByJobAsync(task.BuildId);
-        var failures = await client.GetTestFailuresAsync(task.BuildId, subResultCount: 50);
+        var (testSummary, failures) = await FetchTestResults();
+        var helixWorkItems = await FetchHelixWorkItems();
 
-        // Insert test runs for ALL runs from the summary, not just those with failures
-        foreach (var summary in testSummary)
+        // Both fetches succeeded — persist everything in one transaction
+        _db.WithTransaction((conn, tx) =>
         {
-            _ingestion.InsertTestRun(task.Organization, task.Project, task.BuildId, summary.RunId, summary.JobName,
-                summary.TotalCount, summary.PassedCount, summary.FailedCount, summary.SkippedCount,
-                summary.Duration?.TotalSeconds);
-        }
-
-        // Insert individual failure results
-        var runGroups = failures.GroupBy(f => f.TestRunId);
-        foreach (var group in runGroups)
-        {
-            var first = group.First();
-
-            // If this run wasn't in the summary (unlikely but defensive), insert it now
-            if (!testSummary.Any(s => s.RunId == group.Key))
-            {
-                _ingestion.InsertTestRun(task.Organization, task.Project, task.BuildId, group.Key, first.TestRunName,
-                    group.Count(), 0, group.Count(), 0);
-            }
-
-            foreach (var r in group)
-            {
-                _ingestion.InsertTestResult(task.Organization, task.Project, group.Key, r);
-            }
-        }
+            InsertTestData(conn, tx);
+            InsertHelixData(conn, tx);
+        });
 
         if (failures.Count > 0)
         {
             _log?.Info("Worker",
-                $"  Build #{task.BuildId} — {failures.Count} test failure(s) across {runGroups.Count()} run(s)");
+                $"  Build #{task.BuildId} — {failures.Count} test failure(s) across {failures.GroupBy(f => f.TestRunId).Count()} run(s)");
         }
         else
         {
             _log?.Info("Worker", $"  Build #{task.BuildId} — tests complete (no failures)");
         }
 
-        // Unblock the helix task now that test data is available.
-        // If there are helix work items to fetch, move it to 'pending'.
-        // Otherwise mark it complete immediately.
-        UnblockHelixTask(task.Organization, task.BuildId);
-    }
-
-    /// <summary>
-    /// Transitions the helix ingestion task from 'blocked' to either 'pending'
-    /// (if there are helix work items to fetch) or 'complete' (if there are none).
-    /// Called after test ingestion finishes so the helix task can see test_results.
-    /// </summary>
-    private void UnblockHelixTask(string organization, int buildId)
-    {
-        var hasHelixWorkItems = _db.WithCommand(cmd =>
+        if (helixWorkItems.Count > 0)
         {
-            cmd.CommandText = """
-                SELECT 1
-                FROM test_results tr
-                JOIN test_runs trn ON tr.organization = trn.organization AND tr.run_id = trn.run_id
-                WHERE trn.organization = @org AND trn.build_id = @buildId
-                  AND tr.helix_job_name IS NOT NULL AND tr.helix_work_item_name IS NOT NULL
-                LIMIT 1
-                """;
-            cmd.Parameters.AddWithValue("@org", organization);
-            cmd.Parameters.AddWithValue("@buildId", buildId);
-            return cmd.ExecuteScalar() is not null;
-        });
-
-        if (hasHelixWorkItems)
-        {
-            _db.WithCommand(cmd =>
-            {
-                cmd.CommandText = """
-                    UPDATE build_ingestion_tasks
-                    SET status = 'pending'
-                    WHERE organization = @org AND build_id = @buildId
-                      AND task_type = 'helix' AND status = 'blocked'
-                    """;
-                cmd.Parameters.AddWithValue("@org", organization);
-                cmd.Parameters.AddWithValue("@buildId", buildId);
-                cmd.ExecuteNonQuery();
-            });
-        }
-        else
-        {
-            _db.WithCommand(cmd =>
-            {
-                cmd.CommandText = """
-                    UPDATE build_ingestion_tasks
-                    SET status = 'complete', is_complete = 1, completed_time = datetime('now')
-                    WHERE organization = @org AND build_id = @buildId
-                      AND task_type = 'helix' AND status = 'blocked'
-                    """;
-                cmd.Parameters.AddWithValue("@org", organization);
-                cmd.Parameters.AddWithValue("@buildId", buildId);
-                cmd.ExecuteNonQuery();
-            });
-        }
-    }
-
-    private async Task ProcessTimelineAsync(AzdoClient client, IngestionTask task, CancellationToken ct)
-    {
-        _log?.Info("Worker", $"Fetching timeline for build #{task.BuildId}...");
-        var timeline = await client.GetTimelineAsync(task.BuildId);
-        _ingestion.IngestTimelineIssues(task.Organization, task.Project, task.BuildId, timeline);
-
-        var issueCount = timeline.Records.Sum(r => r.Issues.Count(i => i.Type is "error" or "warning"));
-        _log?.Info("Worker", $"  Build #{task.BuildId} — timeline complete ({issueCount} issues)");
-    }
-
-    private async Task ProcessHelixAsync(IngestionTask task, CancellationToken ct)
-    {
-        _log?.Info("Worker", $"Fetching helix work items for build #{task.BuildId}...");
-
-        // Get distinct helix job/work-item pairs from failed test results for this build
-        var workItemKeys = _db.WithCommand(cmd =>
-        {
-            cmd.CommandText = """
-                SELECT DISTINCT tr.helix_job_name, tr.helix_work_item_name
-                FROM test_results tr
-                JOIN test_runs trn ON tr.organization = trn.organization AND tr.run_id = trn.run_id
-                WHERE trn.organization = @org AND trn.build_id = @buildId
-                  AND tr.helix_job_name IS NOT NULL AND tr.helix_work_item_name IS NOT NULL
-                """;
-            cmd.Parameters.AddWithValue("@org", task.Organization);
-            cmd.Parameters.AddWithValue("@buildId", task.BuildId);
-
-            var workItemKeys = new List<(string JobName, string WorkItemName)>();
-            using var reader = cmd.ExecuteReader();
-            while (reader.Read())
-            {
-                workItemKeys.Add((reader.GetString(0), reader.GetString(1)));
-            }
-
-            return workItemKeys;
-        });
-
-        if (workItemKeys.Count == 0)
-        {
-            _log?.Info("Worker", $"  Build #{task.BuildId} — no helix work items to fetch");
-            return;
+            _log?.Info("Worker", $"  Build #{task.BuildId} — helix complete ({helixWorkItems.Count} work item(s) fetched)");
         }
 
-        var helixClient = HelixClient.Create();
-        var insertedCount = 0;
+        return;
 
-        foreach (var (jobName, workItemName) in workItemKeys)
+        async Task<(List<AzdoJobTestSummary> Summary, List<AzdoTestResult> Failures)> FetchTestResults()
         {
-            if (ct.IsCancellationRequested)
+            var summary = await client.GetTestSummaryByJobAsync(task.BuildId);
+            var results = await client.GetTestFailuresAsync(task.BuildId, subResultCount: 50);
+            return (summary, results);
+        }
+
+        async Task<List<HelixWorkItem>> FetchHelixWorkItems()
+        {
+            // Extract helix job/work-item pairs directly from the fetched test results
+            var workItemKeys = failures
+                .Where(f => f.HelixJobName is not null && f.HelixWorkItemName is not null)
+                .Select(f => (f.HelixJobName!, f.HelixWorkItemName!))
+                .Distinct()
+                .ToList();
+
+            if (workItemKeys.Count == 0)
             {
-                break;
+                return [];
             }
 
-            // Skip if already fetched
-            var exists = _db.WithCommand(cmd =>
-            {
-                cmd.CommandText = "SELECT 1 FROM helix_work_items WHERE job_name = @job AND work_item_name = @wi";
-                cmd.Parameters.AddWithValue("@job", jobName);
-                cmd.Parameters.AddWithValue("@wi", workItemName);
-                return cmd.ExecuteScalar() is not null;
-            });
+            _log?.Info("Worker", $"Fetching helix work items for build #{task.BuildId}...");
 
-            if (exists)
+            var helixClient = HelixClient.Create();
+            var items = new List<HelixWorkItem>();
+
+            foreach (var (jobName, workItemName) in workItemKeys)
             {
-                continue;
+                if (ct.IsCancellationRequested)
+                {
+                    break;
+                }
+
+                // Skip if already fetched in a previous ingestion
+                var exists = _db.WithCommand(cmd =>
+                {
+                    cmd.CommandText = "SELECT 1 FROM helix_work_items WHERE job_name = @job AND work_item_name = @wi";
+                    cmd.Parameters.AddWithValue("@job", jobName);
+                    cmd.Parameters.AddWithValue("@wi", workItemName);
+                    return cmd.ExecuteScalar() is not null;
+                });
+
+                if (exists)
+                {
+                    continue;
+                }
+
+                try
+                {
+                    var workItem = await helixClient.GetWorkItemAsync(jobName, workItemName);
+                    items.Add(workItem);
+                }
+                catch (HttpRequestException ex)
+                {
+                    _log?.Warning("Worker", $"  Failed to fetch helix work item {jobName}/{workItemName}: {ex.Message}");
+                }
             }
 
-            try
-            {
-                var workItem = await helixClient.GetWorkItemAsync(jobName, workItemName);
+            return items;
+        }
 
+        void InsertTestData(SqliteConnection conn, SqliteTransaction tx)
+        {
+            using var cmd = conn.CreateCommand();
+            cmd.Transaction = tx;
+
+            // Insert test runs for ALL runs from the summary
+            foreach (var summary in testSummary)
+            {
+                BuildIngestionService.InsertTestRun(cmd, task.Organization, task.Project, task.BuildId,
+                    summary.RunId, summary.JobName, summary.TotalCount, summary.PassedCount,
+                    summary.FailedCount, summary.SkippedCount, summary.Duration?.TotalSeconds);
+            }
+
+            // Insert individual failure results
+            var runGroups = failures.GroupBy(f => f.TestRunId);
+            foreach (var group in runGroups)
+            {
+                var first = group.First();
+
+                // If this run wasn't in the summary (unlikely but defensive), insert it now
+                if (!testSummary.Any(s => s.RunId == group.Key))
+                {
+                    BuildIngestionService.InsertTestRun(cmd, task.Organization, task.Project, task.BuildId,
+                        group.Key, first.TestRunName, group.Count(), 0, group.Count(), 0);
+                }
+
+                foreach (var r in group)
+                {
+                    BuildIngestionService.InsertTestResult(cmd, task.Organization, task.Project, group.Key, r);
+                }
+            }
+        }
+
+        void InsertHelixData(SqliteConnection conn, SqliteTransaction tx)
+        {
+            foreach (var workItem in helixWorkItems)
+            {
                 // Collect non-console-log files as JSON
                 string? filesJson = null;
                 if (workItem.Files is { Count: > 0 })
@@ -554,8 +507,9 @@ public sealed class TaskIngestionService : IDisposable
                     }
                 }
 
-                _db.WithCommand(cmd =>
+                using (var cmd = conn.CreateCommand())
                 {
+                    cmd.Transaction = tx;
                     cmd.CommandText = """
                         INSERT OR IGNORE INTO helix_work_items
                             (job_name, work_item_name, state, exit_code, console_output_uri, files, is_deadletter)
@@ -570,42 +524,44 @@ public sealed class TaskIngestionService : IDisposable
                     cmd.Parameters.AddWithValue("@files", (object?)filesJson ?? DBNull.Value);
                     cmd.Parameters.AddWithValue("@isDeadletter", workItem.IsDeadLetter ? 1 : 0);
                     cmd.ExecuteNonQuery();
-                });
+                }
 
                 if (workItem.IsDeadLetter)
                 {
-                    _db.WithCommand(cmd =>
-                    {
-                        cmd.CommandText = """
-                            UPDATE test_results
-                            SET error_message = 'Helix Work Item Dead Lettered. ' || COALESCE(error_message, '')
-                            WHERE is_helix_work_item = 1
-                              AND helix_job_name = @job
-                              AND helix_work_item_name = @wi
-                              AND organization = @org
-                              AND run_id IN (
-                                  SELECT run_id FROM test_runs
-                                  WHERE organization = @org AND build_id = @buildId
-                              )
-                              AND error_message NOT LIKE 'Helix Work Item Dead Lettered.%'
-                            """;
-                        cmd.Parameters.AddWithValue("@job", workItem.Job);
-                        cmd.Parameters.AddWithValue("@wi", workItem.Name);
-                        cmd.Parameters.AddWithValue("@org", task.Organization);
-                        cmd.Parameters.AddWithValue("@buildId", task.BuildId);
-                        cmd.ExecuteNonQuery();
-                    });
-                    _log?.Warning("Worker", $"  Helix work item {workItemName} is dead-lettered");
+                    using var cmd = conn.CreateCommand();
+                    cmd.Transaction = tx;
+                    cmd.CommandText = """
+                        UPDATE test_results
+                        SET error_message = 'Helix Work Item Dead Lettered. ' || COALESCE(error_message, '')
+                        WHERE is_helix_work_item = 1
+                          AND helix_job_name = @job
+                          AND helix_work_item_name = @wi
+                          AND organization = @org
+                          AND run_id IN (
+                              SELECT run_id FROM test_runs
+                              WHERE organization = @org AND build_id = @buildId
+                          )
+                          AND error_message NOT LIKE 'Helix Work Item Dead Lettered.%'
+                        """;
+                    cmd.Parameters.AddWithValue("@job", workItem.Job);
+                    cmd.Parameters.AddWithValue("@wi", workItem.Name);
+                    cmd.Parameters.AddWithValue("@org", task.Organization);
+                    cmd.Parameters.AddWithValue("@buildId", task.BuildId);
+                    cmd.ExecuteNonQuery();
+                    _log?.Warning("Worker", $"  Helix work item {workItem.Name} is dead-lettered");
                 }
-                insertedCount++;
-            }
-            catch (HttpRequestException ex)
-            {
-                _log?.Warning("Worker", $"  Failed to fetch helix work item {jobName}/{workItemName}: {ex.Message}");
             }
         }
+    }
 
-        _log?.Info("Worker", $"  Build #{task.BuildId} — helix complete ({insertedCount} work item(s) fetched)");
+    private async Task ProcessTimelineAsync(AzdoClient client, IngestionTask task, CancellationToken ct)
+    {
+        _log?.Info("Worker", $"Fetching timeline for build #{task.BuildId}...");
+        var timeline = await client.GetTimelineAsync(task.BuildId);
+        _ingestion.IngestTimelineIssues(task.Organization, task.Project, task.BuildId, timeline);
+
+        var issueCount = timeline.Records.Sum(r => r.Issues.Count(i => i.Type is "error" or "warning"));
+        _log?.Info("Worker", $"  Build #{task.BuildId} — timeline complete ({issueCount} issues)");
     }
 
     private async Task ProcessPrInfoAsync(IngestionTask task, CancellationToken ct)
