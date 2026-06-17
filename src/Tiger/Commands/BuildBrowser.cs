@@ -1128,66 +1128,76 @@ public sealed class BuildBrowser
 
         var truncate = true;
         var errorsOnly = false;
+        var needsRender = true;
 
         while (true)
         {
-            var commands = new List<CommandBarItem>
+            if (needsRender)
             {
-                new(errorsOnly ? "Errors: showing" : "Errors only", ConsoleKey.E, -2),
-                new(truncate ? "Truncate: off" : "Truncate: on", ConsoleKey.T, -3),
-            };
-
-            _ui.RenderDetailPanel(
-                ["Builds", $"#{page.BuildId}", "Jobs"],
-                errorsOnly ? "[dim]Showing errors only[/]" : null,
-                () =>
+                var commands = new List<CommandBarItem>
                 {
-                    foreach (var (jobName, issues) in jobIssues)
+                    new(errorsOnly ? "Errors: showing" : "Errors only", ConsoleKey.E, -2),
+                    new(truncate ? "Truncate: off" : "Truncate: on", ConsoleKey.T, -3),
+                };
+
+                _ui.RenderDetailPanel(
+                    ["Builds", $"#{page.BuildId}", "Jobs"],
+                    errorsOnly ? "[dim]Showing errors only[/]" : null,
+                    () =>
                     {
-                        var filtered = errorsOnly
-                            ? issues.Where(i => i.Type == "error").ToList()
-                            : issues;
+                        foreach (var (jobName, issues) in jobIssues)
+                        {
+                            var filtered = errorsOnly
+                                ? issues.Where(i => i.Type == "error").ToList()
+                                : issues;
 
-                        if (filtered.Count == 0)
-                        {
-                            continue;
-                        }
-
-                        var errorCount = issues.Count(i => i.Type == "error");
-                        var warnCount = issues.Count(i => i.Type == "warning");
-                        var summary = new List<string>();
-                        if (errorCount > 0)
-                        {
-                            summary.Add($"[red]{errorCount} error(s)[/]");
-                        }
-                        if (warnCount > 0)
-                        {
-                            summary.Add($"[yellow]{warnCount} warning(s)[/]");
-                        }
-                        _ui.RenderPanelLine($"[bold]{Markup.Escape(jobName)}[/]  {string.Join(" ", summary)}");
-
-                        foreach (var (type, message) in filtered.Take(10))
-                        {
-                            var icon = type == "error" ? "[red]error[/]" : "[yellow]warn[/]";
-                            var msg = message.ReplaceLineEndings(" ");
-                            if (truncate && msg.Length > 120)
+                            if (filtered.Count == 0)
                             {
-                                msg = msg[..117] + "...";
+                                continue;
                             }
-                            _ui.RenderPanelLine($"  {icon}: {Markup.Escape(msg)}");
-                        }
 
-                        if (filtered.Count > 10)
-                        {
-                            _ui.RenderPanelLine($"  [dim]... and {filtered.Count - 10} more[/]");
-                        }
+                            var errorCount = issues.Count(i => i.Type == "error");
+                            var warnCount = issues.Count(i => i.Type == "warning");
+                            var summary = new List<string>();
+                            if (errorCount > 0)
+                            {
+                                summary.Add($"[red]{errorCount} error(s)[/]");
+                            }
+                            if (warnCount > 0)
+                            {
+                                summary.Add($"[yellow]{warnCount} warning(s)[/]");
+                            }
+                            _ui.RenderPanelLine($"[bold]{Markup.Escape(jobName)}[/]  {string.Join(" ", summary)}");
 
-                        _ui.RenderEmptyLine();
-                    }
-                },
-                PanelRenderer.BuildCommandBarString(commands));
+                            foreach (var (type, message) in filtered.Take(10))
+                            {
+                                var icon = type == "error" ? "[red]error[/]" : "[yellow]warn[/]";
+                                var msg = message.ReplaceLineEndings(" ");
+                                if (truncate && msg.Length > 120)
+                                {
+                                    msg = msg[..117] + "...";
+                                }
+                                _ui.RenderPanelLine($"  {icon}: {Markup.Escape(msg)}");
+                            }
+
+                            if (filtered.Count > 10)
+                            {
+                                _ui.RenderPanelLine($"  [dim]... and {filtered.Count - 10} more[/]");
+                            }
+
+                            _ui.RenderEmptyLine();
+                        }
+                    },
+                    PanelRenderer.BuildCommandBarString(commands));
+
+                needsRender = false;
+            }
 
             var key = Console.ReadKey(true);
+            if (_ui.HandleDetailScroll(key))
+            {
+                continue;
+            }
             if (key.Key is ConsoleKey.Escape or ConsoleKey.B)
             {
                 return NavAction.Back.Instance;
@@ -1195,10 +1205,12 @@ public sealed class BuildBrowser
             if (key.Key == ConsoleKey.T)
             {
                 truncate = !truncate;
+                needsRender = true;
             }
             if (key.Key == ConsoleKey.E)
             {
                 errorsOnly = !errorsOnly;
+                needsRender = true;
             }
         }
     }

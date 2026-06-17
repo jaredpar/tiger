@@ -290,6 +290,156 @@ public class PanelRendererTests
         Assert.Contains("6-11/20", output);
     }
 
+    // ── HandleDetailScroll ─────────────────────────────────────────
+
+    private static ConsoleKeyInfo MakeKey(ConsoleKey key) =>
+        new('\0', key, false, false, false);
+
+    [Fact]
+    public void HandleDetailScroll_DownArrow_ScrollsContent()
+    {
+        var console = new TestConsole().Width(80).Height(12);
+        // Height 12: available = 12 - 3 header - 3 footer = 6 lines
+        var renderer = new PanelRenderer(console);
+
+        renderer.RenderDetailPanel(
+            ["Test"],
+            null,
+            () =>
+            {
+                for (var i = 0; i < 20; i++)
+                {
+                    renderer.RenderPanelLine($"Line {i}");
+                }
+            },
+            "[blue]Esc[/] Back");
+
+        // Initial render should show lines 1-6
+        Assert.Contains("1-6/20", console.Output);
+
+        // Scroll down one line
+        var handled = renderer.HandleDetailScroll(MakeKey(ConsoleKey.DownArrow));
+        Assert.True(handled);
+
+        // After scrolling, indicator should show 2-7
+        Assert.Contains("2-7/20", console.Output);
+    }
+
+    [Fact]
+    public void HandleDetailScroll_ReturnsFalse_ForNonScrollKey()
+    {
+        var console = new TestConsole().Width(80).Height(12);
+        var renderer = new PanelRenderer(console);
+
+        renderer.RenderDetailPanel(
+            ["Test"],
+            null,
+            () =>
+            {
+                for (var i = 0; i < 20; i++)
+                {
+                    renderer.RenderPanelLine($"Line {i}");
+                }
+            },
+            "[blue]Esc[/] Back");
+
+        var handled = renderer.HandleDetailScroll(MakeKey(ConsoleKey.T));
+        Assert.False(handled);
+    }
+
+    [Fact]
+    public void HandleDetailScroll_ReturnsFalse_WhenContentFitsScreen()
+    {
+        var console = new TestConsole().Width(80).Height(24);
+        var renderer = new PanelRenderer(console);
+
+        renderer.RenderDetailPanel(
+            ["Test"],
+            null,
+            () =>
+            {
+                renderer.RenderPanelLine("Short content");
+            },
+            "[blue]Esc[/] Back");
+
+        var handled = renderer.HandleDetailScroll(MakeKey(ConsoleKey.DownArrow));
+        Assert.False(handled);
+    }
+
+    [Fact]
+    public void HandleDetailScroll_PreservesOffset_AcrossMultipleScrolls()
+    {
+        var console = new TestConsole().Width(80).Height(12);
+        var renderer = new PanelRenderer(console);
+
+        renderer.RenderDetailPanel(
+            ["Test"],
+            null,
+            () =>
+            {
+                for (var i = 0; i < 20; i++)
+                {
+                    renderer.RenderPanelLine($"Line {i}");
+                }
+            },
+            "[blue]Esc[/] Back");
+
+        // Scroll down 3 times
+        renderer.HandleDetailScroll(MakeKey(ConsoleKey.DownArrow));
+        renderer.HandleDetailScroll(MakeKey(ConsoleKey.DownArrow));
+        renderer.HandleDetailScroll(MakeKey(ConsoleKey.DownArrow));
+
+        // Scroll indicator should show offset 3: lines 4-9/20
+        Assert.Contains("4-9/20", console.Output);
+    }
+
+    [Fact]
+    public void HandleDetailScroll_ReRendering_ResetsOffset()
+    {
+        // Verifies that calling RenderDetailPanel again resets scroll to 0.
+        // This is why callers must guard re-renders behind a needsRender flag.
+        var console = new TestConsole().Width(80).Height(12);
+        var renderer = new PanelRenderer(console);
+
+        renderer.RenderDetailPanel(
+            ["Test"],
+            null,
+            () =>
+            {
+                for (var i = 0; i < 20; i++)
+                {
+                    renderer.RenderPanelLine($"Line {i}");
+                }
+            },
+            "[blue]Esc[/] Back");
+
+        // Scroll down
+        renderer.HandleDetailScroll(MakeKey(ConsoleKey.DownArrow));
+        renderer.HandleDetailScroll(MakeKey(ConsoleKey.DownArrow));
+        Assert.Contains("3-8/20", console.Output);
+
+        // Re-render (simulates a toggle change)
+        renderer.RenderDetailPanel(
+            ["Test"],
+            null,
+            () =>
+            {
+                for (var i = 0; i < 20; i++)
+                {
+                    renderer.RenderPanelLine($"Line {i}");
+                }
+            },
+            "[blue]Esc[/] Back");
+
+        // Scrolling down once from reset should give 2-7, not 4-9
+        renderer.HandleDetailScroll(MakeKey(ConsoleKey.DownArrow));
+        // Find the LAST occurrence of the scroll indicator pattern
+        var output = console.Output;
+        var lastIndicator = output.LastIndexOf("/20");
+        var snippet = output.Substring(lastIndicator - 5, 8);
+        Assert.Contains("2-7", snippet);
+    }
+
     // ── No Unicode in rendered output ───────────────────────────────
 
     [Fact]
