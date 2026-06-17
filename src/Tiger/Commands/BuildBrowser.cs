@@ -163,19 +163,9 @@ public sealed class BuildBrowser
 
             var choices = builds.Select(b =>
             {
-                var resultIcon = b.Result switch
-                {
-                    "succeeded" => "[green]+[/]",
-                    "failed" => "[red]X[/]",
-                    "partiallySucceeded" => "[yellow]![/]",
-                    "canceled" => "[dim]-[/]",
-                    _ => "[dim]-[/]",
-                };
-                var pr = b.PrNumber is not null ? $" PR#{b.PrNumber}" : "";
-                var pending = b.IngestionStatus != "complete" ? " ..." : "";
-                var time = BrowserUI.FormatTime(b.FinishTime);
-                var branch = $"[dim]{Markup.Escape(SimplifyBranch(b.Branch))}[/]";
-                return $"{resultIcon} {b.BuildId} {Markup.Escape(b.DefinitionName)} {branch} {time}{pr}{pending}";
+                return FormatBuildListItem(
+                    b.BuildId, b.DefinitionName, b.Result, b.Branch,
+                    b.PrNumber, b.FinishTime, b.IngestionStatus);
             }).ToList();
 
             _lastBuilds = builds;
@@ -594,12 +584,11 @@ public sealed class BuildBrowser
             $"{BrowserUI.FormatResult(result)}  {BrowserUI.FormatTime(finishTime)}",
             () =>
             {
-                // Build info fields
-                _ui.RenderField("Build", $"#{page.BuildId} — {defName} {buildNumber}");
-                _ui.RenderField("Result", BrowserUI.FormatResult(result));
+                // Resolve PR info if applicable
+                string? prAuthor = null;
+                string? prTitle = null;
                 if (prNumber is not null && repoName is not null)
                 {
-                    var prUrl = $"https://github.com/{repoName}/pull/{prNumber}";
                     var prInfo = _db.WithCommand(cmd =>
                     {
                         cmd.CommandText = "SELECT title, author FROM pull_requests WHERE repository = @repo AND pr_number = @pr";
@@ -615,31 +604,21 @@ public sealed class BuildBrowser
 
                     if (prInfo.Found)
                     {
+                        prAuthor = prInfo.Author;
                         var prefix = $"#{prNumber} {prInfo.Author} ";
                         var maxTitleLen = Math.Max(10, _ui.ContentWidth - prefix.Length - 20);
-                        var truncatedTitle = prInfo.Title.Length > maxTitleLen ? prInfo.Title[..maxTitleLen] + "..." : prInfo.Title;
-                        _ui.RenderField("PR", $"#{prNumber} [blue]{Markup.Escape(prInfo.Author)}[/] {Markup.Escape(truncatedTitle)}");
+                        prTitle = prInfo.Title.Length > maxTitleLen ? prInfo.Title[..maxTitleLen] + "..." : prInfo.Title;
                     }
-                    else
-                    {
-                        _ui.RenderField("PR", $"#{prNumber}");
-                    }
-                    _ui.RenderField("PR URL", BrowserUI.FormatLink(prUrl, $"PR #{prNumber}"));
                 }
-                else if (prNumber is not null)
-                {
-                    _ui.RenderField("PR", $"#{prNumber}");
-                }
-                else
-                {
-                    _ui.RenderField("Branch", branch);
-                }
-                if (finishTime is not null)
-                {
-                    _ui.RenderField("Finished", BrowserUI.FormatTime(finishTime));
-                }
-                _ui.RenderField("URL", BrowserUI.FormatLink(url, url));
-                _ui.RenderField("Data", $"Timeline: {TaskIcon("timeline")}  Tests: {TaskIcon("tests")}");
+
+                // Build info fields
+                RenderBuildDetailHeader(
+                    _ui,
+                    page.BuildId, defName, buildNumber, result,
+                    branch, prNumber, repoName,
+                    prAuthor, prTitle,
+                    finishTime, url,
+                    TaskIcon("timeline"), TaskIcon("tests"));
                 _ui.RenderEmptyLine();
 
                 // Failed jobs section
@@ -1351,6 +1330,78 @@ public sealed class BuildBrowser
 
     private static string SimplifyBranch(string branch) =>
         BrowserUI.SimplifyBranch(branch);
+
+    /// <summary>
+    /// Formats the branch field value for the build detail view.
+    /// Returns the simplified, markup-escaped branch name.
+    /// </summary>
+    internal static string FormatBranchField(string branch) =>
+        Markup.Escape(BrowserUI.SimplifyBranch(branch));
+
+    /// <summary>
+    /// Renders the build detail header fields (Build through Data) onto a <see cref="PanelRenderer"/>.
+    /// Extracted for testability.
+    /// </summary>
+    internal static void RenderBuildDetailHeader(
+        PanelRenderer ui,
+        int buildId, string defName, string buildNumber, string? result,
+        string? branch, int? prNumber, string? repoName,
+        string? prAuthor, string? prTitle,
+        string? finishTime, string url,
+        string timelineIcon, string testsIcon)
+    {
+        ui.RenderField("Build", $"#{buildId} — {defName} {buildNumber}");
+        ui.RenderField("Result", BrowserUI.FormatResult(result));
+        if (prNumber is not null && repoName is not null)
+        {
+            var prUrl = $"https://github.com/{repoName}/pull/{prNumber}";
+            if (prAuthor is not null && prTitle is not null)
+            {
+                ui.RenderField("PR", $"#{prNumber} [blue]{Markup.Escape(prAuthor)}[/] {Markup.Escape(prTitle)}");
+            }
+            else
+            {
+                ui.RenderField("PR", $"#{prNumber}");
+            }
+            ui.RenderField("PR URL", BrowserUI.FormatLink(prUrl, $"PR #{prNumber}"));
+        }
+        else if (prNumber is not null)
+        {
+            ui.RenderField("PR", $"#{prNumber}");
+        }
+        else
+        {
+            ui.RenderField("Branch", FormatBranchField(branch ?? ""));
+        }
+        if (finishTime is not null)
+        {
+            ui.RenderField("Finished", BrowserUI.FormatTime(finishTime));
+        }
+        ui.RenderField("URL", BrowserUI.FormatLink(url, url));
+        ui.RenderField("Data", $"Timeline: {timelineIcon}  Tests: {testsIcon}");
+    }
+
+    /// <summary>
+    /// Formats a single build list item line for the build list view.
+    /// </summary>
+    internal static string FormatBuildListItem(
+        int buildId, string definitionName, string? result, string branch,
+        int? prNumber, string? finishTime, string ingestionStatus)
+    {
+        var resultIcon = result switch
+        {
+            "succeeded" => "[green]+[/]",
+            "failed" => "[red]X[/]",
+            "partiallySucceeded" => "[yellow]![/]",
+            "canceled" => "[dim]-[/]",
+            _ => "[dim]-[/]",
+        };
+        var pr = prNumber is not null ? $" PR#{prNumber}" : "";
+        var pending = ingestionStatus != "complete" ? " ..." : "";
+        var time = BrowserUI.FormatTime(finishTime);
+        var branchDisplay = $"[dim]{FormatBranchField(branch)}[/]";
+        return $"{resultIcon} {buildId} {Markup.Escape(definitionName)} {branchDisplay} {time}{pr}{pending}";
+    }
 
     private List<(string TaskType, string Status, int Attempts)> GetIngestionTaskStatuses(
         string org, string project, int buildId)
