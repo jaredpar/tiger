@@ -13,6 +13,7 @@ public sealed class BuildBrowser
     private readonly TigerDatabase _db;
     private readonly AzdoClientFactory _clientFactory;
     private readonly BuildAnalysisService? _analysisService;
+    private readonly BuildIngestionService? _ingestionService;
     private readonly string _configDirectory;
     private readonly List<Page> _history = [];
     private readonly BuildFilter _filter;
@@ -20,12 +21,13 @@ public sealed class BuildBrowser
     private int _selectedBuildIndex;
     private List<BuildRow> _lastBuilds = [];
 
-    public BuildBrowser(TigerDatabase db, AzdoClientFactory clientFactory, string configDirectory, BuildAnalysisService? analysisService = null)
+    public BuildBrowser(TigerDatabase db, AzdoClientFactory clientFactory, string configDirectory, BuildAnalysisService? analysisService = null, BuildIngestionService? ingestionService = null)
     {
         _db = db;
         _clientFactory = clientFactory;
         _configDirectory = configDirectory;
         _analysisService = analysisService;
+        _ingestionService = ingestionService;
         _filter = BuildFilter.Load(configDirectory);
     }
 
@@ -177,6 +179,15 @@ public sealed class BuildBrowser
             }).ToList();
 
             _lastBuilds = builds;
+
+            // Prioritize ingestion for any displayed builds that aren't fully complete
+            if (_ingestionService is not null)
+            {
+                foreach (var b in builds.Where(b => b.IngestionStatus != "complete"))
+                {
+                    _ingestionService.PrioritizeBuild(b.Org, b.BuildId);
+                }
+            }
 
             var commands = new List<CommandBarItem>
             {
