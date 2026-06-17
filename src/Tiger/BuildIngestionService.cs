@@ -224,10 +224,10 @@ public sealed class BuildIngestionService
                     cmd.CommandText = """
                         INSERT INTO build_timeline_issues
                             (organization, build_id, record_name, record_type,
-                             parent_name, record_result, issue_type, issue_message, issue_category)
+                             parent_name, record_result, issue_type, issue_message, issue_category, log_url)
                         VALUES
                             (@org, @buildId, @name, @type,
-                             @parent, @result, @issueType, @message, @category)
+                             @parent, @result, @issueType, @message, @category, @logUrl)
                         """;
                     cmd.Parameters.AddWithValue("@org", organization);
                     cmd.Parameters.AddWithValue("@buildId", buildId);
@@ -238,6 +238,7 @@ public sealed class BuildIngestionService
                     cmd.Parameters.AddWithValue("@issueType", issue.Type);
                     cmd.Parameters.AddWithValue("@message", issue.Message);
                     cmd.Parameters.AddWithValue("@category", (object?)issue.Category ?? DBNull.Value);
+                    cmd.Parameters.AddWithValue("@logUrl", (object?)record.LogUrl ?? DBNull.Value);
                     cmd.ExecuteNonQuery();
                 });
             }

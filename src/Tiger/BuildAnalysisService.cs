@@ -75,7 +75,7 @@ public sealed class BuildAnalysisService : IDisposable
         {
             try
             {
-                await ProcessBuildAsync(request.Organization, request.BuildId, request.FullAnalysisCheck, ct);
+                await ProcessBuildAsync(request.Organization, request.BuildId, request.FullAnalysisCheck, request.ManualRequest, ct);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -104,7 +104,7 @@ public sealed class BuildAnalysisService : IDisposable
         _channel.Writer.TryWrite(new AnalysisRequest(buildEvent.Organization, buildEvent.BuildId));
     }
 
-    private async Task ProcessBuildAsync(string org, int buildId, bool fullAnalysisCheck, CancellationToken ct)
+    private async Task ProcessBuildAsync(string org, int buildId, bool fullAnalysisCheck, bool manualRequest, CancellationToken ct)
     {
         // Look up build info and filter — only analyze failed/partiallySucceeded non-PR builds
         var buildInfo = _db.WithCommand(cmd =>
@@ -135,13 +135,13 @@ public sealed class BuildAnalysisService : IDisposable
 
         var (project, definitionName, result, sourceBranch) = buildInfo.Value;
 
-        // Only analyze failed builds on non-PR branches
-        if (result is not ("failed" or "partiallySucceeded"))
+        // Only analyze failed builds on non-PR branches (unless manually requested)
+        if (!manualRequest && result is not ("failed" or "partiallySucceeded"))
         {
             return;
         }
 
-        if (sourceBranch.StartsWith("refs/pull/", StringComparison.Ordinal))
+        if (!manualRequest && sourceBranch.StartsWith("refs/pull/", StringComparison.Ordinal))
         {
             return;
         }
@@ -172,10 +172,16 @@ public sealed class BuildAnalysisService : IDisposable
             var (knownIssueMatches, errorText) = CheckKnownIssues(org, buildId);
             if (knownIssueMatches.Count > 0)
             {
-                var summary = string.Join("\n", knownIssueMatches.Select(m => $"#{m.IssueNumber}: {m.Title}"));
+                var summary = string.Join("\n", knownIssueMatches.Select(m =>
+                {
+                    var title = StripKnownBuildErrorPrefix(m.Title);
+                    var url = $"https://github.com/{m.Repository}/issues/{m.IssueNumber}";
+                    return $"[{m.Repository}#{m.IssueNumber}]({url}): {title}";
+                }));
                 _log?.Info("AnalysisAgent", $"  Build #{buildId} matches known issue(s): {summary}");
 
-                var knownIssueLogPath = SaveKnownIssueLog(org, project, definitionName, buildId, knownIssueMatches, errorText);
+                var structuredErrors = GatherStructuredErrors(org, buildId);
+                var knownIssueLogPath = SaveKnownIssueLog(org, project, definitionName, buildId, knownIssueMatches, structuredErrors);
                 _db.UpdateBuildAnalysis(org, buildId, "skipped",
                     category: "known-issue",
                     diagnosisSummary: $"Matches known issue(s): {summary}",
@@ -270,6 +276,79 @@ public sealed class BuildAnalysisService : IDisposable
         }
 
         return (_knownIssues.FindMatches(repo, combinedErrors), combinedErrors);
+    }
+
+    /// <summary>
+    /// Gathers structured error context for a build: timeline issues with job context
+    /// and test failures with run/test identifiers. Used for the known issue log.
+    /// </summary>
+    private StructuredErrorContext GatherStructuredErrors(string org, int buildId)
+    {
+        var context = new StructuredErrorContext();
+
+        context.TimelineIssues = _db.WithCommand(cmd =>
+        {
+            cmd.CommandText = """
+                SELECT record_name, record_type, parent_name, issue_type, issue_message, issue_category, log_url
+                FROM build_timeline_issues
+                WHERE organization = @org AND build_id = @buildId
+                ORDER BY parent_name, record_name
+                """;
+            cmd.Parameters.AddWithValue("@org", org);
+            cmd.Parameters.AddWithValue("@buildId", buildId);
+
+            var issues = new List<StructuredTimelineIssue>();
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+            {
+                issues.Add(new StructuredTimelineIssue
+                {
+                    RecordName = reader.GetString(0),
+                    RecordType = reader.GetString(1),
+                    JobName = reader.IsDBNull(2) ? null : reader.GetString(2),
+                    IssueType = reader.GetString(3),
+                    Message = reader.GetString(4),
+                    Category = reader.IsDBNull(5) ? null : reader.GetString(5),
+                    LogUrl = reader.IsDBNull(6) ? null : reader.GetString(6),
+                });
+            }
+            return issues;
+        });
+
+        context.TestFailures = _db.WithCommand(cmd =>
+        {
+            cmd.CommandText = """
+                SELECT r.run_id, r.run_name, tr.test_case_title, tr.error_message, tr.stack_trace,
+                       tr.helix_job_name, tr.helix_work_item_name
+                FROM test_results tr
+                JOIN test_runs r ON tr.organization = r.organization AND tr.run_id = r.run_id
+                WHERE r.organization = @org AND r.build_id = @buildId
+                  AND tr.outcome = 'Failed'
+                ORDER BY r.run_name, tr.test_case_title
+                LIMIT 50
+                """;
+            cmd.Parameters.AddWithValue("@org", org);
+            cmd.Parameters.AddWithValue("@buildId", buildId);
+
+            var failures = new List<StructuredTestFailure>();
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+            {
+                failures.Add(new StructuredTestFailure
+                {
+                    RunId = reader.GetInt32(0),
+                    RunName = reader.GetString(1),
+                    TestName = reader.GetString(2),
+                    ErrorMessage = reader.IsDBNull(3) ? null : reader.GetString(3),
+                    StackTrace = reader.IsDBNull(4) ? null : reader.GetString(4),
+                    HelixJobName = reader.IsDBNull(5) ? null : reader.GetString(5),
+                    HelixWorkItemName = reader.IsDBNull(6) ? null : reader.GetString(6),
+                });
+            }
+            return failures;
+        });
+
+        return context;
     }
 
     private BuildAnalysisContext GatherContext(
@@ -664,9 +743,20 @@ public sealed class BuildAnalysisService : IDisposable
     private static string StripMarkdownBold(string text) =>
         text.Replace("**", "");
 
+    internal static string StripKnownBuildErrorPrefix(string title)
+    {
+        const string prefix = "[Known Build Error]";
+        var trimmed = title.TrimStart();
+        if (trimmed.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+        {
+            return trimmed[prefix.Length..].TrimStart();
+        }
+        return title;
+    }
+
     private string SaveKnownIssueLog(
         string org, string project, string definitionName, int buildId,
-        List<KnownIssueMatch> matches, string errorText)
+        List<KnownIssueMatch> matches, StructuredErrorContext errors)
     {
         var logDir = Path.Combine(_logDir, org, project, definitionName);
         Directory.CreateDirectory(logDir);
@@ -684,7 +774,8 @@ public sealed class BuildAnalysisService : IDisposable
         sb.AppendLine();
         foreach (var match in matches)
         {
-            sb.AppendLine($"### #{match.IssueNumber}: {match.Title}");
+            var url = $"https://github.com/{match.Repository}/issues/{match.IssueNumber}";
+            sb.AppendLine($"### [{match.Repository}#{match.IssueNumber}]({url}): {StripKnownBuildErrorPrefix(match.Title)}");
             if (match.ErrorMessage is not null)
             {
                 sb.AppendLine($"- **ErrorMessage:** `{match.ErrorMessage}`");
@@ -697,11 +788,62 @@ public sealed class BuildAnalysisService : IDisposable
         }
         sb.AppendLine("---");
         sb.AppendLine();
-        sb.AppendLine("## Combined Error Text");
+        sb.AppendLine("## Build Errors (Structured)");
         sb.AppendLine();
-        sb.AppendLine("```");
-        sb.AppendLine(errorText);
-        sb.AppendLine("```");
+        sb.AppendLine("The following is structured JSON for LLM consumption. Each entry includes");
+        sb.AppendLine("full context needed to investigate the error further.");
+        sb.AppendLine();
+
+        if (errors.TimelineIssues.Count > 0)
+        {
+            sb.AppendLine("### Timeline Issues");
+            sb.AppendLine();
+            sb.AppendLine("These are errors/warnings from the Azure DevOps build timeline (pipeline jobs/tasks).");
+            sb.AppendLine();
+            sb.AppendLine("```json");
+            sb.AppendLine(System.Text.Json.JsonSerializer.Serialize(
+                errors.TimelineIssues.Select(i => new
+                {
+                    i.JobName,
+                    i.RecordName,
+                    i.RecordType,
+                    i.IssueType,
+                    i.Message,
+                    i.Category,
+                    i.LogUrl,
+                }),
+                JsonOptions.Indented));
+            sb.AppendLine("```");
+            sb.AppendLine();
+        }
+
+        if (errors.TestFailures.Count > 0)
+        {
+            sb.AppendLine("### Test Failures");
+            sb.AppendLine();
+            sb.AppendLine("These are failed test results from Azure DevOps test runs associated with this build.");
+            sb.AppendLine();
+            sb.AppendLine("```json");
+            sb.AppendLine(System.Text.Json.JsonSerializer.Serialize(
+                errors.TestFailures.Select(f => new
+                {
+                    f.RunId,
+                    f.RunName,
+                    f.TestName,
+                    f.ErrorMessage,
+                    f.StackTrace,
+                    f.HelixJobName,
+                    f.HelixWorkItemName,
+                }),
+                JsonOptions.Indented));
+            sb.AppendLine("```");
+            sb.AppendLine();
+        }
+
+        if (errors.TimelineIssues.Count == 0 && errors.TestFailures.Count == 0)
+        {
+            sb.AppendLine("[dim]No structured error data available.[/]");
+        }
 
         File.WriteAllText(logPath, sb.ToString());
         return logPath;
@@ -744,7 +886,7 @@ public sealed class BuildAnalysisService : IDisposable
     public void RequestAnalysis(string organization, int buildId, bool fullAnalysisCheck = false)
     {
         _db.DeleteBuildAnalysis(organization, buildId);
-        _channel.Writer.TryWrite(new AnalysisRequest(organization, buildId, fullAnalysisCheck));
+        _channel.Writer.TryWrite(new AnalysisRequest(organization, buildId, fullAnalysisCheck, ManualRequest: true));
         _log?.Info("AnalysisAgent", $"Re-queued build #{buildId} for analysis.");
     }
 
@@ -789,4 +931,32 @@ internal class AnalysisParsedResponse
     public string? DiagnosisSummary { get; set; }
 }
 
-internal record AnalysisRequest(string Organization, int BuildId, bool FullAnalysisCheck = false);
+internal record AnalysisRequest(string Organization, int BuildId, bool FullAnalysisCheck = false, bool ManualRequest = false);
+
+internal class StructuredErrorContext
+{
+    public List<StructuredTimelineIssue> TimelineIssues { get; set; } = [];
+    public List<StructuredTestFailure> TestFailures { get; set; } = [];
+}
+
+internal class StructuredTimelineIssue
+{
+    public required string RecordName { get; init; }
+    public required string RecordType { get; init; }
+    public string? JobName { get; init; }
+    public required string IssueType { get; init; }
+    public required string Message { get; init; }
+    public string? Category { get; init; }
+    public string? LogUrl { get; init; }
+}
+
+internal class StructuredTestFailure
+{
+    public required int RunId { get; init; }
+    public required string RunName { get; init; }
+    public required string TestName { get; init; }
+    public string? ErrorMessage { get; init; }
+    public string? StackTrace { get; init; }
+    public string? HelixJobName { get; init; }
+    public string? HelixWorkItemName { get; init; }
+}

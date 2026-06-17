@@ -99,3 +99,8 @@ The command bar is the standard way to expose actions on any screen. It uses `Li
 
 - **if/try/catch** bodies and braces must be on separate lines — never on the same line as the keyword.
 - **Escape** always means "go back" or "cancel" in any interactive context.
+- **Regular expressions** must use `[GeneratedRegex]` source generators instead of `new Regex(...)` or
+  `Regex.Match(...)`. This provides compile-time validation, better performance, and avoids runtime
+  compilation. The containing class must be `partial` to support the generated code.
+- **Branch names** displayed in the UI must be simplified using `BrowserUI.SimplifyBranch()` to strip
+  `refs/heads/` and `refs/pull/` prefixes (e.g. `refs/heads/main` → `main`).

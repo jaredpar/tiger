@@ -330,4 +330,44 @@ public class MarkdownRendererTests
         Assert.Single(rows);
         Assert.Equal(4, nextIndex);
     }
+
+    [Fact]
+    public void HeaderWithLink_RendersAsClickableLink()
+    {
+        var md = "### [dotnet/roslyn#83775](https://github.com/dotnet/roslyn/issues/83775): Razor AddImport";
+
+        var lines = MarkdownRenderer.ToMarkupLines(md);
+
+        Assert.Single(lines);
+        Assert.Contains("[link=https://github.com/dotnet/roslyn/issues/83775]", lines[0]);
+        Assert.Contains("[blue underline]dotnet/roslyn#83775[/]", lines[0]);
+        Assert.Contains("Razor AddImport", lines[0]);
+    }
+
+    [Fact]
+    public void KnownIssueSummaryLine_RendersLinkInRegularText()
+    {
+        var md = "Matches known issue(s): [dotnet/roslyn#83775](https://github.com/dotnet/roslyn/issues/83775): Razor AddImport";
+
+        var lines = MarkdownRenderer.ToMarkupLines(md);
+
+        Assert.Single(lines);
+        Assert.Contains("[link=https://github.com/dotnet/roslyn/issues/83775]", lines[0]);
+        Assert.Contains("[blue underline]dotnet/roslyn#83775[/]", lines[0]);
+    }
+
+    [Fact]
+    public void CodeBlock_PreservedAcrossMultipleLines()
+    {
+        var md = "Before\n```json\n{\"key\": \"value\"}\n```\nAfter";
+
+        var lines = MarkdownRenderer.ToMarkupLines(md);
+
+        // Should have: "Before", opening fence, JSON content, closing fence, "After"
+        Assert.Contains(lines, l => l.Contains("Before"));
+        Assert.Contains(lines, l => l == "[dim]┌────────────────────────────────────────[/]");
+        Assert.Contains(lines, l => l.Contains("[grey]") && l.Contains("key"));
+        Assert.Contains(lines, l => l == "[dim]└────────────────────────────────────────[/]");
+        Assert.Contains(lines, l => l.Contains("After"));
+    }
 }

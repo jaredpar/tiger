@@ -435,6 +435,22 @@ public static class BrowserUI
     public static string FormatLink(string url, string displayText) =>
         $"[link={url}][blue underline]{Markup.Escape(displayText)}[/][/]";
 
+    /// <summary>
+    /// Strips refs/heads/ or refs/pull/ prefixes from a branch name for display.
+    /// </summary>
+    public static string SimplifyBranch(string branch)
+    {
+        if (branch.StartsWith("refs/heads/", StringComparison.Ordinal))
+        {
+            return branch["refs/heads/".Length..];
+        }
+        if (branch.StartsWith("refs/pull/", StringComparison.Ordinal))
+        {
+            return branch["refs/pull/".Length..];
+        }
+        return branch;
+    }
+
     internal sealed class HelixFileEntry
     {
         [System.Text.Json.Serialization.JsonPropertyName("fileName")]

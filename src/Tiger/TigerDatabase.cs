@@ -10,7 +10,7 @@ namespace Tiger;
 /// </summary>
 public sealed class TigerDatabase : IDisposable
 {
-    public const int CurrentSchemaVersion = 10;
+    public const int CurrentSchemaVersion = 11;
 
     public string DatabasePath { get; }
     private string ConnectionString { get; }
@@ -156,6 +156,9 @@ public sealed class TigerDatabase : IDisposable
     {
         // v9: add duration_seconds to test_runs
         TryAddColumn("test_runs", "duration_seconds", "REAL");
+
+        // v11: add log_url to build_timeline_issues
+        TryAddColumn("build_timeline_issues", "log_url", "TEXT");
     }
 
     private void TryAddColumn(string table, string column, string type)
@@ -300,6 +303,7 @@ public sealed class TigerDatabase : IDisposable
                 issue_type TEXT NOT NULL,
                 issue_message TEXT NOT NULL,
                 issue_category TEXT,
+                log_url TEXT,
                 FOREIGN KEY (organization, build_id)
                     REFERENCES builds (organization, build_id)
             );
