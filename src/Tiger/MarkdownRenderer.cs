@@ -17,10 +17,29 @@ public static class MarkdownRenderer
     {
         var lines = markdown.Split('\n');
         var i = 0;
+        var inCodeBlock = false;
 
         while (i < lines.Length)
         {
             var trimmed = lines[i].TrimEnd('\r');
+
+            // Code block fences must be tracked across lines
+            if (trimmed.StartsWith("```"))
+            {
+                inCodeBlock = !inCodeBlock;
+                AnsiConsole.MarkupLine(inCodeBlock
+                    ? "[dim]┌────────────────────────────────────────[/]"
+                    : "[dim]└────────────────────────────────────────[/]");
+                i++;
+                continue;
+            }
+
+            if (inCodeBlock)
+            {
+                AnsiConsole.MarkupLine($"[dim]│[/] [grey]{Markup.Escape(trimmed)}[/]");
+                i++;
+                continue;
+            }
 
             // Detect table: line starts with | and has at least 2 |
             if (IsTableRow(trimmed) && i + 1 < lines.Length && IsTableSeparator(lines[i + 1].TrimEnd('\r')))
@@ -37,6 +56,53 @@ public static class MarkdownRenderer
             }
             i++;
         }
+    }
+
+    /// <summary>
+    /// Converts multi-line markdown to markup strings, properly tracking code
+    /// block state across lines. Used for testing the Render pipeline without
+    /// needing an IAnsiConsole.
+    /// </summary>
+    internal static List<string> RenderToLines(string markdown)
+    {
+        var result = new List<string>();
+        var lines = markdown.Split('\n');
+        var i = 0;
+        var inCodeBlock = false;
+
+        while (i < lines.Length)
+        {
+            var trimmed = lines[i].TrimEnd('\r');
+
+            if (trimmed.StartsWith("```"))
+            {
+                inCodeBlock = !inCodeBlock;
+                result.Add(inCodeBlock
+                    ? "[dim]┌────────────────────────────────────────[/]"
+                    : "[dim]└────────────────────────────────────────[/]");
+                i++;
+                continue;
+            }
+
+            if (inCodeBlock)
+            {
+                result.Add($"[dim]│[/] [grey]{Markup.Escape(trimmed)}[/]");
+                i++;
+                continue;
+            }
+
+            if (IsTableRow(trimmed) && i + 1 < lines.Length && IsTableSeparator(lines[i + 1].TrimEnd('\r')))
+            {
+                // Tables can't be rendered to lines — skip (handled by Render directly)
+                i++;
+                continue;
+            }
+
+            result.AddRange(ToMarkupLines(trimmed));
+            i++;
+        }
+
+        return result;
     }
 
     internal static bool IsTableRow(string line)

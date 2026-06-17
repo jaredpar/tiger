@@ -661,6 +661,43 @@ public class PanelRendererTests
         Assert.Contains("pr", output);
         Assert.Contains("ci", output);
     }
+
+    [Fact]
+    public void RenderDetailFrame_PreservesBackslashesInContent()
+    {
+        var console = new TestConsole().Width(80).Height(24);
+        var renderer = new PanelRenderer(console);
+        var errorMsg = """Could not find path 'C:\h\w\AF600976\w\B51709B0\e\bincore'""";
+        var lines = renderer.CaptureContent(() =>
+        {
+            renderer.RenderPanelLine($"[red]{Markup.Escape(errorMsg)}[/]");
+        });
+
+        renderer.RenderDetailFrame(["Tests", "Detail"], null, lines, 0, "[blue]Esc[/] Back");
+
+        var output = console.Output;
+        Assert.Contains("""Could not find path 'C:\h\w\AF600976\w\B51709B0\e\bincore'""", output);
+    }
+
+    [Fact]
+    public void RenderDetailFrame_BackslashesPreservedWithTruncation()
+    {
+        // Use a narrow width to force truncation
+        var console = new TestConsole().Width(40).Height(24);
+        var renderer = new PanelRenderer(console);
+        renderer.TruncationEnabled = true;
+        var errorMsg = """Could not find path 'C:\h\w\AF600976\w\B51709B0\e\bincore'""";
+        var lines = renderer.CaptureContent(() =>
+        {
+            renderer.RenderPanelLine($"[red]{Markup.Escape(errorMsg)}[/]");
+        });
+
+        renderer.RenderDetailFrame(["Tests", "Detail"], null, lines, 0, "[blue]Esc[/] Back");
+
+        var output = console.Output;
+        // Even when truncated, the visible portion should have backslashes intact
+        Assert.Contains("""Could not find path 'C:\h\w\AF600976""", output);
+    }
 }
 
 /// <summary>
