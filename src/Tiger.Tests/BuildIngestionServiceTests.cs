@@ -181,7 +181,7 @@ public class BuildIngestionServiceTests : IDisposable
     }
 
     [Fact]
-    public void IngestTimelineIssues_StoresCorrectly()
+    public void InsertTimelineIssues_StoresCorrectly()
     {
         InsertSampleBuild(40);
 
@@ -226,7 +226,7 @@ public class BuildIngestionServiceTests : IDisposable
             ],
         };
 
-        _service.IngestTimelineIssues("org", "proj", 40, timeline);
+        _service.InsertTimelineIssues("org", "proj", 40, timeline);
 
         _db.WithCommand(cmd =>
         {
@@ -260,7 +260,7 @@ public class BuildIngestionServiceTests : IDisposable
     }
 
     [Fact]
-    public void IngestTimelineIssues_ReIngestion_ReplacesOldData()
+    public void InsertTimelineIssues_ReIngestion_ReplacesOldData()
     {
         InsertSampleBuild(50);
 
@@ -276,7 +276,7 @@ public class BuildIngestionServiceTests : IDisposable
             ],
         };
 
-        _service.IngestTimelineIssues("org", "proj", 50, timeline1);
+        _service.InsertTimelineIssues("org", "proj", 50, timeline1);
 
         _db.WithCommand(cmd =>
         {
@@ -301,7 +301,7 @@ public class BuildIngestionServiceTests : IDisposable
             ],
         };
 
-        _service.IngestTimelineIssues("org", "proj", 50, timeline2);
+        _service.InsertTimelineIssues("org", "proj", 50, timeline2);
 
         _db.WithCommand(cmd =>
         {

@@ -68,7 +68,7 @@ public sealed class BuildIngestionService : IDisposable
     /// <summary>
     /// Inserts build rows and creates ingestion tasks for processing.
     /// </summary>
-    public void IngestBuilds(string organization, string project, List<AzdoBuild> builds)
+    public void InsertBuilds(string organization, string project, List<AzdoBuild> builds)
     {
         foreach (var build in builds)
         {
@@ -77,11 +77,11 @@ public sealed class BuildIngestionService : IDisposable
     }
 
     /// <summary>
-    /// Async wrapper for <see cref="IngestBuilds"/> to satisfy delegate signatures.
+    /// Async wrapper for <see cref="InsertBuilds"/> to satisfy delegate signatures.
     /// </summary>
-    public Task IngestBuildsAsync(AzdoClient client, string organization, string project, List<AzdoBuild> builds)
+    public Task InsertBuildsAsync(AzdoClient client, string organization, string project, List<AzdoBuild> builds)
     {
-        IngestBuilds(organization, project, builds);
+        InsertBuilds(organization, project, builds);
         return Task.CompletedTask;
     }
 
@@ -250,32 +250,32 @@ public sealed class BuildIngestionService : IDisposable
         cmd.ExecuteNonQuery();
     }
 
-    internal void IngestTimelineIssues(string organization, string project, int buildId, AzdoTimeline timeline)
+    internal void InsertTimelineIssues(string organization, string project, int buildId, AzdoTimeline timeline)
     {
-        _db.WithCommand(cmd =>
+        var recordNames = timeline.Records.ToDictionary(r => r.Id, r => r.Name);
+
+        _db.WithTransaction((conn, tx) =>
         {
+            using var cmd = conn.CreateCommand();
+            cmd.Transaction = tx;
+
             cmd.CommandText = "DELETE FROM build_timeline_issues WHERE organization = @org AND build_id = @buildId";
             cmd.Parameters.AddWithValue("@org", organization);
             cmd.Parameters.AddWithValue("@buildId", buildId);
             cmd.ExecuteNonQuery();
-        });
 
-        var recordNames = timeline.Records.ToDictionary(r => r.Id, r => r.Name);
-
-        foreach (var record in timeline.Records)
-        {
-            var issues = record.Issues.Where(i => i.Type is "error" or "warning").ToList();
-            if (issues.Count == 0)
+            foreach (var record in timeline.Records)
             {
-                continue;
-            }
+                var issues = record.Issues.Where(i => i.Type is "error" or "warning").ToList();
+                if (issues.Count == 0)
+                {
+                    continue;
+                }
 
-            var parentName = record.ParentId is not null && recordNames.TryGetValue(record.ParentId, out var pn)
-                ? pn : null;
+                var parentName = record.ParentId is not null && recordNames.TryGetValue(record.ParentId, out var pn)
+                    ? pn : null;
 
-            foreach (var issue in issues)
-            {
-                _db.WithCommand(cmd =>
+                foreach (var issue in issues)
                 {
                     cmd.CommandText = """
                         INSERT INTO build_timeline_issues
@@ -285,6 +285,7 @@ public sealed class BuildIngestionService : IDisposable
                             (@org, @buildId, @name, @type,
                              @parent, @result, @issueType, @message, @category, @logUrl)
                         """;
+                    cmd.Parameters.Clear();
                     cmd.Parameters.AddWithValue("@org", organization);
                     cmd.Parameters.AddWithValue("@buildId", buildId);
                     cmd.Parameters.AddWithValue("@name", record.Name);
@@ -296,9 +297,9 @@ public sealed class BuildIngestionService : IDisposable
                     cmd.Parameters.AddWithValue("@category", (object?)issue.Category ?? DBNull.Value);
                     cmd.Parameters.AddWithValue("@logUrl", (object?)record.LogUrl ?? DBNull.Value);
                     cmd.ExecuteNonQuery();
-                });
+                }
             }
-        }
+        });
     }
 
     // ── Background Worker ───────────────────────────────────────────
@@ -801,7 +802,7 @@ public sealed class BuildIngestionService : IDisposable
     {
         _log?.Info("Worker", $"Fetching timeline for build #{task.BuildId}...");
         var timeline = await client.GetTimelineAsync(task.BuildId);
-        IngestTimelineIssues(task.Organization, task.Project, task.BuildId, timeline);
+        InsertTimelineIssues(task.Organization, task.Project, task.BuildId, timeline);
 
         var issueCount = timeline.Records.Sum(r => r.Issues.Count(i => i.Type is "error" or "warning"));
         _log?.Info("Worker", $"  Build #{task.BuildId} — timeline complete ({issueCount} issues)");
