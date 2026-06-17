@@ -92,7 +92,7 @@ public class BuildPollerTests : IDisposable
         var captured = new List<(string org, string proj, List<AzdoBuild> builds)>();
         var poller = new BuildPoller(config, _db, new AzdoClientFactory((org, proj) => throw new NotImplementedException()))
         {
-            OnNewBuilds = (client, org, proj, newBuilds) =>
+            OnNewBuilds = (org, proj, newBuilds) =>
             {
                 captured.Add((org, proj, newBuilds));
                 return Task.CompletedTask;

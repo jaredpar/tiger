@@ -79,7 +79,7 @@ public sealed class BuildIngestionService : IDisposable
     /// <summary>
     /// Async wrapper for <see cref="InsertBuilds"/> to satisfy delegate signatures.
     /// </summary>
-    public Task InsertBuildsAsync(AzdoClient client, string organization, string project, List<AzdoBuild> builds)
+    public Task InsertBuildsAsync(string organization, string project, List<AzdoBuild> builds)
     {
         InsertBuilds(organization, project, builds);
         return Task.CompletedTask;

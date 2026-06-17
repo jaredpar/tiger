@@ -17,10 +17,10 @@ public sealed class BuildPoller : IDisposable
     private Task? _pollingTask;
 
     /// <summary>
-    /// Called when new completed builds are discovered. Receives the AzdoClient,
-    /// org, project, and the list of new builds.
+    /// Called when new completed builds are discovered. Receives the org, project,
+    /// and the list of new builds.
     /// </summary>
-    public Func<AzdoClient, string, string, List<AzdoBuild>, Task>? OnNewBuilds { get; set; }
+    public Func<string, string, List<AzdoBuild>, Task>? OnNewBuilds { get; set; }
 
     public bool IsRunning => _pollingTask is not null && !_pollingTask.IsCompleted;
 
@@ -120,7 +120,7 @@ public sealed class BuildPoller : IDisposable
 
         if (OnNewBuilds is not null)
         {
-            await OnNewBuilds(client, source.Organization, source.Project, newBuilds);
+            await OnNewBuilds(source.Organization, source.Project, newBuilds);
         }
 
         // Update watermark to the highest build ID we processed
