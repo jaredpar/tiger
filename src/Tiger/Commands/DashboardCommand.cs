@@ -33,17 +33,15 @@ public sealed class DashboardCommand : AsyncCommand
         var clientFactory = new AzdoClientFactory(tigerContext.AzureCredential);
 
         // Start all background services unconditionally — they no-op if no sources configured
-        var ingestion = new BuildIngestionService(db, serviceLog);
+        var ingestion = new BuildIngestionService(db, clientFactory, serviceLog);
 
         var knownIssues = new KnownIssueService(config, db, serviceLog);
         knownIssues.Start();
 
-        var worker = new TaskIngestionService(db, ingestion, clientFactory, serviceLog);
-
         var analysisAgent = new BuildAnalysisService(db, clientFactory, knownIssues, serviceLog);
-        worker.OnBuildIngested += analysisAgent.OnBuildIngested;
+        ingestion.OnBuildIngested += analysisAgent.OnBuildIngested;
 
-        worker.Start();
+        ingestion.Start();
         analysisAgent.Start();
 
         var poller = new BuildPoller(config, db, clientFactory, serviceLog);
@@ -63,7 +61,7 @@ public sealed class DashboardCommand : AsyncCommand
         finally
         {
             AnsiConsole.MarkupLine("[yellow]Stopping services...[/]");
-            await worker.StopAsync();
+            await ingestion.StopAsync();
             await poller.StopAsync();
             await backfill.StopAsync();
             await analysisAgent.StopAsync();
