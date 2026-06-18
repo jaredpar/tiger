@@ -8,7 +8,7 @@ namespace Tiger.Commands;
 /// </summary>
 public sealed class BuildBrowser
 {
-    private readonly PanelRenderer _ui = PanelRenderer.Create();
+    private readonly PanelRenderer _ui;
 
     private readonly TigerDatabase _db;
     private readonly AzdoClientFactory _clientFactory;
@@ -23,11 +23,21 @@ public sealed class BuildBrowser
 
     public BuildBrowser(TigerDatabase db, AzdoClientFactory clientFactory, string configDirectory, BuildAnalysisService? analysisService = null, BuildIngestionService? ingestionService = null)
     {
+        _ui = PanelRenderer.Create();
         _db = db;
         _clientFactory = clientFactory;
         _configDirectory = configDirectory;
         _analysisService = analysisService;
         _ingestionService = ingestionService;
+        _filter = BuildFilter.Load(configDirectory);
+    }
+
+    internal BuildBrowser(TigerDatabase db, PanelRenderer ui, string configDirectory)
+    {
+        _ui = ui;
+        _db = db;
+        _clientFactory = null!;
+        _configDirectory = configDirectory;
         _filter = BuildFilter.Load(configDirectory);
     }
 
@@ -484,6 +494,22 @@ public sealed class BuildBrowser
 
     private NavAction RenderBuildDetail(BuildDetailPage page)
     {
+        if (!RenderBuildDetailContent(page.Org, page.Project, page.BuildId))
+        {
+            Console.ReadKey(true);
+            return NavAction.Back.Instance;
+        }
+
+        return ReadNavKey(page);
+    }
+
+    /// <summary>
+    /// Renders the build detail view to the panel. Returns false if the build was not found.
+    /// Extracted from RenderBuildDetail for testability — this does all the DB queries and
+    /// rendering without waiting for key input.
+    /// </summary>
+    internal bool RenderBuildDetailContent(string org, string project, int buildId)
+    {
         // Header info from DB
         var buildInfo = _db.WithCommand(cmd =>
         {
@@ -492,9 +518,9 @@ public sealed class BuildBrowser
                 FROM builds
                 WHERE organization = @org AND build_id = @buildId
                 """;
-            cmd.Parameters.AddWithValue("@org", page.Org);
-            cmd.Parameters.AddWithValue("@proj", page.Project);
-            cmd.Parameters.AddWithValue("@buildId", page.BuildId);
+            cmd.Parameters.AddWithValue("@org", org);
+            cmd.Parameters.AddWithValue("@proj", project);
+            cmd.Parameters.AddWithValue("@buildId", buildId);
 
             using var reader = cmd.ExecuteReader();
             if (!reader.Read())
@@ -517,12 +543,11 @@ public sealed class BuildBrowser
         if (!buildInfo.Found)
         {
             _ui.RenderDetailPanel(
-                ["Builds", $"#{page.BuildId}"],
+                ["Builds", $"#{buildId}"],
                 null,
                 ["[red]Build not found.[/]"],
                 "[blue]Esc[/] Back");
-            Console.ReadKey(true);
-            return NavAction.Back.Instance;
+            return false;
         }
 
         var buildNumber = buildInfo.BuildNumber;
@@ -533,17 +558,17 @@ public sealed class BuildBrowser
         var finishTime = buildInfo.FinishTime;
         var repoName = buildInfo.RepoName;
 
-        var url = $"https://dev.azure.com/{Uri.EscapeDataString(page.Org)}/{Uri.EscapeDataString(page.Project)}/_build/results?buildId={page.BuildId}";
+        var url = $"https://dev.azure.com/{Uri.EscapeDataString(org)}/{Uri.EscapeDataString(project)}/_build/results?buildId={buildId}";
 
         // Ingestion status
-        var taskStatuses = GetIngestionTaskStatuses(page.Org, page.Project, page.BuildId);
+        var taskStatuses = GetIngestionTaskStatuses(org, project, buildId);
         var taskStatusMap = taskStatuses.ToDictionary(t => t.TaskType, t => t);
 
         var timelineStatus = taskStatusMap.GetValueOrDefault("timeline").Status;
         var testsStatus = taskStatusMap.GetValueOrDefault("tests").Status;
 
         var canForward = _position < _history.Count - 1;
-        var buildIndex = _lastBuilds.FindIndex(b => b.BuildId == page.BuildId && b.Org == page.Org && b.Project == page.Project);
+        var buildIndex = _lastBuilds.FindIndex(b => b.BuildId == buildId && b.Org == org && b.Project == project);
         var canNext = buildIndex >= 0 && buildIndex < _lastBuilds.Count - 1;
         var canPrev = buildIndex > 0;
 
@@ -605,9 +630,9 @@ public sealed class BuildBrowser
                       AND parent_name IS NOT NULL AND issue_type = 'error'
                     ORDER BY parent_name
                     """;
-                cmd.Parameters.AddWithValue("@org", page.Org);
-                cmd.Parameters.AddWithValue("@proj", page.Project);
-                cmd.Parameters.AddWithValue("@buildId", page.BuildId);
+                cmd.Parameters.AddWithValue("@org", org);
+                cmd.Parameters.AddWithValue("@proj", project);
+                cmd.Parameters.AddWithValue("@buildId", buildId);
 
                 var names = new List<string>();
                 using var reader = cmd.ExecuteReader();
@@ -633,9 +658,9 @@ public sealed class BuildBrowser
                     ORDER BY r.run_name, tr.test_case_title
                     LIMIT 50
                     """;
-                cmd.Parameters.AddWithValue("@org", page.Org);
-                cmd.Parameters.AddWithValue("@proj", page.Project);
-                cmd.Parameters.AddWithValue("@buildId", page.BuildId);
+                cmd.Parameters.AddWithValue("@org", org);
+                cmd.Parameters.AddWithValue("@proj", project);
+                cmd.Parameters.AddWithValue("@buildId", buildId);
 
                 var tests = new List<(string RunName, string Title, string Error)>();
                 using var reader = cmd.ExecuteReader();
@@ -663,9 +688,9 @@ public sealed class BuildBrowser
                 ORDER BY tr.helix_job_name, tr.helix_work_item_name
                 LIMIT 15
                 """;
-            cmd.Parameters.AddWithValue("@org", page.Org);
-            cmd.Parameters.AddWithValue("@proj", page.Project);
-            cmd.Parameters.AddWithValue("@buildId", page.BuildId);
+            cmd.Parameters.AddWithValue("@org", org);
+            cmd.Parameters.AddWithValue("@proj", project);
+            cmd.Parameters.AddWithValue("@buildId", buildId);
 
             var items = new List<(string Job, string Wi, string? State, int? ExitCode, bool IsDeadletter)>();
             using var reader = cmd.ExecuteReader();
@@ -682,7 +707,7 @@ public sealed class BuildBrowser
         });
 
         var detailLines = BuildDetailHeaderLines(
-            page.BuildId, defName, buildNumber, result,
+            buildId, defName, buildNumber, result,
             branch, prNumber, repoName,
             prAuthor, prTitle,
             finishTime, url);
@@ -703,12 +728,12 @@ public sealed class BuildBrowser
         }
 
         _ui.RenderDetailPanel(
-            ["Builds", $"#{page.BuildId} {defName}"],
-            $"{BrowserUI.FormatResult(result)}  {BrowserUI.FormatTime(finishTime)}",
+            ["Builds", $"#{buildId} {defName}"],
+            null,
             detailLines,
             PanelRenderer.BuildCommandBarString(detailCommands));
 
-        return ReadNavKey(page);
+        return true;
     }
 
     // ── Test List (for a build) ─────────────────────────────────────
