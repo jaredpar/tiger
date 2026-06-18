@@ -535,21 +535,6 @@ public sealed class BuildBrowser
         // Ingestion status
         var taskStatuses = GetIngestionTaskStatuses(page.Org, page.Project, page.BuildId);
         var taskStatusMap = taskStatuses.ToDictionary(t => t.TaskType, t => t);
-        string TaskIcon(string taskType)
-        {
-            if (!taskStatusMap.TryGetValue(taskType, out var t))
-            {
-                return "[yellow]...[/]";
-            }
-            return t.Status switch
-            {
-                "complete" => "[green]+[/]",
-                "running" => "[blue]...[/]",
-                "failed" => $"[yellow]X retry {t.Attempts}/5[/]",
-                "abandoned" => "[red]abandoned[/]",
-                _ => "[yellow]...[/]",
-            };
-        }
 
         var timelineStatus = taskStatusMap.GetValueOrDefault("timeline").Status;
         var testsStatus = taskStatusMap.GetValueOrDefault("tests").Status;
