@@ -124,6 +124,147 @@ public class BrowserUITests
     }
 
     [Fact]
+    public void RenderBuildDetail_TitlePane_HasNoSubtitleLine()
+    {
+        // The build detail title pane must only show the breadcrumb line.
+        // Previously it had a second "context" line with result + time — that's now in the content pane only.
+        // This test goes through BuildBrowser.RenderBuildDetailContent so it exercises the actual
+        // rendering path including DB queries and line assembly.
+        var dbPath = Path.Combine(Path.GetTempPath(), $"tiger_test_{Guid.NewGuid():N}.db");
+        using var db = TigerDatabase.Open(dbPath);
+        var configDir = Path.Combine(Path.GetTempPath(), $"tiger_cfg_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(configDir);
+
+        try
+        {
+            db.WithCommand(cmd =>
+            {
+                cmd.CommandText = """
+                    INSERT INTO builds (organization, project, build_id, build_number, definition_name, definition_id,
+                        status, result, source_branch, finish_time)
+                    VALUES ('dnceng', 'public', 42, '20260617.1', 'roslyn-CI', 100,
+                        'completed', 'failed', 'refs/heads/main', '2025-06-01T12:00:00Z');
+
+                    INSERT INTO build_ingestion_tasks (organization, build_id, task_type, status)
+                    VALUES ('dnceng', 42, 'timeline', 'complete');
+
+                    INSERT INTO build_ingestion_tasks (organization, build_id, task_type, status)
+                    VALUES ('dnceng', 42, 'tests', 'complete');
+                    """;
+                cmd.ExecuteNonQuery();
+            });
+
+            var console = new TestConsole().EmitAnsiSequences().Width(80).Height(30);
+            var ui = new PanelRenderer(console);
+            var browser = new BuildBrowser(db, ui, configDir);
+
+            var result = browser.RenderBuildDetailContent("dnceng", "public", 42);
+            Assert.True(result);
+
+            var actual = PanelRendererTests.StripChrome(console.Output).ReplaceLineEndings("\n").Trim();
+            var finished = BrowserUI.FormatTime("2025-06-01T12:00:00Z");
+            var finishedPadded = finished.PadRight(66);
+            var expected = $"""
+                [dim]╔══════════════════════════════════════════════════════════════════════════════╗[/]
+                [dim]║[/] [bold orange1]TIGER[/] [dim]>[/] Builds > #42 roslyn-CI                                               [dim]║[/]
+                [dim]╠══════════════════════════════════════════════════════════════════════════════╣[/]
+                [dim]║[/] [bold]Build:[/] #42 — roslyn-CI 20260617.1                                            [dim]║[/]
+                [dim]║[/] [bold]Result:[/] [red]X failed[/]                                                             [dim]║[/]
+                [dim]║[/] [bold]Branch:[/] main                                                                 [dim]║[/]
+                [dim]║[/] [bold]Finished:[/] {finishedPadded} [dim]║[/]
+                [dim]║[/] [bold]URL:[/] [link=https://dev.azure.com/dnceng/public/_build/results?buildId=42][blue underline]https://dev.azure.com/dnceng/public/_build/results?buildId=42[/][/]           [dim]║[/]
+                [dim]║[/]                                                                              [dim]║[/]
+                [dim]║[/] [bold underline]Timeline[/]                                                                     [dim]║[/]
+                [dim]║[/]   [green]No failed jobs[/]                                                             [dim]║[/]
+                [dim]║[/]                                                                              [dim]║[/]
+                [dim]║[/] [bold underline]Tests[/]                                                                        [dim]║[/]
+                [dim]║[/]   [green]All tests passed[/]                                                           [dim]║[/]
+                [dim]║[/]                                                                              [dim]║[/]
+                [dim]║[/]                                                                              [dim]║[/]
+                [dim]║[/]                                                                              [dim]║[/]
+                [dim]║[/]                                                                              [dim]║[/]
+                [dim]║[/]                                                                              [dim]║[/]
+                [dim]║[/]                                                                              [dim]║[/]
+                [dim]║[/]                                                                              [dim]║[/]
+                [dim]║[/]                                                                              [dim]║[/]
+                [dim]║[/]                                                                              [dim]║[/]
+                [dim]║[/]                                                                              [dim]║[/]
+                [dim]║[/]                                                                              [dim]║[/]
+                [dim]║[/]                                                                              [dim]║[/]
+                [dim]║[/]                                                                              [dim]║[/]
+                [dim]╠══════════════════════════════════════════════════════════════════════════════╣[/]
+                [dim]║[/] [blue][[T]][/]ests  [blue][[J]][/]obs  [blue][[H]][/]elix  [blue][[A]][/]nalysis  [blue]Esc[/] Back                               [dim]║[/]
+                [dim]╚══════════════════════════════════════════════════════════════════════════════╝[/]
+                """;
+            Assert.Equal(PanelRendererTests.MarkupToAnsi(expected.ReplaceLineEndings("\n").Trim()), actual);
+        }
+        finally
+        {
+            try { File.Delete(dbPath); } catch { }
+            try { Directory.Delete(configDir, true); } catch { }
+        }
+    }
+
+    [Fact]
+    public void RenderBuildDetail_BuildNotFound()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"tiger_test_{Guid.NewGuid():N}.db");
+        using var db = TigerDatabase.Open(dbPath);
+        var configDir = Path.Combine(Path.GetTempPath(), $"tiger_cfg_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(configDir);
+
+        try
+        {
+            var console = new TestConsole().EmitAnsiSequences().Width(80).Height(30);
+            var ui = new PanelRenderer(console);
+            var browser = new BuildBrowser(db, ui, configDir);
+
+            var result = browser.RenderBuildDetailContent("dnceng", "public", 999);
+            Assert.False(result);
+
+            var actual = PanelRendererTests.StripChrome(console.Output).ReplaceLineEndings("\n").Trim();
+            var expected = """
+                [dim]╔══════════════════════════════════════════════════════════════════════════════╗[/]
+                [dim]║[/] [bold orange1]TIGER[/] [dim]>[/] Builds > #999                                                        [dim]║[/]
+                [dim]╠══════════════════════════════════════════════════════════════════════════════╣[/]
+                [dim]║[/] [red]Build not found.[/]                                                             [dim]║[/]
+                [dim]║[/]                                                                              [dim]║[/]
+                [dim]║[/]                                                                              [dim]║[/]
+                [dim]║[/]                                                                              [dim]║[/]
+                [dim]║[/]                                                                              [dim]║[/]
+                [dim]║[/]                                                                              [dim]║[/]
+                [dim]║[/]                                                                              [dim]║[/]
+                [dim]║[/]                                                                              [dim]║[/]
+                [dim]║[/]                                                                              [dim]║[/]
+                [dim]║[/]                                                                              [dim]║[/]
+                [dim]║[/]                                                                              [dim]║[/]
+                [dim]║[/]                                                                              [dim]║[/]
+                [dim]║[/]                                                                              [dim]║[/]
+                [dim]║[/]                                                                              [dim]║[/]
+                [dim]║[/]                                                                              [dim]║[/]
+                [dim]║[/]                                                                              [dim]║[/]
+                [dim]║[/]                                                                              [dim]║[/]
+                [dim]║[/]                                                                              [dim]║[/]
+                [dim]║[/]                                                                              [dim]║[/]
+                [dim]║[/]                                                                              [dim]║[/]
+                [dim]║[/]                                                                              [dim]║[/]
+                [dim]║[/]                                                                              [dim]║[/]
+                [dim]║[/]                                                                              [dim]║[/]
+                [dim]║[/]                                                                              [dim]║[/]
+                [dim]╠══════════════════════════════════════════════════════════════════════════════╣[/]
+                [dim]║[/] [blue]Esc[/] Back                                                                     [dim]║[/]
+                [dim]╚══════════════════════════════════════════════════════════════════════════════╝[/]
+                """;
+            Assert.Equal(PanelRendererTests.MarkupToAnsi(expected.ReplaceLineEndings("\n").Trim()), actual);
+        }
+        finally
+        {
+            try { File.Delete(dbPath); } catch { }
+            try { Directory.Delete(configDir, true); } catch { }
+        }
+    }
+
+    [Fact]
     public void RenderBuildDetail_PrBuild_DataNotAvailable()
     {
         var console = new TestConsole().EmitAnsiSequences().Width(80).Height(30);
@@ -238,3 +379,4 @@ public class BrowserUITests
         Assert.Equal(PanelRendererTests.MarkupToAnsi(expected.ReplaceLineEndings("\n").Trim()), actual);
     }
 }
+

@@ -104,8 +104,8 @@ Assert.Equal(PanelRendererTests.MarkupToAnsi(expected.ReplaceLineEndings("\n").T
 - Border lines (`╔═╗`, `╠═╣`, `╚═╝`): wrap entire line with `[dim]...[/]`
 - Content lines: `[dim]║[/] content padding [dim]║[/]`
 - Empty lines: `[dim]║[/]` + spaces + `[dim]║[/]`
-- Header: `[dim]║[/] [bold orange1]TIGER[/] [dim]>[/] Breadcrumbs padding [dim]║[/]`
-- Footer hotkeys: `[dim]║[/] [blue]Esc[/] Back padding [dim]║[/]`
+- Title pane: `[dim]║[/] [bold orange1]TIGER[/] [dim]>[/] Breadcrumbs padding [dim]║[/]`
+- Command pane hotkeys: `[dim]║[/] [blue]Esc[/] Back padding [dim]║[/]`
 - Content markup stays as-is: `[bold]Label:[/]`, `[red]X[/]`, `[bold underline]Section[/]`
 
 Do **not** use `Assert.Contains` for UI tests — always compare the full expected output.
@@ -113,22 +113,46 @@ The raw string literal shows exactly what formatting and layout the UI produces.
 
 ## UI Conventions
 
+### Terminology
+
+The dashboard UI is a three-pane grid layout:
+
+```
++---------------------------------------------------------------+
+| TIGER > Builds > Build #123                                   |  <- Title Pane
++---------------------------------------------------------------+
+|                                                               |
+|  Status: Failed                                               |
+|  Branch: main                                                 |  <- Content Pane
+|  Duration: 5m 32s                                             |
+|                                                               |
++---------------------------------------------------------------+
+| [B]uilds  [T]ests  [H]ealth  [Esc] Back                       |  <- Command Pane
++---------------------------------------------------------------+
+```
+
+- **Title pane**: The top row showing the `TIGER ▸ Section ▸ Subsection` breadcrumb trail.
+- **Content pane**: The middle area displaying list selections or detail views.
+- **Command pane**: The bottom row showing hotkey commands and navigation actions.
+
+Use these terms when referring to UI regions in issues, code comments, and discussions.
+
 ### Panel Layout
 
 All screens use `PanelLayout` for a consistent "command and control" look:
-- **Header**: `TIGER ▸ Section ▸ Subsection` breadcrumb trail
-- **Content area**: List selection or detail view
-- **Command bar**: Bottom bar with hotkey commands, focusable via Tab
+- **Title pane**: `TIGER ▸ Section ▸ Subsection` breadcrumb trail
+- **Content pane**: List selection or detail view
+- **Command pane**: Bottom bar with hotkey commands, focusable via Tab
 
-### Command Bar (`CommandBarItem`)
+### Command Pane (`CommandBarItem`)
 
-The command bar is the standard way to expose actions on any screen. It uses `List<CommandBarItem>` where each item has a label, hotkey, and return value.
+The command pane is the standard way to expose actions on any screen. It uses `List<CommandBarItem>` where each item has a label, hotkey, and return value.
 
 - **Hotkey display**: Bracket style — `[B]uilds  [T]ests  [H]ealth` — with the bracketed letter rendered in blue.
-- **Focus model**: Tab toggles focus between the list and the command bar. When the bar is focused, ←→ moves the highlight and Enter executes. Hotkey letters work regardless of focus.
+- **Focus model**: Tab toggles focus between the content pane and the command pane. When the command pane is focused, ←→ moves the highlight and Enter executes. Hotkey letters work regardless of focus.
 - **Focused item**: Shown as `[bold white on blue] Label [/]` (inverted highlight).
-- **Main menu**: Uses `PanelLayout.ShowMainMenu(commands)` — displays Figlet ASCII art + TIGER branding, navigation only via command bar.
-- **List screens**: Use `PanelLayout.SelectInPanel(..., commands)` — list + Tab-focusable command bar.
+- **Main menu**: Uses `PanelLayout.ShowMainMenu(commands)` — displays Figlet ASCII art + TIGER branding in the content pane, navigation only via command pane.
+- **List screens**: Use `PanelLayout.SelectInPanel(..., commands)` — list in content pane + Tab-focusable command pane.
 - **Detail screens**: Use `PanelLayout.RenderDetailPanel(...)` with a static hotkey string footer (detail views handle their own key loops).
 
 ### Hotkey Conventions
@@ -136,7 +160,7 @@ The command bar is the standard way to expose actions on any screen. It uses `Li
 - Hotkeys use the `[X]` bracket format in labels (e.g., `[E]dit filter`, `[R]efresh`)
 - The bracket letter is highlighted in blue via Spectre markup: `[blue][[X]][/]`
 - Escape always means "go back" or "cancel"
-- Tab always switches focus to the command bar (on list screens)
+- Tab always switches focus to the command pane (on list screens)
 
 ### All menu locations (update all when changing the format convention):
   - `DashboardCommand.cs` — main menu (ShowMainMenu)
