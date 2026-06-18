@@ -617,14 +617,14 @@ public sealed class BuildBrowser
                     page.BuildId, defName, buildNumber, result,
                     branch, prNumber, repoName,
                     prAuthor, prTitle,
-                    finishTime, url,
-                    TaskIcon("timeline"), TaskIcon("tests"));
+                    finishTime, url);
                 _ui.RenderEmptyLine();
 
-                // Failed jobs section
+                // Timeline and tests sections
+                List<string>? failedJobNames = null;
                 if (timelineStatus == "complete")
                 {
-                    var failedJobNames = _db.WithCommand(cmd =>
+                    failedJobNames = _db.WithCommand(cmd =>
                     {
                         cmd.CommandText = """
                             SELECT DISTINCT parent_name
@@ -645,31 +645,12 @@ public sealed class BuildBrowser
                         }
                         return names;
                     });
-
-                    _ui.RenderSectionTitle("Failed Jobs");
-                    if (failedJobNames.Count > 0)
-                    {
-                        foreach (var jobName in failedJobNames.Take(15))
-                        {
-                            _ui.RenderPanelLine($"  [red]X[/] {Markup.Escape(jobName)}");
-                        }
-                    }
-                    else
-                    {
-                        _ui.RenderPanelLine("  [green]No failed jobs[/]");
-                    }
-                    _ui.RenderEmptyLine();
                 }
 
-                // Failed tests section
-                _ui.RenderSectionTitle("Failed Tests");
-                if (testsStatus != "complete")
+                List<(string RunName, string Title, string Error)>? failedTests = null;
+                if (testsStatus == "complete")
                 {
-                    _ui.RenderPanelLine("  [yellow]Tests not available yet[/]");
-                }
-                else
-                {
-                    var failedTests = _db.WithCommand(cmd =>
+                    failedTests = _db.WithCommand(cmd =>
                     {
                         cmd.CommandText = """
                             SELECT r.run_name, tr.test_case_title, tr.error_message
@@ -693,41 +674,9 @@ public sealed class BuildBrowser
                         }
                         return tests;
                     });
-
-                    if (failedTests.Count == 0)
-                    {
-                        _ui.RenderPanelLine("  [green]All tests passed[/]");
-                    }
-                    else
-                    {
-                        foreach (var group in failedTests.GroupBy(t => t.RunName))
-                        {
-                            _ui.RenderPanelLine($"  [bold yellow]{Markup.Escape(group.Key)}[/]");
-                            var shown = 0;
-                            var total = group.Count();
-                            foreach (var test in group.Take(5))
-                            {
-                                var title = test.Title.Length > 68 ? test.Title[..65] + "..." : test.Title;
-                                var error = test.Error;
-                                if (error.Length > 60)
-                                {
-                                    error = error[..57] + "...";
-                                }
-                                error = error.ReplaceLineEndings(" ");
-                                _ui.RenderPanelLine($"    [red]X[/] {Markup.Escape(title)}");
-                                if (!string.IsNullOrWhiteSpace(error))
-                                {
-                                    _ui.RenderPanelLine($"      [dim]{Markup.Escape(error)}[/]");
-                                }
-                                shown++;
-                            }
-                            if (total > shown)
-                            {
-                                _ui.RenderPanelLine($"    [dim]... {total - shown} more failure(s), press T to see all[/]");
-                            }
-                        }
-                    }
                 }
+
+                RenderBuildDetailSections(_ui, failedJobNames, failedTests);
 
                 // Helix work items
                 var helixItems = _db.WithCommand(cmd =>
@@ -1351,7 +1300,7 @@ public sealed class BuildBrowser
         Markup.Escape(BrowserUI.SimplifyBranch(branch));
 
     /// <summary>
-    /// Renders the build detail header fields (Build through Data) onto a <see cref="PanelRenderer"/>.
+    /// Renders the build detail header fields onto a <see cref="PanelRenderer"/>.
     /// Extracted for testability.
     /// </summary>
     internal static void RenderBuildDetailHeader(
@@ -1359,8 +1308,7 @@ public sealed class BuildBrowser
         int buildId, string defName, string buildNumber, string? result,
         string? branch, int? prNumber, string? repoName,
         string? prAuthor, string? prTitle,
-        string? finishTime, string url,
-        string timelineIcon, string testsIcon)
+        string? finishTime, string url)
     {
         ui.RenderField("Build", $"#{buildId} — {defName} {buildNumber}");
         ui.RenderField("Result", BrowserUI.FormatResult(result));
@@ -1390,7 +1338,75 @@ public sealed class BuildBrowser
             ui.RenderField("Finished", BrowserUI.FormatTime(finishTime));
         }
         ui.RenderField("URL", BrowserUI.FormatLink(url, url));
-        ui.RenderField("Data", $"Timeline: {timelineIcon}  Tests: {testsIcon}");
+    }
+
+    /// <summary>
+    /// Renders the timeline and tests sections of the build detail view.
+    /// Extracted for testability.
+    /// </summary>
+    internal static void RenderBuildDetailSections(
+        PanelRenderer ui,
+        List<string>? failedJobs,
+        List<(string RunName, string Title, string Error)>? failedTests)
+    {
+        // Timeline section
+        ui.RenderSectionTitle("Timeline");
+        if (failedJobs is null)
+        {
+            ui.RenderPanelLine("  [yellow]Timeline not available yet[/]");
+        }
+        else if (failedJobs.Count > 0)
+        {
+            foreach (var jobName in failedJobs.Take(15))
+            {
+                ui.RenderPanelLine($"  [red]X[/] {Markup.Escape(jobName)}");
+            }
+        }
+        else
+        {
+            ui.RenderPanelLine("  [green]No failed jobs[/]");
+        }
+        ui.RenderEmptyLine();
+
+        // Tests section
+        ui.RenderSectionTitle("Tests");
+        if (failedTests is null)
+        {
+            ui.RenderPanelLine("  [yellow]Tests not available yet[/]");
+        }
+        else if (failedTests.Count == 0)
+        {
+            ui.RenderPanelLine("  [green]All tests passed[/]");
+        }
+        else
+        {
+            foreach (var group in failedTests.GroupBy(t => t.RunName))
+            {
+                ui.RenderPanelLine($"  [bold yellow]{Markup.Escape(group.Key)}[/]");
+                var shown = 0;
+                var total = group.Count();
+                foreach (var test in group.Take(5))
+                {
+                    var title = test.Title.Length > 68 ? test.Title[..65] + "..." : test.Title;
+                    var error = test.Error;
+                    if (error.Length > 60)
+                    {
+                        error = error[..57] + "...";
+                    }
+                    error = error.ReplaceLineEndings(" ");
+                    ui.RenderPanelLine($"    [red]X[/] {Markup.Escape(title)}");
+                    if (!string.IsNullOrWhiteSpace(error))
+                    {
+                        ui.RenderPanelLine($"      [dim]{Markup.Escape(error)}[/]");
+                    }
+                    shown++;
+                }
+                if (total > shown)
+                {
+                    ui.RenderPanelLine($"    [dim]... {total - shown} more failure(s), press T to see all[/]");
+                }
+            }
+        }
     }
 
     /// <summary>
