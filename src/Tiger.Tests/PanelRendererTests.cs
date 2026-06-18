@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using Spectre.Console;
 using Spectre.Console.Rendering;
 using Spectre.Console.Testing;
@@ -6,72 +7,286 @@ using Xunit;
 
 namespace Tiger.Tests;
 
-public class PanelRendererTests
+public partial class PanelRendererTests
 {
+    /// <summary>
+    /// The exact ANSI sequence emitted by TestConsole.Clear():
+    /// \x1b[2J (erase display) + \x1b[3J (erase scrollback) + \x1b[1;1H (cursor home)
+    /// </summary>
+    private const string ClearSequence = "\x1b[2J\x1b[3J\x1b[1;1H";
+
+    /// <summary>
+    /// Terminal chrome sequences emitted by Spectre.Console around rendered content.
+    /// </summary>
+    private const string CursorHide = "\x1b[?25l";
+    private const string CursorShow = "\x1b[?25h";
+
+    /// <summary>
+    /// Strips all known terminal chrome (clear, cursor hide/show)
+    /// from TestConsole.EmitAnsiSequences() output, leaving only content ANSI.
+    /// Also normalizes OSC hyperlink IDs which are non-deterministic.
+    /// </summary>
+    internal static string StripChrome(string text) =>
+        NormalizeLinkIds(
+            text.Replace(ClearSequence, "")
+                .Replace(CursorHide, "")
+                .Replace(CursorShow, ""));
+
+    /// <summary>
+    /// Normalizes OSC 8 hyperlink sequences by removing the id=NNN parameter.
+    /// Spectre generates non-deterministic IDs for [link] markup.
+    /// Format: \x1b]8;id=123456;URL\x1b\ → \x1b]8;;URL\x1b\
+    /// </summary>
+    [GeneratedRegex(@"\x1b\]8;id=\d+;")]
+    private static partial Regex OscLinkIdRegex();
+
+    private static string NormalizeLinkIds(string text) =>
+        OscLinkIdRegex().Replace(text, "\x1b]8;;");
+
+    /// <summary>
+    /// Converts a multi-line string containing Spectre markup to the equivalent
+    /// ANSI-encoded string. Each line is independently converted. Use this to
+    /// write expected panel output in readable Spectre markup form and compare
+    /// against TestConsole().EmitAnsiSequences() output.
+    /// </summary>
+    internal static string MarkupToAnsi(string markupText)
+    {
+        var lines = markupText.Split('\n');
+        var result = string.Join("\n", lines.Select(line =>
+        {
+            if (string.IsNullOrEmpty(line))
+            {
+                return line;
+            }
+
+            var console = new TestConsole().EmitAnsiSequences().Width(400).Height(24);
+            console.Markup(line);
+            return console.Output;
+        }));
+        return NormalizeLinkIds(result);
+    }
+
+    /// <summary>
+    /// Extracts the last complete panel from accumulated output.
+    /// Useful for scroll tests where console.Output contains multiple renders.
+    /// </summary>
+    internal static string LastPanel(string strippedOutput)
+    {
+        var lastBorder = strippedOutput.LastIndexOf('╔');
+        if (lastBorder < 0)
+        {
+            return strippedOutput.Trim();
+        }
+
+        var lastEscape = strippedOutput.LastIndexOf('\x1b', lastBorder);
+        var start = lastEscape >= 0 ? lastEscape : lastBorder;
+        return strippedOutput[start..].Trim();
+    }
+
+    /// <summary>
+    /// Asserts that every bordered line in the panel output has the same
+    /// character width. This catches padding bugs where Markup.Remove().Length
+    /// doesn't match the actual visible width (e.g. Unicode wide chars).
+    /// </summary>
+    internal static void AssertPanelAlignment(string strippedOutput)
+    {
+        var lines = strippedOutput.Split('\n');
+        int? expectedWidth = null;
+        var lineNumber = 0;
+        foreach (var rawLine in lines)
+        {
+            lineNumber++;
+            var line = rawLine.TrimEnd('\r');
+            if (line.Length == 0)
+            {
+                continue;
+            }
+
+            // Any line containing box-drawing border characters is a panel line
+            if (line.Contains('║') || line.Contains('╔') || line.Contains('╠') || line.Contains('╚'))
+            {
+                var rightBorder = Math.Max(
+                    Math.Max(line.LastIndexOf('║'), line.LastIndexOf('╗')),
+                    Math.Max(line.LastIndexOf('╣'), line.LastIndexOf('╝')));
+                if (rightBorder >= 0)
+                {
+                    line = line[..(rightBorder + 1)];
+                }
+
+                if (expectedWidth == null)
+                {
+                    expectedWidth = line.Length;
+                }
+                else
+                {
+                    Assert.True(
+                        expectedWidth.Value == line.Length,
+                        $"Panel line {lineNumber} has width {line.Length}, expected {expectedWidth.Value}.\nLine: \"{line}\"");
+                }
+            }
+        }
+
+        Assert.NotNull(expectedWidth);
+    }
+
     private static PanelRenderer CreateRenderer(int width = 80, int height = 24)
     {
         var console = new TestConsole().Width(width).Height(height);
         return new PanelRenderer(console);
     }
 
-    // ── Content Capture ─────────────────────────────────────────────
+    // ── Content Rendering ────────────────────────────────────────────
 
     [Fact]
-    public void CaptureContent_CapturesAllLines()
+    public void RenderDetailPanel_RendersAllContentLines()
     {
-        var renderer = CreateRenderer();
-        var lines = renderer.CaptureContent(() =>
-        {
-            renderer.RenderPanelLine("Line 1");
-            renderer.RenderPanelLine("Line 2");
-            renderer.RenderEmptyLine();
-            renderer.RenderPanelLine("Line 3");
-        });
+        var console = new TestConsole().EmitAnsiSequences().Width(80).Height(24);
+        var renderer = new PanelRenderer(console);
 
-        Assert.Equal(4, lines.Count);
-        Assert.Equal("Line 1", lines[0]);
-        Assert.Equal("Line 2", lines[1]);
-        Assert.Equal("", lines[2]);
-        Assert.Equal("Line 3", lines[3]);
+        renderer.RenderDetailPanel(["Test"], null, ["Line 1", "Line 2", "", "Line 3"], "[blue]Esc[/] Back");
+
+        var actual = StripChrome(console.Output).ReplaceLineEndings("\n").Trim();
+        var expected = """
+            [dim]╔══════════════════════════════════════════════════════════════════════════════╗[/]
+            [dim]║[/] [bold orange1]TIGER[/] [dim]>[/] Test                                                                 [dim]║[/]
+            [dim]╠══════════════════════════════════════════════════════════════════════════════╣[/]
+            [dim]║[/] Line 1                                                                       [dim]║[/]
+            [dim]║[/] Line 2                                                                       [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/] Line 3                                                                       [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]╠══════════════════════════════════════════════════════════════════════════════╣[/]
+            [dim]║[/] [blue]Esc[/] Back                                                                     [dim]║[/]
+            [dim]╚══════════════════════════════════════════════════════════════════════════════╝[/]
+            """;
+        Assert.Equal(MarkupToAnsi(expected.ReplaceLineEndings("\n").Trim()), actual);
     }
 
     [Fact]
-    public void CaptureContent_SectionTitle_IncludesMarkup()
+    public void RenderDetailPanel_SectionTitle_RendersFormatted()
     {
-        var renderer = CreateRenderer();
-        var lines = renderer.CaptureContent(() =>
-        {
-            renderer.RenderSectionTitle("My Section");
-        });
+        var console = new TestConsole().EmitAnsiSequences().Width(80).Height(24);
+        var renderer = new PanelRenderer(console);
 
-        Assert.Single(lines);
-        Assert.Equal("[bold underline]My Section[/]", lines[0]);
+        renderer.RenderDetailPanel(["Test"], null, [PanelRenderer.FormatSectionTitle("My Section")], "[blue]Esc[/] Back");
+
+        var actual = StripChrome(console.Output).ReplaceLineEndings("\n").Trim();
+        var expected = """
+            [dim]╔══════════════════════════════════════════════════════════════════════════════╗[/]
+            [dim]║[/] [bold orange1]TIGER[/] [dim]>[/] Test                                                                 [dim]║[/]
+            [dim]╠══════════════════════════════════════════════════════════════════════════════╣[/]
+            [dim]║[/] [bold underline]My Section[/]                                                                   [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]╠══════════════════════════════════════════════════════════════════════════════╣[/]
+            [dim]║[/] [blue]Esc[/] Back                                                                     [dim]║[/]
+            [dim]╚══════════════════════════════════════════════════════════════════════════════╝[/]
+            """;
+        Assert.Equal(MarkupToAnsi(expected.ReplaceLineEndings("\n").Trim()), actual);
     }
 
     [Fact]
-    public void CaptureContent_Field_IncludesLabelAndValue()
+    public void RenderDetailPanel_Field_RendersLabelAndValue()
     {
-        var renderer = CreateRenderer();
-        var lines = renderer.CaptureContent(() =>
-        {
-            renderer.RenderField("Status", "running");
-        });
+        var console = new TestConsole().EmitAnsiSequences().Width(80).Height(24);
+        var renderer = new PanelRenderer(console);
 
-        Assert.Single(lines);
-        Assert.Equal("[bold]Status:[/] running", lines[0]);
+        renderer.RenderDetailPanel(["Test"], null, [PanelRenderer.FormatField("Status", "running")], "[blue]Esc[/] Back");
+
+        var actual = StripChrome(console.Output).ReplaceLineEndings("\n").Trim();
+        var expected = """
+            [dim]╔══════════════════════════════════════════════════════════════════════════════╗[/]
+            [dim]║[/] [bold orange1]TIGER[/] [dim]>[/] Test                                                                 [dim]║[/]
+            [dim]╠══════════════════════════════════════════════════════════════════════════════╣[/]
+            [dim]║[/] [bold]Status:[/] running                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]╠══════════════════════════════════════════════════════════════════════════════╣[/]
+            [dim]║[/] [blue]Esc[/] Back                                                                     [dim]║[/]
+            [dim]╚══════════════════════════════════════════════════════════════════════════════╝[/]
+            """;
+        Assert.Equal(MarkupToAnsi(expected.ReplaceLineEndings("\n").Trim()), actual);
     }
 
     [Fact]
-    public void CaptureContent_ReturnsLines()
+    public void RenderDetailPanel_Content_AppearsInOutput()
     {
-        var renderer = CreateRenderer();
-        var lines = renderer.CaptureContent(() =>
-        {
-            renderer.RenderPanelLine("stored");
-        });
+        var console = new TestConsole().EmitAnsiSequences().Width(80).Height(24);
+        var renderer = new PanelRenderer(console);
 
-        Assert.Single(lines);
-        Assert.Equal("stored", lines[0]);
+        renderer.RenderDetailPanel(["Test"], null, ["stored"], "[blue]Esc[/] Back");
+
+        var actual = StripChrome(console.Output).ReplaceLineEndings("\n").Trim();
+        var expected = """
+            [dim]╔══════════════════════════════════════════════════════════════════════════════╗[/]
+            [dim]║[/] [bold orange1]TIGER[/] [dim]>[/] Test                                                                 [dim]║[/]
+            [dim]╠══════════════════════════════════════════════════════════════════════════════╣[/]
+            [dim]║[/] stored                                                                       [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]╠══════════════════════════════════════════════════════════════════════════════╣[/]
+            [dim]║[/] [blue]Esc[/] Back                                                                     [dim]║[/]
+            [dim]╚══════════════════════════════════════════════════════════════════════════════╝[/]
+            """;
+        Assert.Equal(MarkupToAnsi(expected.ReplaceLineEndings("\n").Trim()), actual);
     }
 
     // ── Layout Calculations ─────────────────────────────────────────
@@ -147,6 +362,276 @@ public class PanelRendererTests
         Assert.EndsWith("...", plainResult);
     }
 
+    // ── Word Wrapping ───────────────────────────────────────────────
+
+    [Fact]
+    public void WrapMarkupLine_ShortLine_ReturnsUnchanged()
+    {
+        var result = PanelRenderer.WrapMarkupLine("hello world", 40);
+        var display = string.Join(Environment.NewLine, result);
+        Assert.Equal("hello world", display);
+    }
+
+    [Fact]
+    public void WrapMarkupLine_ExactFit_ReturnsUnchanged()
+    {
+        var result = PanelRenderer.WrapMarkupLine("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", 40);
+        var display = string.Join(Environment.NewLine, result);
+        Assert.Equal("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", display);
+    }
+
+    [Fact]
+    public void WrapMarkupLine_PlainTextWrapsAtWordBoundary()
+    {
+        var result = PanelRenderer.WrapMarkupLine("aaa bbb ccc ddd", 7);
+        var display = string.Join(Environment.NewLine, result);
+        var expected = """
+            aaa bbb
+            ccc ddd
+            """;
+        Assert.Equal(expected.Trim(), display);
+    }
+
+    [Fact]
+    public void WrapMarkupLine_PlainTextWrapsMultipleLines()
+    {
+        var result = PanelRenderer.WrapMarkupLine("the quick brown fox jumps over the lazy dog", 20);
+        var display = string.Join(Environment.NewLine, result);
+        var expected = """
+            the quick brown fox
+            jumps over the lazy
+            dog
+            """;
+        Assert.Equal(expected.Trim(), display);
+    }
+
+    [Fact]
+    public void WrapMarkupLine_PreservesMarkupAcrossWraps()
+    {
+        var result = PanelRenderer.WrapMarkupLine("[bold]hello world goodbye[/]", 11);
+        var display = string.Join(Environment.NewLine, result);
+        var expected = """
+            [bold]hello world[/]
+            [bold]goodbye[/]
+            """;
+        Assert.Equal(expected.Trim(), display);
+    }
+
+    [Fact]
+    public void WrapMarkupLine_NestedMarkupPreserved()
+    {
+        var result = PanelRenderer.WrapMarkupLine("[bold][red]aaa bbb ccc ddd[/][/]", 7);
+        var display = string.Join(Environment.NewLine, result);
+        var expected = """
+            [bold][red]aaa bbb[/][/]
+            [bold][red]ccc ddd[/][/]
+            """;
+        Assert.Equal(expected.Trim(), display);
+    }
+
+    [Fact]
+    public void WrapMarkupLine_LongWordForcesBreak()
+    {
+        var result = PanelRenderer.WrapMarkupLine("xxxxxxxxxxxxxxx", 10);
+        var display = string.Join(Environment.NewLine, result);
+        var expected = """
+            xxxxxxxxxx
+            xxxxx
+            """;
+        Assert.Equal(expected.Trim(), display);
+    }
+
+    [Fact]
+    public void WrapMarkupLine_EscapedBrackets_TreatedAsText()
+    {
+        var result = PanelRenderer.WrapMarkupLine("[[hello]]", 40);
+        var display = string.Join(Environment.NewLine, result);
+        Assert.Equal("[[hello]]", display);
+    }
+
+    [Fact]
+    public void WrapMarkupLine_MixedMarkupAndText()
+    {
+        var result = PanelRenderer.WrapMarkupLine("[bold]Status:[/] this is a long value that should wrap around", 30);
+        var display = string.Join(Environment.NewLine, result);
+        var expected = """
+            [bold]Status:[/] this is a long value
+            that should wrap around
+            """;
+        Assert.Equal(expected.Trim(), display);
+    }
+
+    [Fact]
+    public void WrapMarkupLine_EmptyString_ReturnsSingleEmpty()
+    {
+        var result = PanelRenderer.WrapMarkupLine("", 40);
+        var display = string.Join(Environment.NewLine, result);
+        Assert.Equal("", display);
+    }
+
+    [Fact]
+    public void RenderPanelLine_WrapsAndPreservesBorders_WhenTruncationDisabled()
+    {
+        var console = new TestConsole().EmitAnsiSequences().Width(44).Height(24);
+        var renderer = new PanelRenderer(console);
+        renderer.TruncationEnabled = false;
+
+        renderer.RenderDetailPanel(
+            ["Test"],
+            null,
+            ["the quick brown fox jumps over the lazy dog eats food"],
+            "[blue]Esc[/] Back");
+
+        var actual = StripChrome(console.Output).ReplaceLineEndings("\n").Trim();
+        var expected = """
+            [dim]╔══════════════════════════════════════════╗[/]
+            [dim]║[/] [bold orange1]TIGER[/] [dim]>[/] Test                             [dim]║[/]
+            [dim]╠══════════════════════════════════════════╣[/]
+            [dim]║[/] the quick brown fox jumps over the lazy  [dim]║[/]
+            [dim]║[/] dog eats food                            [dim]║[/]
+            [dim]║[/]                                          [dim]║[/]
+            [dim]║[/]                                          [dim]║[/]
+            [dim]║[/]                                          [dim]║[/]
+            [dim]║[/]                                          [dim]║[/]
+            [dim]║[/]                                          [dim]║[/]
+            [dim]║[/]                                          [dim]║[/]
+            [dim]║[/]                                          [dim]║[/]
+            [dim]║[/]                                          [dim]║[/]
+            [dim]║[/]                                          [dim]║[/]
+            [dim]║[/]                                          [dim]║[/]
+            [dim]║[/]                                          [dim]║[/]
+            [dim]║[/]                                          [dim]║[/]
+            [dim]║[/]                                          [dim]║[/]
+            [dim]║[/]                                          [dim]║[/]
+            [dim]║[/]                                          [dim]║[/]
+            [dim]║[/]                                          [dim]║[/]
+            [dim]╠══════════════════════════════════════════╣[/]
+            [dim]║[/] [blue]Esc[/] Back                                 [dim]║[/]
+            [dim]╚══════════════════════════════════════════╝[/]
+            """;
+        Assert.Equal(MarkupToAnsi(expected.ReplaceLineEndings("\n").Trim()), actual);
+    }
+
+    [Fact]
+    public void RenderPanelLine_TruncatesAndPreservesBorders_WhenTruncationEnabled()
+    {
+        var console = new TestConsole().EmitAnsiSequences().Width(44).Height(24);
+        var renderer = new PanelRenderer(console);
+        renderer.TruncationEnabled = true;
+
+        renderer.RenderDetailPanel(
+            ["Test"],
+            null,
+            ["the quick brown fox jumps over the lazy dog eats food"],
+            "[blue]Esc[/] Back");
+
+        var actual = StripChrome(console.Output).ReplaceLineEndings("\n").Trim();
+        var expected = """
+            [dim]╔══════════════════════════════════════════╗[/]
+            [dim]║[/] [bold orange1]TIGER[/] [dim]>[/] Test                             [dim]║[/]
+            [dim]╠══════════════════════════════════════════╣[/]
+            [dim]║[/] the quick brown fox jumps over the la... [dim]║[/]
+            [dim]║[/]                                          [dim]║[/]
+            [dim]║[/]                                          [dim]║[/]
+            [dim]║[/]                                          [dim]║[/]
+            [dim]║[/]                                          [dim]║[/]
+            [dim]║[/]                                          [dim]║[/]
+            [dim]║[/]                                          [dim]║[/]
+            [dim]║[/]                                          [dim]║[/]
+            [dim]║[/]                                          [dim]║[/]
+            [dim]║[/]                                          [dim]║[/]
+            [dim]║[/]                                          [dim]║[/]
+            [dim]║[/]                                          [dim]║[/]
+            [dim]║[/]                                          [dim]║[/]
+            [dim]║[/]                                          [dim]║[/]
+            [dim]║[/]                                          [dim]║[/]
+            [dim]║[/]                                          [dim]║[/]
+            [dim]║[/]                                          [dim]║[/]
+            [dim]║[/]                                          [dim]║[/]
+            [dim]╠══════════════════════════════════════════╣[/]
+            [dim]║[/] [blue]Esc[/] Back                                 [dim]║[/]
+            [dim]╚══════════════════════════════════════════╝[/]
+            """;
+        Assert.Equal(MarkupToAnsi(expected.ReplaceLineEndings("\n").Trim()), actual);
+    }
+
+    [Fact]
+    public void RenderPanelLine_WrappedDiagnosisPreservesBorders()
+    {
+        var console = new TestConsole().EmitAnsiSequences().Width(54).Height(24);
+        var renderer = new PanelRenderer(console);
+        renderer.TruncationEnabled = false;
+
+        var diagLines = new List<string>
+        {
+            "[bold underline]Diagnosis[/]",
+            "Build failed due to missing NuGet package Microsoft.Extensions.Logging version 8.0.0 which is required by the project.",
+        };
+
+        renderer.RenderDetailPanel(
+            ["Analysis", "Build #123"],
+            null,
+            diagLines,
+            "[blue]Esc[/] Back");
+
+        var actual = StripChrome(console.Output).ReplaceLineEndings("\n").Trim();
+        var expected = """
+            [dim]╔════════════════════════════════════════════════════╗[/]
+            [dim]║[/] [bold orange1]TIGER[/] [dim]>[/] Analysis > Build #123                      [dim]║[/]
+            [dim]╠════════════════════════════════════════════════════╣[/]
+            [dim]║[/] [bold underline]Diagnosis[/]                                          [dim]║[/]
+            [dim]║[/] Build failed due to missing NuGet package          [dim]║[/]
+            [dim]║[/] Microsoft.Extensions.Logging version 8.0.0 which   [dim]║[/]
+            [dim]║[/] is required by the project.                        [dim]║[/]
+            [dim]║[/]                                                    [dim]║[/]
+            [dim]║[/]                                                    [dim]║[/]
+            [dim]║[/]                                                    [dim]║[/]
+            [dim]║[/]                                                    [dim]║[/]
+            [dim]║[/]                                                    [dim]║[/]
+            [dim]║[/]                                                    [dim]║[/]
+            [dim]║[/]                                                    [dim]║[/]
+            [dim]║[/]                                                    [dim]║[/]
+            [dim]║[/]                                                    [dim]║[/]
+            [dim]║[/]                                                    [dim]║[/]
+            [dim]║[/]                                                    [dim]║[/]
+            [dim]║[/]                                                    [dim]║[/]
+            [dim]║[/]                                                    [dim]║[/]
+            [dim]║[/]                                                    [dim]║[/]
+            [dim]╠════════════════════════════════════════════════════╣[/]
+            [dim]║[/] [blue]Esc[/] Back                                           [dim]║[/]
+            [dim]╚════════════════════════════════════════════════════╝[/]
+            """;
+        Assert.Equal(MarkupToAnsi(expected.ReplaceLineEndings("\n").Trim()), actual);
+    }
+
+    // ── Tokenizer ───────────────────────────────────────────────────
+
+    [Fact]
+    public void TokenizeMarkup_PlainText()
+    {
+        var tokens = PanelRenderer.TokenizeMarkup("hello world");
+        Assert.Single(tokens);
+        Assert.False(tokens[0].IsTag);
+        Assert.Equal("hello world", tokens[0].Text);
+    }
+
+    [Fact]
+    public void TokenizeMarkup_TagsAndText()
+    {
+        var tokens = PanelRenderer.TokenizeMarkup("[bold]hello[/]");
+        var display = string.Join("", tokens.Select(t => t.IsTag ? $"<{t.Text}>" : t.Text));
+        Assert.Equal("<[bold]>hello<[/]>", display);
+    }
+
+    [Fact]
+    public void TokenizeMarkup_EscapedBrackets()
+    {
+        var tokens = PanelRenderer.TokenizeMarkup("[[text]]");
+        var display = string.Join("", tokens.Select(t => t.Text));
+        Assert.Equal("[text]", display);
+        Assert.True(tokens.All(t => !t.IsTag));
+    }
+
     // ── Hotkey Formatting ───────────────────────────────────────────
 
     [Fact]
@@ -210,84 +695,134 @@ public class PanelRendererTests
     [Fact]
     public void RenderDetailFrame_IncludesBreadcrumbs()
     {
-        var console = new TestConsole().Width(80).Height(24);
+        var console = new TestConsole().EmitAnsiSequences().Width(80).Height(24);
         var renderer = new PanelRenderer(console);
-        var lines = renderer.CaptureContent(() =>
-        {
-            renderer.RenderPanelLine("Content here");
-        });
 
-        renderer.RenderDetailFrame(["Builds", "#123"], null, lines, 0, "[blue]Esc[/] Back");
+        renderer.RenderDetailFrame(["Builds", "#123"], null, ["Content here"], 0, "[blue]Esc[/] Back");
 
-        var output = console.Output;
-        Assert.Contains("TIGER", output);
-        Assert.Contains("Builds", output);
-        Assert.Contains("#123", output);
-        Assert.Contains("Content here", output);
+        var actual = StripChrome(console.Output).ReplaceLineEndings("\n").Trim();
+        var expected = """
+            [dim]╔══════════════════════════════════════════════════════════════════════════════╗[/]
+            [dim]║[/] [bold orange1]TIGER[/] [dim]>[/] Builds > #123                                                        [dim]║[/]
+            [dim]╠══════════════════════════════════════════════════════════════════════════════╣[/]
+            [dim]║[/] Content here                                                                 [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]╠══════════════════════════════════════════════════════════════════════════════╣[/]
+            [dim]║[/] [blue]Esc[/] Back                                                                     [dim]║[/]
+            [dim]╚══════════════════════════════════════════════════════════════════════════════╝[/]
+            """;
+        Assert.Equal(MarkupToAnsi(expected.ReplaceLineEndings("\n").Trim()), actual);
     }
 
     [Fact]
     public void RenderDetailFrame_ShowsContext()
     {
-        var console = new TestConsole().Width(80).Height(24);
+        var console = new TestConsole().EmitAnsiSequences().Width(80).Height(24);
         var renderer = new PanelRenderer(console);
-        var lines = renderer.CaptureContent(() =>
-        {
-            renderer.RenderPanelLine("data");
-        });
 
-        renderer.RenderDetailFrame(["Tests"], "3 failures", lines, 0, "[blue]Esc[/] Back");
+        renderer.RenderDetailFrame(["Tests"], "3 failures", ["data"], 0, "[blue]Esc[/] Back");
 
-        var output = console.Output;
-        Assert.Contains("3 failures", output);
+        var actual = StripChrome(console.Output).ReplaceLineEndings("\n").Trim();
+        var expected = """
+            [dim]╔══════════════════════════════════════════════════════════════════════════════╗[/]
+            [dim]║[/] [bold orange1]TIGER[/] [dim]>[/] Tests                                                                [dim]║[/]
+            [dim]║[/] 3 failures                                                                   [dim]║[/]
+            [dim]╠══════════════════════════════════════════════════════════════════════════════╣[/]
+            [dim]║[/] data                                                                         [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]╠══════════════════════════════════════════════════════════════════════════════╣[/]
+            [dim]║[/] [blue]Esc[/] Back                                                                     [dim]║[/]
+            [dim]╚══════════════════════════════════════════════════════════════════════════════╝[/]
+            """;
+        Assert.Equal(MarkupToAnsi(expected.ReplaceLineEndings("\n").Trim()), actual);
     }
 
     [Fact]
     public void RenderDetailFrame_PaginatesContent()
     {
-        var console = new TestConsole().Width(80).Height(12);
+        var console = new TestConsole().EmitAnsiSequences().Width(80).Height(12);
         // Height 12: available = 12 - 3 header - 3 footer = 6 lines
         var renderer = new PanelRenderer(console);
-        var lines = renderer.CaptureContent(() =>
-        {
-            for (var i = 0; i < 20; i++)
-            {
-                renderer.RenderPanelLine($"Line {i}");
-            }
-        });
+        var lines = Enumerable.Range(0, 20).Select(i => $"Line {i}").ToList();
 
         renderer.RenderDetailFrame(["Test"], null, lines, 0, "[blue]Esc[/] Back");
 
-        var output = console.Output;
-        // First 6 lines should be visible
-        Assert.Contains("Line 0", output);
-        Assert.Contains("Line 5", output);
-        // Line 6+ should NOT be visible (paginated away)
-        Assert.DoesNotContain("Line 6", output);
-        // Scroll indicator should show
-        Assert.Contains("1-6/20", output);
+        var actual = StripChrome(console.Output).ReplaceLineEndings("\n").Trim();
+        var expected = """
+            [dim]╔══════════════════════════════════════════════════════════════════════════════╗[/]
+            [dim]║[/] [bold orange1]TIGER[/] [dim]>[/] Test                                                                 [dim]║[/]
+            [dim]╠══════════════════════════════════════════════════════════════════════════════╣[/]
+            [dim]║[/] Line 0                                                                       [dim]║[/]
+            [dim]║[/] Line 1                                                                       [dim]║[/]
+            [dim]║[/] Line 2                                                                       [dim]║[/]
+            [dim]║[/] Line 3                                                                       [dim]║[/]
+            [dim]║[/] Line 4                                                                       [dim]║[/]
+            [dim]║[/] Line 5                                                                       [dim]║[/]
+            [dim]╠══════════════════════════════════════════════════════════════════════════════╣[/]
+            [dim]║[/] [blue]Esc[/] Back  [dim](1-6/20 Up/Dn)[/]                                                     [dim]║[/]
+            [dim]╚══════════════════════════════════════════════════════════════════════════════╝[/]
+            """;
+        Assert.Equal(MarkupToAnsi(expected.ReplaceLineEndings("\n").Trim()), actual);
+        Assert.DoesNotContain("Line 6", actual);
     }
 
     [Fact]
     public void RenderDetailFrame_ScrollOffset_ShowsLaterContent()
     {
-        var console = new TestConsole().Width(80).Height(12);
+        var console = new TestConsole().EmitAnsiSequences().Width(80).Height(12);
         var renderer = new PanelRenderer(console);
-        var lines = renderer.CaptureContent(() =>
-        {
-            for (var i = 0; i < 20; i++)
-            {
-                renderer.RenderPanelLine($"Line {i}");
-            }
-        });
+        var lines = Enumerable.Range(0, 20).Select(i => $"Line {i}").ToList();
 
         renderer.RenderDetailFrame(["Test"], null, lines, 5, "[blue]Esc[/] Back");
 
-        var output = console.Output;
-        Assert.DoesNotContain("Line 4", output);
-        Assert.Contains("Line 5", output);
-        Assert.Contains("Line 10", output);
-        Assert.Contains("6-11/20", output);
+        var actual = StripChrome(console.Output).ReplaceLineEndings("\n").Trim();
+        var expected = """
+            [dim]╔══════════════════════════════════════════════════════════════════════════════╗[/]
+            [dim]║[/] [bold orange1]TIGER[/] [dim]>[/] Test                                                                 [dim]║[/]
+            [dim]╠══════════════════════════════════════════════════════════════════════════════╣[/]
+            [dim]║[/] Line 5                                                                       [dim]║[/]
+            [dim]║[/] Line 6                                                                       [dim]║[/]
+            [dim]║[/] Line 7                                                                       [dim]║[/]
+            [dim]║[/] Line 8                                                                       [dim]║[/]
+            [dim]║[/] Line 9                                                                       [dim]║[/]
+            [dim]║[/] Line 10                                                                      [dim]║[/]
+            [dim]╠══════════════════════════════════════════════════════════════════════════════╣[/]
+            [dim]║[/] [blue]Esc[/] Back  [dim](6-11/20 Up/Dn)[/]                                                    [dim]║[/]
+            [dim]╚══════════════════════════════════════════════════════════════════════════════╝[/]
+            """;
+        Assert.Equal(MarkupToAnsi(expected.ReplaceLineEndings("\n").Trim()), actual);
+        Assert.DoesNotContain("Line 4", actual);
     }
 
     // ── HandleDetailScroll ─────────────────────────────────────────
@@ -298,31 +833,53 @@ public class PanelRendererTests
     [Fact]
     public void HandleDetailScroll_DownArrow_ScrollsContent()
     {
-        var console = new TestConsole().Width(80).Height(12);
+        var console = new TestConsole().EmitAnsiSequences().Width(80).Height(12);
         // Height 12: available = 12 - 3 header - 3 footer = 6 lines
         var renderer = new PanelRenderer(console);
 
         renderer.RenderDetailPanel(
             ["Test"],
             null,
-            () =>
-            {
-                for (var i = 0; i < 20; i++)
-                {
-                    renderer.RenderPanelLine($"Line {i}");
-                }
-            },
+            Enumerable.Range(0, 20).Select(i => $"Line {i}").ToList(),
             "[blue]Esc[/] Back");
 
-        // Initial render should show lines 1-6
-        Assert.Contains("1-6/20", console.Output);
+        var actual = StripChrome(console.Output).ReplaceLineEndings("\n").Trim();
+        var initialExpected = """
+            [dim]╔══════════════════════════════════════════════════════════════════════════════╗[/]
+            [dim]║[/] [bold orange1]TIGER[/] [dim]>[/] Test                                                                 [dim]║[/]
+            [dim]╠══════════════════════════════════════════════════════════════════════════════╣[/]
+            [dim]║[/] Line 0                                                                       [dim]║[/]
+            [dim]║[/] Line 1                                                                       [dim]║[/]
+            [dim]║[/] Line 2                                                                       [dim]║[/]
+            [dim]║[/] Line 3                                                                       [dim]║[/]
+            [dim]║[/] Line 4                                                                       [dim]║[/]
+            [dim]║[/] Line 5                                                                       [dim]║[/]
+            [dim]╠══════════════════════════════════════════════════════════════════════════════╣[/]
+            [dim]║[/] [blue]Esc[/] Back  [dim](1-6/20 Up/Dn)[/]                                                     [dim]║[/]
+            [dim]╚══════════════════════════════════════════════════════════════════════════════╝[/]
+            """;
+        Assert.Equal(MarkupToAnsi(initialExpected.ReplaceLineEndings("\n").Trim()), actual);
 
         // Scroll down one line
         var handled = renderer.HandleDetailScroll(MakeKey(ConsoleKey.DownArrow));
         Assert.True(handled);
 
-        // After scrolling, indicator should show 2-7
-        Assert.Contains("2-7/20", console.Output);
+        var lastPanel = LastPanel(StripChrome(console.Output).ReplaceLineEndings("\n"));
+        var scrolledExpected = """
+            [dim]╔══════════════════════════════════════════════════════════════════════════════╗[/]
+            [dim]║[/] [bold orange1]TIGER[/] [dim]>[/] Test                                                                 [dim]║[/]
+            [dim]╠══════════════════════════════════════════════════════════════════════════════╣[/]
+            [dim]║[/] Line 1                                                                       [dim]║[/]
+            [dim]║[/] Line 2                                                                       [dim]║[/]
+            [dim]║[/] Line 3                                                                       [dim]║[/]
+            [dim]║[/] Line 4                                                                       [dim]║[/]
+            [dim]║[/] Line 5                                                                       [dim]║[/]
+            [dim]║[/] Line 6                                                                       [dim]║[/]
+            [dim]╠══════════════════════════════════════════════════════════════════════════════╣[/]
+            [dim]║[/] [blue]Esc[/] Back  [dim](2-7/20 Up/Dn)[/]                                                     [dim]║[/]
+            [dim]╚══════════════════════════════════════════════════════════════════════════════╝[/]
+            """;
+        Assert.Equal(MarkupToAnsi(scrolledExpected.ReplaceLineEndings("\n").Trim()), lastPanel);
     }
 
     [Fact]
@@ -334,13 +891,7 @@ public class PanelRendererTests
         renderer.RenderDetailPanel(
             ["Test"],
             null,
-            () =>
-            {
-                for (var i = 0; i < 20; i++)
-                {
-                    renderer.RenderPanelLine($"Line {i}");
-                }
-            },
+            Enumerable.Range(0, 20).Select(i => $"Line {i}").ToList(),
             "[blue]Esc[/] Back");
 
         var handled = renderer.HandleDetailScroll(MakeKey(ConsoleKey.T));
@@ -356,10 +907,7 @@ public class PanelRendererTests
         renderer.RenderDetailPanel(
             ["Test"],
             null,
-            () =>
-            {
-                renderer.RenderPanelLine("Short content");
-            },
+            ["Short content"],
             "[blue]Esc[/] Back");
 
         var handled = renderer.HandleDetailScroll(MakeKey(ConsoleKey.DownArrow));
@@ -369,19 +917,13 @@ public class PanelRendererTests
     [Fact]
     public void HandleDetailScroll_PreservesOffset_AcrossMultipleScrolls()
     {
-        var console = new TestConsole().Width(80).Height(12);
+        var console = new TestConsole().EmitAnsiSequences().Width(80).Height(12);
         var renderer = new PanelRenderer(console);
 
         renderer.RenderDetailPanel(
             ["Test"],
             null,
-            () =>
-            {
-                for (var i = 0; i < 20; i++)
-                {
-                    renderer.RenderPanelLine($"Line {i}");
-                }
-            },
+            Enumerable.Range(0, 20).Select(i => $"Line {i}").ToList(),
             "[blue]Esc[/] Back");
 
         // Scroll down 3 times
@@ -389,8 +931,22 @@ public class PanelRendererTests
         renderer.HandleDetailScroll(MakeKey(ConsoleKey.DownArrow));
         renderer.HandleDetailScroll(MakeKey(ConsoleKey.DownArrow));
 
-        // Scroll indicator should show offset 3: lines 4-9/20
-        Assert.Contains("4-9/20", console.Output);
+        var actual = LastPanel(StripChrome(console.Output).ReplaceLineEndings("\n"));
+        var expected = """
+            [dim]╔══════════════════════════════════════════════════════════════════════════════╗[/]
+            [dim]║[/] [bold orange1]TIGER[/] [dim]>[/] Test                                                                 [dim]║[/]
+            [dim]╠══════════════════════════════════════════════════════════════════════════════╣[/]
+            [dim]║[/] Line 3                                                                       [dim]║[/]
+            [dim]║[/] Line 4                                                                       [dim]║[/]
+            [dim]║[/] Line 5                                                                       [dim]║[/]
+            [dim]║[/] Line 6                                                                       [dim]║[/]
+            [dim]║[/] Line 7                                                                       [dim]║[/]
+            [dim]║[/] Line 8                                                                       [dim]║[/]
+            [dim]╠══════════════════════════════════════════════════════════════════════════════╣[/]
+            [dim]║[/] [blue]Esc[/] Back  [dim](4-9/20 Up/Dn)[/]                                                     [dim]║[/]
+            [dim]╚══════════════════════════════════════════════════════════════════════════════╝[/]
+            """;
+        Assert.Equal(MarkupToAnsi(expected.ReplaceLineEndings("\n").Trim()), actual);
     }
 
     [Fact]
@@ -398,46 +954,77 @@ public class PanelRendererTests
     {
         // Verifies that calling RenderDetailPanel again resets scroll to 0.
         // This is why callers must guard re-renders behind a needsRender flag.
-        var console = new TestConsole().Width(80).Height(12);
+        var console = new TestConsole().EmitAnsiSequences().Width(80).Height(12);
         var renderer = new PanelRenderer(console);
 
         renderer.RenderDetailPanel(
             ["Test"],
             null,
-            () =>
-            {
-                for (var i = 0; i < 20; i++)
-                {
-                    renderer.RenderPanelLine($"Line {i}");
-                }
-            },
+            Enumerable.Range(0, 20).Select(i => $"Line {i}").ToList(),
             "[blue]Esc[/] Back");
 
         // Scroll down
         renderer.HandleDetailScroll(MakeKey(ConsoleKey.DownArrow));
         renderer.HandleDetailScroll(MakeKey(ConsoleKey.DownArrow));
-        Assert.Contains("3-8/20", console.Output);
+        var scrolledPanel = LastPanel(StripChrome(console.Output).ReplaceLineEndings("\n"));
+        var scrolledExpected = """
+            [dim]╔══════════════════════════════════════════════════════════════════════════════╗[/]
+            [dim]║[/] [bold orange1]TIGER[/] [dim]>[/] Test                                                                 [dim]║[/]
+            [dim]╠══════════════════════════════════════════════════════════════════════════════╣[/]
+            [dim]║[/] Line 2                                                                       [dim]║[/]
+            [dim]║[/] Line 3                                                                       [dim]║[/]
+            [dim]║[/] Line 4                                                                       [dim]║[/]
+            [dim]║[/] Line 5                                                                       [dim]║[/]
+            [dim]║[/] Line 6                                                                       [dim]║[/]
+            [dim]║[/] Line 7                                                                       [dim]║[/]
+            [dim]╠══════════════════════════════════════════════════════════════════════════════╣[/]
+            [dim]║[/] [blue]Esc[/] Back  [dim](3-8/20 Up/Dn)[/]                                                     [dim]║[/]
+            [dim]╚══════════════════════════════════════════════════════════════════════════════╝[/]
+            """;
+        Assert.Equal(MarkupToAnsi(scrolledExpected.ReplaceLineEndings("\n").Trim()), scrolledPanel);
 
         // Re-render (simulates a toggle change)
         renderer.RenderDetailPanel(
             ["Test"],
             null,
-            () =>
-            {
-                for (var i = 0; i < 20; i++)
-                {
-                    renderer.RenderPanelLine($"Line {i}");
-                }
-            },
+            Enumerable.Range(0, 20).Select(i => $"Line {i}").ToList(),
             "[blue]Esc[/] Back");
+
+        var rerenderedPanel = LastPanel(StripChrome(console.Output).ReplaceLineEndings("\n"));
+        var resetExpected = """
+            [dim]╔══════════════════════════════════════════════════════════════════════════════╗[/]
+            [dim]║[/] [bold orange1]TIGER[/] [dim]>[/] Test                                                                 [dim]║[/]
+            [dim]╠══════════════════════════════════════════════════════════════════════════════╣[/]
+            [dim]║[/] Line 0                                                                       [dim]║[/]
+            [dim]║[/] Line 1                                                                       [dim]║[/]
+            [dim]║[/] Line 2                                                                       [dim]║[/]
+            [dim]║[/] Line 3                                                                       [dim]║[/]
+            [dim]║[/] Line 4                                                                       [dim]║[/]
+            [dim]║[/] Line 5                                                                       [dim]║[/]
+            [dim]╠══════════════════════════════════════════════════════════════════════════════╣[/]
+            [dim]║[/] [blue]Esc[/] Back  [dim](1-6/20 Up/Dn)[/]                                                     [dim]║[/]
+            [dim]╚══════════════════════════════════════════════════════════════════════════════╝[/]
+            """;
+        Assert.Equal(MarkupToAnsi(resetExpected.ReplaceLineEndings("\n").Trim()), rerenderedPanel);
 
         // Scrolling down once from reset should give 2-7, not 4-9
         renderer.HandleDetailScroll(MakeKey(ConsoleKey.DownArrow));
-        // Find the LAST occurrence of the scroll indicator pattern
-        var output = console.Output;
-        var lastIndicator = output.LastIndexOf("/20");
-        var snippet = output.Substring(lastIndicator - 5, 8);
-        Assert.Contains("2-7", snippet);
+        var lastPanel = LastPanel(StripChrome(console.Output).ReplaceLineEndings("\n"));
+        var afterResetScrollExpected = """
+            [dim]╔══════════════════════════════════════════════════════════════════════════════╗[/]
+            [dim]║[/] [bold orange1]TIGER[/] [dim]>[/] Test                                                                 [dim]║[/]
+            [dim]╠══════════════════════════════════════════════════════════════════════════════╣[/]
+            [dim]║[/] Line 1                                                                       [dim]║[/]
+            [dim]║[/] Line 2                                                                       [dim]║[/]
+            [dim]║[/] Line 3                                                                       [dim]║[/]
+            [dim]║[/] Line 4                                                                       [dim]║[/]
+            [dim]║[/] Line 5                                                                       [dim]║[/]
+            [dim]║[/] Line 6                                                                       [dim]║[/]
+            [dim]╠══════════════════════════════════════════════════════════════════════════════╣[/]
+            [dim]║[/] [blue]Esc[/] Back  [dim](2-7/20 Up/Dn)[/]                                                     [dim]║[/]
+            [dim]╚══════════════════════════════════════════════════════════════════════════════╝[/]
+            """;
+        Assert.Equal(MarkupToAnsi(afterResetScrollExpected.ReplaceLineEndings("\n").Trim()), lastPanel);
     }
 
     // ── No Unicode in rendered output ───────────────────────────────
@@ -488,64 +1075,139 @@ public class PanelRendererTests
     [Fact]
     public void HelixWorkItem_SectionTitle_IncludesFailed()
     {
-        var renderer = CreateRenderer();
-        var lines = renderer.CaptureContent(() =>
-        {
-            // Mirrors BuildBrowser.RenderBuildDetail helix section
-            var count = 2;
-            renderer.RenderSectionTitle($"Failed Helix Work Items ({count})");
-        });
+        var console = new TestConsole().EmitAnsiSequences().Width(80).Height(24);
+        var renderer = new PanelRenderer(console);
 
-        Assert.Single(lines);
-        Assert.Contains("Failed Helix Work Items", lines[0]);
+        renderer.RenderDetailPanel(["Test"], null, [PanelRenderer.FormatSectionTitle("Failed Helix Work Items (2)")], "[blue]Esc[/] Back");
+
+        var actual = StripChrome(console.Output).ReplaceLineEndings("\n").Trim();
+        var expected = """
+            [dim]╔══════════════════════════════════════════════════════════════════════════════╗[/]
+            [dim]║[/] [bold orange1]TIGER[/] [dim]>[/] Test                                                                 [dim]║[/]
+            [dim]╠══════════════════════════════════════════════════════════════════════════════╣[/]
+            [dim]║[/] [bold underline]Failed Helix Work Items (2)[/]                                                  [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]╠══════════════════════════════════════════════════════════════════════════════╣[/]
+            [dim]║[/] [blue]Esc[/] Back                                                                     [dim]║[/]
+            [dim]╚══════════════════════════════════════════════════════════════════════════════╝[/]
+            """;
+        Assert.Equal(MarkupToAnsi(expected.ReplaceLineEndings("\n").Trim()), actual);
     }
 
     [Fact]
     public void HelixWorkItem_Format_IncludesExitCode()
     {
-        var renderer = CreateRenderer();
-        var lines = renderer.CaptureContent(() =>
-        {
-            // Mirrors the per-item rendering in BuildBrowser
-            var wi = "workitem1";
-            var job = "job-abc123";
-            int? exitCode = 1;
-            var isDeadletter = false;
-            var exitInfo = exitCode is not null ? $" exit {exitCode}" : "";
-            var extra = isDeadletter ? " [red]deadletter[/]" : "";
-            var color = (exitCode ?? 1) == 0 ? "green" : "red";
-            renderer.RenderPanelLine($"  [{color}]X[/] {Markup.Escape(wi)}  [dim]{Markup.Escape(job)}[/]{exitInfo}{extra}");
-        });
+        var console = new TestConsole().EmitAnsiSequences().Width(120).Height(24);
+        var renderer = new PanelRenderer(console);
 
-        Assert.Single(lines);
-        var plain = Markup.Remove(lines[0]);
-        Assert.Contains("workitem1", plain);
-        Assert.Contains("job-abc123", plain);
-        Assert.Contains("exit 1", plain);
+        var wi = "workitem1";
+        var job = "job-abc123";
+        int? exitCode = 1;
+        var isDeadletter = false;
+        var exitInfo = exitCode is not null ? $" exit {exitCode}" : "";
+        var extra = isDeadletter ? " [red]deadletter[/]" : "";
+        var color = (exitCode ?? 1) == 0 ? "green" : "red";
+
+        renderer.RenderDetailPanel(
+            ["Test"],
+            null,
+            [$"  [{color}]X[/] {Markup.Escape(wi)}  [dim]{Markup.Escape(job)}[/]{exitInfo}{extra}"],
+            "[blue]Esc[/] Back");
+
+        var actual = StripChrome(console.Output).ReplaceLineEndings("\n").Trim();
+        var expected = """
+            [dim]╔══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╗[/]
+            [dim]║[/] [bold orange1]TIGER[/] [dim]>[/] Test                                                                                                         [dim]║[/]
+            [dim]╠══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╣[/]
+            [dim]║[/]   [red]X[/] workitem1  [dim]job-abc123[/] exit 1                                                                                     [dim]║[/]
+            [dim]║[/]                                                                                                                      [dim]║[/]
+            [dim]║[/]                                                                                                                      [dim]║[/]
+            [dim]║[/]                                                                                                                      [dim]║[/]
+            [dim]║[/]                                                                                                                      [dim]║[/]
+            [dim]║[/]                                                                                                                      [dim]║[/]
+            [dim]║[/]                                                                                                                      [dim]║[/]
+            [dim]║[/]                                                                                                                      [dim]║[/]
+            [dim]║[/]                                                                                                                      [dim]║[/]
+            [dim]║[/]                                                                                                                      [dim]║[/]
+            [dim]║[/]                                                                                                                      [dim]║[/]
+            [dim]║[/]                                                                                                                      [dim]║[/]
+            [dim]║[/]                                                                                                                      [dim]║[/]
+            [dim]║[/]                                                                                                                      [dim]║[/]
+            [dim]║[/]                                                                                                                      [dim]║[/]
+            [dim]║[/]                                                                                                                      [dim]║[/]
+            [dim]║[/]                                                                                                                      [dim]║[/]
+            [dim]║[/]                                                                                                                      [dim]║[/]
+            [dim]╠══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╣[/]
+            [dim]║[/] [blue]Esc[/] Back                                                                                                             [dim]║[/]
+            [dim]╚══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╝[/]
+            """;
+        Assert.Equal(MarkupToAnsi(expected.ReplaceLineEndings("\n").Trim()), actual);
     }
 
     [Fact]
     public void HelixWorkItem_Deadletter_Format_IncludesExitCodeAndDeadletter()
     {
-        var renderer = CreateRenderer();
-        var lines = renderer.CaptureContent(() =>
-        {
-            var wi = "workitem2";
-            var job = "job-def456";
-            int? exitCode = -1;
-            var isDeadletter = true;
-            var exitInfo = exitCode is not null ? $" exit {exitCode}" : "";
-            var extra = isDeadletter ? " [red]deadletter[/]" : "";
-            var color = (exitCode ?? 1) == 0 ? "green" : "red";
-            renderer.RenderPanelLine($"  [{color}]X[/] {Markup.Escape(wi)}  [dim]{Markup.Escape(job)}[/]{exitInfo}{extra}");
-        });
+        var console = new TestConsole().EmitAnsiSequences().Width(120).Height(24);
+        var renderer = new PanelRenderer(console);
 
-        Assert.Single(lines);
-        var plain = Markup.Remove(lines[0]);
-        Assert.Contains("workitem2", plain);
-        Assert.Contains("job-def456", plain);
-        Assert.Contains("exit -1", plain);
-        Assert.Contains("deadletter", plain);
+        var wi = "workitem2";
+        var job = "job-def456";
+        int? exitCode = -1;
+        var isDeadletter = true;
+        var exitInfo = exitCode is not null ? $" exit {exitCode}" : "";
+        var extra = isDeadletter ? " [red]deadletter[/]" : "";
+        var color = (exitCode ?? 1) == 0 ? "green" : "red";
+
+        renderer.RenderDetailPanel(
+            ["Test"],
+            null,
+            [$"  [{color}]X[/] {Markup.Escape(wi)}  [dim]{Markup.Escape(job)}[/]{exitInfo}{extra}"],
+            "[blue]Esc[/] Back");
+
+        var actual = StripChrome(console.Output).ReplaceLineEndings("\n").Trim();
+        var expected = """
+            [dim]╔══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╗[/]
+            [dim]║[/] [bold orange1]TIGER[/] [dim]>[/] Test                                                                                                         [dim]║[/]
+            [dim]╠══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╣[/]
+            [dim]║[/]   [red]X[/] workitem2  [dim]job-def456[/] exit -1 [red]deadletter[/]                                                                         [dim]║[/]
+            [dim]║[/]                                                                                                                      [dim]║[/]
+            [dim]║[/]                                                                                                                      [dim]║[/]
+            [dim]║[/]                                                                                                                      [dim]║[/]
+            [dim]║[/]                                                                                                                      [dim]║[/]
+            [dim]║[/]                                                                                                                      [dim]║[/]
+            [dim]║[/]                                                                                                                      [dim]║[/]
+            [dim]║[/]                                                                                                                      [dim]║[/]
+            [dim]║[/]                                                                                                                      [dim]║[/]
+            [dim]║[/]                                                                                                                      [dim]║[/]
+            [dim]║[/]                                                                                                                      [dim]║[/]
+            [dim]║[/]                                                                                                                      [dim]║[/]
+            [dim]║[/]                                                                                                                      [dim]║[/]
+            [dim]║[/]                                                                                                                      [dim]║[/]
+            [dim]║[/]                                                                                                                      [dim]║[/]
+            [dim]║[/]                                                                                                                      [dim]║[/]
+            [dim]║[/]                                                                                                                      [dim]║[/]
+            [dim]║[/]                                                                                                                      [dim]║[/]
+            [dim]╠══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╣[/]
+            [dim]║[/] [blue]Esc[/] Back                                                                                                             [dim]║[/]
+            [dim]╚══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╝[/]
+            """;
+        Assert.Equal(MarkupToAnsi(expected.ReplaceLineEndings("\n").Trim()), actual);
     }
 
     // ── Cursor Redraw (partial update) ──────────────────────────────
@@ -688,7 +1350,7 @@ public class PanelRendererTests
         // Verifies the prompt text line is rendered intact — the "> " input cursor
         // must NOT overwrite part of the prompt text (regression: was writing at row -4
         // which landed on the prompt line instead of the empty input line at row -3).
-        var console = new TestConsole().Width(80).Height(24);
+        var console = new TestConsole().EmitAnsiSequences().Width(80).Height(24);
         // Press Escape immediately to exit the prompt
         console.Input.PushKey(new ConsoleKeyInfo('\x1b', ConsoleKey.Escape, false, false, false));
 
@@ -697,12 +1359,19 @@ public class PanelRendererTests
 
         Assert.Null(result);
 
-        var output = console.Output;
-        // The prompt text must appear fully intact (not overwritten by "> ")
-        Assert.Contains("Definition pattern (e.g. ci, roslyn-CI*)", output);
-        // Breadcrumbs must appear
-        Assert.Contains("Builds", output);
-        Assert.Contains("Filter", output);
+        var actual = StripChrome(console.Output).ReplaceLineEndings("\n").Trim();
+        var panel = """
+            [dim]╔══════════════════════════════════════════════════════════════════════════════╗[/]
+            [dim]║[/] [bold orange1]TIGER[/] [dim]>[/] Builds > Filter                                                      [dim]║[/]
+            [dim]╠══════════════════════════════════════════════════════════════════════════════╣[/]
+            [dim]║[/] [bold]Definition pattern (e.g. ci, roslyn-CI*)[/]                                     [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]╠══════════════════════════════════════════════════════════════════════════════╣[/]
+            [dim]║[/] [blue]Enter[/] Confirm  [blue]Esc[/] Cancel                                                    [dim]║[/]
+            [dim]╚══════════════════════════════════════════════════════════════════════════════╝[/]
+            """;
+        var expected = MarkupToAnsi(panel.ReplaceLineEndings("\n").Trim()) + "\x1b[5;2H" + MarkupToAnsi("[blue]>[/]");
+        Assert.Equal(expected, actual);
     }
 
     [Fact]
@@ -795,58 +1464,106 @@ public class PanelRendererTests
     [Fact]
     public void PromptKindFilter_RendersInPanel_WithBreadcrumbs()
     {
-        var console = new TestConsole().Width(80).Height(24);
+        var console = new TestConsole().EmitAnsiSequences().Width(80).Height(24);
         console.Input.PushKey(new ConsoleKeyInfo('\x1b', ConsoleKey.Escape, false, false, false));
 
         var renderer = new PanelRenderer(console);
         BrowserUI.PromptKindFilter(renderer);
 
-        var output = console.Output;
-        // Breadcrumbs should appear in header
-        Assert.Contains("Builds", output);
-        Assert.Contains("Filter", output);
-        Assert.Contains("Kind", output);
-        // Items should appear in content
-        Assert.Contains("all", output);
-        Assert.Contains("pr", output);
-        Assert.Contains("ci", output);
+        var actual = StripChrome(console.Output).ReplaceLineEndings("\n").Trim();
+        var expected = """
+            [dim]╔══════════════════════════════════════════════════════════════════════════════╗[/]
+            [dim]║[/] [bold orange1]TIGER[/] [dim]>[/] Builds > Filter > Kind                                               [dim]║[/]
+            [dim]║[/] [dim]Select build kind to filter on[/]                                               [dim]║[/]
+            [dim]╠══════════════════════════════════════════════════════════════════════════════╣[/]
+            [dim]║[/] [blue]>[/] all                                                                        [dim]║[/]
+            [dim]║[/]   pr                                                                         [dim]║[/]
+            [dim]║[/]   ci                                                                         [dim]║[/]
+            [dim]╠══════════════════════════════════════════════════════════════════════════════╣[/]
+            [dim]║[/] [dim]Up/Dn Navigate  Enter Select  Esc Back[/]                                       [dim]║[/]
+            [dim]╚══════════════════════════════════════════════════════════════════════════════╝[/]
+            """;
+        Assert.Equal(MarkupToAnsi(expected.ReplaceLineEndings("\n").Trim()), actual);
     }
 
     [Fact]
     public void RenderDetailFrame_PreservesBackslashesInContent()
     {
-        var console = new TestConsole().Width(80).Height(24);
+        var console = new TestConsole().EmitAnsiSequences().Width(80).Height(24);
         var renderer = new PanelRenderer(console);
         var errorMsg = """Could not find path 'C:\h\w\AF600976\w\B51709B0\e\bincore'""";
-        var lines = renderer.CaptureContent(() =>
-        {
-            renderer.RenderPanelLine($"[red]{Markup.Escape(errorMsg)}[/]");
-        });
 
-        renderer.RenderDetailFrame(["Tests", "Detail"], null, lines, 0, "[blue]Esc[/] Back");
+        renderer.RenderDetailPanel(["Tests", "Detail"], null, [$"[red]{Markup.Escape(errorMsg)}[/]"], "[blue]Esc[/] Back");
 
-        var output = console.Output;
-        Assert.Contains("""Could not find path 'C:\h\w\AF600976\w\B51709B0\e\bincore'""", output);
+        var actual = StripChrome(console.Output).ReplaceLineEndings("\n").Trim();
+        var expected = """
+            [dim]╔══════════════════════════════════════════════════════════════════════════════╗[/]
+            [dim]║[/] [bold orange1]TIGER[/] [dim]>[/] Tests > Detail                                                       [dim]║[/]
+            [dim]╠══════════════════════════════════════════════════════════════════════════════╣[/]
+            [dim]║[/] [red]Could not find path 'C:\h\w\AF600976\w\B51709B0\e\bincore'[/]                   [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]╠══════════════════════════════════════════════════════════════════════════════╣[/]
+            [dim]║[/] [blue]Esc[/] Back                                                                     [dim]║[/]
+            [dim]╚══════════════════════════════════════════════════════════════════════════════╝[/]
+            """;
+        Assert.Equal(MarkupToAnsi(expected.ReplaceLineEndings("\n").Trim()), actual);
     }
 
     [Fact]
     public void RenderDetailFrame_BackslashesPreservedWithTruncation()
     {
         // Use a narrow width to force truncation
-        var console = new TestConsole().Width(40).Height(24);
+        var console = new TestConsole().EmitAnsiSequences().Width(40).Height(24);
         var renderer = new PanelRenderer(console);
         renderer.TruncationEnabled = true;
         var errorMsg = """Could not find path 'C:\h\w\AF600976\w\B51709B0\e\bincore'""";
-        var lines = renderer.CaptureContent(() =>
-        {
-            renderer.RenderPanelLine($"[red]{Markup.Escape(errorMsg)}[/]");
-        });
 
-        renderer.RenderDetailFrame(["Tests", "Detail"], null, lines, 0, "[blue]Esc[/] Back");
+        renderer.RenderDetailPanel(["Tests", "Detail"], null, [$"[red]{Markup.Escape(errorMsg)}[/]"], "[blue]Esc[/] Back");
 
-        var output = console.Output;
-        // Even when truncated, the visible portion should have backslashes intact
-        Assert.Contains("""Could not find path 'C:\h\w\AF600976""", output);
+        var actual = StripChrome(console.Output).ReplaceLineEndings("\n").Trim();
+        var expected = """
+            [dim]╔══════════════════════════════════════╗[/]
+            [dim]║[/] [bold orange1]TIGER[/] [dim]>[/] Tests > Detail               [dim]║[/]
+            [dim]╠══════════════════════════════════════╣[/]
+            [dim]║[/] Could not find path 'C:\h\w\AF600... [dim]║[/]
+            [dim]║[/]                                      [dim]║[/]
+            [dim]║[/]                                      [dim]║[/]
+            [dim]║[/]                                      [dim]║[/]
+            [dim]║[/]                                      [dim]║[/]
+            [dim]║[/]                                      [dim]║[/]
+            [dim]║[/]                                      [dim]║[/]
+            [dim]║[/]                                      [dim]║[/]
+            [dim]║[/]                                      [dim]║[/]
+            [dim]║[/]                                      [dim]║[/]
+            [dim]║[/]                                      [dim]║[/]
+            [dim]║[/]                                      [dim]║[/]
+            [dim]║[/]                                      [dim]║[/]
+            [dim]║[/]                                      [dim]║[/]
+            [dim]║[/]                                      [dim]║[/]
+            [dim]║[/]                                      [dim]║[/]
+            [dim]║[/]                                      [dim]║[/]
+            [dim]║[/]                                      [dim]║[/]
+            [dim]╠══════════════════════════════════════╣[/]
+            [dim]║[/] [blue]Esc[/] Back                             [dim]║[/]
+            [dim]╚══════════════════════════════════════╝[/]
+            """;
+        Assert.Equal(MarkupToAnsi(expected.ReplaceLineEndings("\n").Trim()), actual);
     }
 }
 

@@ -48,7 +48,7 @@ public sealed class HealthCommand : AsyncCommand
                 _ui.RenderDetailPanel(
                     ["Health"],
                     null,
-                    () => _ui.RenderPanelLine("[yellow]No health reports available yet. The agent runs every 15 minutes.[/]"),
+                    ["[yellow]No health reports available yet. The agent runs every 15 minutes.[/]"],
                     "[blue]Esc[/] Back");
                 Console.ReadKey(true);
                 return;
@@ -85,30 +85,28 @@ public sealed class HealthCommand : AsyncCommand
         while (true)
         {
             var state = agent.GetCurrentState(repository, definition);
+            var detailLines = new List<string>();
+            if (state is not null)
+            {
+                var lines = state.ReplaceLineEndings("\n").Split('\n');
+                foreach (var line in lines.Take(30))
+                {
+                    detailLines.Add(Markup.Escape(line));
+                }
+                if (lines.Length > 30)
+                {
+                    detailLines.Add($"[dim]... ({lines.Length - 30} more lines)[/]");
+                }
+            }
+            else
+            {
+                detailLines.Add("[dim]No state summary available yet.[/]");
+            }
 
             _ui.RenderDetailPanel(
                 ["Health", $"{Markup.Escape(repository)} / {Markup.Escape(definition)}"],
                 null,
-                () =>
-                {
-                    if (state is not null)
-                    {
-                        // Render markdown content line-by-line inside panel
-                        var lines = state.ReplaceLineEndings("\n").Split('\n');
-                        foreach (var line in lines.Take(30))
-                        {
-                            _ui.RenderPanelLine(Markup.Escape(line));
-                        }
-                        if (lines.Length > 30)
-                        {
-                            _ui.RenderPanelLine($"[dim]... ({lines.Length - 30} more lines)[/]");
-                        }
-                    }
-                    else
-                    {
-                        _ui.RenderPanelLine("[dim]No state summary available yet.[/]");
-                    }
-                },
+                detailLines,
                 PanelRenderer.BuildCommandBarString(new List<CommandBarItem>
                 {
                     new("Re-run", ConsoleKey.R, -2),
@@ -211,7 +209,7 @@ public sealed class HealthCommand : AsyncCommand
                 _ui.RenderDetailPanel(
                     ["Health", $"{Markup.Escape(repository)}", "Runs"],
                     null,
-                    () => _ui.RenderPanelLine("[dim]No runs found.[/]"),
+                    ["[dim]No runs found.[/]"],
                     "[blue]Esc[/] Back");
                 Console.ReadKey(true);
                 return;
@@ -235,33 +233,30 @@ public sealed class HealthCommand : AsyncCommand
 
     private void ShowRunDetail(HealthRunInfo run)
     {
+        List<string> detailLines;
+        if (File.Exists(run.LogPath))
+        {
+            var content = File.ReadAllText(run.LogPath);
+            var lines = content.ReplaceLineEndings("\n").Split('\n');
+            detailLines = lines.Take(40)
+                .Select(line => Markup.Escape(line))
+                .ToList();
+            if (lines.Length > 40)
+            {
+                detailLines.Add($"[dim]... ({lines.Length - 40} more lines)[/]");
+            }
+        }
+        else
+        {
+            detailLines = ["[red]Log file not found.[/]"];
+        }
         _ui.RenderDetailPanel(
             ["Health", "Run", Markup.Escape(run.Timestamp.Replace("_", " "))],
             null,
-            () =>
-            {
-                if (File.Exists(run.LogPath))
-                {
-                    var content = File.ReadAllText(run.LogPath);
-                    var lines = content.ReplaceLineEndings("\n").Split('\n');
-                    foreach (var line in lines.Take(40))
-                    {
-                        _ui.RenderPanelLine(Markup.Escape(line));
-                    }
-                    if (lines.Length > 40)
-                    {
-                        _ui.RenderPanelLine($"[dim]... ({lines.Length - 40} more lines)[/]");
-                    }
-                }
-                else
-                {
-                    _ui.RenderPanelLine("[red]Log file not found.[/]");
-                }
-            },
+            detailLines,
             "[blue]Esc[/] Back");
 
         Console.ReadKey(true);
     }
 }
-
 

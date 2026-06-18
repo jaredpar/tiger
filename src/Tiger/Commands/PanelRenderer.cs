@@ -36,9 +36,6 @@ public class PanelRenderer
 
     private readonly IAnsiConsole _console;
 
-    [ThreadStatic]
-    private static List<string>? _captureTarget;
-
     // Scroll state for detail panels
     private string[]? _lastDetailBreadcrumbs;
     private string? _lastDetailContext;
@@ -76,6 +73,8 @@ public class PanelRenderer
     /// </summary>
     public int ContentWidth => Math.Max(40, Width - 4);
 
+    private int RenderContentWidth => Math.Max(0, Width - 4);
+
     /// <summary>
     /// When true (default), lines are truncated to fit panel width.
     /// When false, lines are allowed to wrap.
@@ -86,31 +85,17 @@ public class PanelRenderer
 
     /// <summary>
     /// Renders a single line inside the panel with vertical borders.
-    /// During capture phase, buffers the markup string instead.
     /// </summary>
     public void RenderPanelLine(string markupContent)
     {
-        if (_captureTarget is not null)
-        {
-            _captureTarget.Add(markupContent);
-            return;
-        }
-
         RenderPanelLineDirect(markupContent);
     }
 
     /// <summary>
     /// Renders an empty line inside the panel borders.
-    /// During capture phase, buffers an empty string.
     /// </summary>
     public void RenderEmptyLine()
     {
-        if (_captureTarget is not null)
-        {
-            _captureTarget.Add("");
-            return;
-        }
-
         RenderEmptyLineDirect();
     }
 
@@ -129,6 +114,20 @@ public class PanelRenderer
     {
         RenderPanelLine($"[bold]{label}:[/] {value}");
     }
+
+    /// <summary>
+    /// Returns the markup string for a labeled value pair without rendering.
+    /// Use when building content line lists for <see cref="RenderDetailPanel"/>.
+    /// </summary>
+    public static string FormatField(string label, string value) =>
+        $"[bold]{label}:[/] {value}";
+
+    /// <summary>
+    /// Returns the markup string for a section title without rendering.
+    /// Use when building content line lists for <see cref="RenderDetailPanel"/>.
+    /// </summary>
+    public static string FormatSectionTitle(string title) =>
+        $"[bold underline]{title}[/]";
 
     /// <summary>
     /// Renders the Tiger ASCII art logo.
@@ -156,27 +155,6 @@ public class PanelRenderer
         RenderEmptyLine();
         RenderPanelLine("[bold orange1]TIGER[/] — CI/CD Infrastructure Management");
         RenderEmptyLine();
-    }
-
-    // ── Content Capture ─────────────────────────────────────────────
-
-    /// <summary>
-    /// Executes <paramref name="renderContent"/> capturing all RenderPanelLine/RenderEmptyLine
-    /// calls into a list of markup strings.
-    /// </summary>
-    public List<string> CaptureContent(Action renderContent)
-    {
-        var lines = new List<string>();
-        _captureTarget = lines;
-        try
-        {
-            renderContent();
-        }
-        finally
-        {
-            _captureTarget = null;
-        }
-        return lines;
     }
 
     // ── Layout calculations ─────────────────────────────────────────
@@ -281,7 +259,7 @@ public class PanelRenderer
     /// </summary>
     public string TruncateToFit(string markupContent)
     {
-        var maxContentWidth = ContentWidth;
+        var maxContentWidth = RenderContentWidth;
         var plainText = Markup.Remove(markupContent);
 
         if (plainText.Length <= maxContentWidth)
@@ -292,6 +270,253 @@ public class PanelRenderer
         var truncated = plainText[..(maxContentWidth - 3)] + "...";
         return Markup.Escape(truncated);
     }
+
+    // ── Line wrapping ───────────────────────────────────────────────
+
+    /// <summary>
+    /// Wraps a markup string into multiple lines so each line's visible text
+    /// fits within <paramref name="maxWidth"/>. Preserves Spectre markup tags
+    /// by tracking open styles and re-opening them on continuation lines.
+    /// </summary>
+    internal static List<string> WrapMarkupLine(string markupContent, int maxWidth)
+    {
+        if (maxWidth <= 0)
+        {
+            return [markupContent];
+        }
+
+        var plainText = Markup.Remove(markupContent);
+        if (plainText.Length <= maxWidth)
+        {
+            return [markupContent];
+        }
+
+        // Parse the markup string into tokens (tags vs text segments)
+        var tokens = TokenizeMarkup(markupContent);
+
+        var result = new List<string>();
+        var currentLine = new System.Text.StringBuilder();
+        var visibleLen = 0;
+        var openStyles = new Stack<string>();
+
+        foreach (var token in tokens)
+        {
+            if (token.IsTag)
+            {
+                // Track open/close styles for continuation lines
+                if (token.Text == "[/]")
+                {
+                    if (openStyles.Count > 0)
+                    {
+                        openStyles.Pop();
+                    }
+                }
+                else
+                {
+                    openStyles.Push(token.Text);
+                }
+                currentLine.Append(token.Text);
+                continue;
+            }
+
+            // Visible text — need to wrap at word boundaries
+            var text = token.Text;
+            var pos = 0;
+            while (pos < text.Length)
+            {
+                var remaining = maxWidth - visibleLen;
+                if (remaining <= 0)
+                {
+                    // Close open styles, emit line, start new one
+                    result.Add(CloseAndEmit(currentLine, openStyles));
+                    currentLine = ReopenStyles(openStyles);
+                    visibleLen = 0;
+                    remaining = maxWidth;
+                }
+
+                var chunk = text[pos..];
+                if (chunk.Length <= remaining)
+                {
+                    currentLine.Append(chunk);
+                    visibleLen += chunk.Length;
+                    pos = text.Length;
+                }
+                else
+                {
+                    // Find the last word boundary within the remaining space
+                    var breakPos = FindWordBreak(chunk, remaining);
+                    if (breakPos <= 0)
+                    {
+                        if (visibleLen == 0)
+                        {
+                            // Single word longer than max width — force break
+                            breakPos = remaining;
+                        }
+                        else
+                        {
+                            // Wrap before this word
+                            result.Add(CloseAndEmit(currentLine, openStyles));
+                            currentLine = ReopenStyles(openStyles);
+                            visibleLen = 0;
+                            continue;
+                        }
+                    }
+
+                    currentLine.Append(chunk[..breakPos]);
+                    visibleLen += breakPos;
+                    pos += breakPos;
+
+                    // Skip trailing space at the break point
+                    if (pos < text.Length && text[pos] == ' ')
+                    {
+                        pos++;
+                    }
+
+                    // Emit current line
+                    result.Add(CloseAndEmit(currentLine, openStyles));
+                    currentLine = ReopenStyles(openStyles);
+                    visibleLen = 0;
+                }
+            }
+        }
+
+        // Emit the final line if non-empty
+        if (currentLine.Length > 0)
+        {
+            // Close all open styles
+            for (var i = 0; i < openStyles.Count; i++)
+            {
+                currentLine.Append("[/]");
+            }
+            result.Add(currentLine.ToString());
+        }
+
+        return result.Count > 0 ? result : [""];
+    }
+
+    private static string CloseAndEmit(System.Text.StringBuilder sb, Stack<string> openStyles)
+    {
+        // Close all open styles for this line
+        for (var i = 0; i < openStyles.Count; i++)
+        {
+            sb.Append("[/]");
+        }
+        var line = sb.ToString();
+        return line;
+    }
+
+    private static System.Text.StringBuilder ReopenStyles(Stack<string> openStyles)
+    {
+        var sb = new System.Text.StringBuilder();
+        // Re-open styles in the correct order (bottom of stack first)
+        foreach (var style in openStyles.Reverse())
+        {
+            sb.Append(style);
+        }
+        return sb;
+    }
+
+    /// <summary>
+    /// Finds the last space position within maxLen characters, returning the
+    /// length of text to include. Returns maxLen if the character at that position
+    /// is a space (natural word boundary). Returns 0 if no space is found.
+    /// </summary>
+    private static int FindWordBreak(string text, int maxLen)
+    {
+        // If we're at a natural word boundary (space at maxLen or end of text), take full chunk
+        if (maxLen >= text.Length || text[maxLen] == ' ')
+        {
+            return maxLen;
+        }
+
+        // Find the last space within the first maxLen characters
+        var lastSpace = -1;
+        for (var i = 0; i < maxLen; i++)
+        {
+            if (text[i] == ' ')
+            {
+                lastSpace = i;
+            }
+        }
+        return lastSpace > 0 ? lastSpace : 0;
+    }
+
+    /// <summary>
+    /// Tokenizes a Spectre markup string into tags (e.g., [bold], [/]) and
+    /// visible text segments.
+    /// </summary>
+    internal static List<MarkupToken> TokenizeMarkup(string markup)
+    {
+        var tokens = new List<MarkupToken>();
+        var i = 0;
+        var textStart = 0;
+
+        while (i < markup.Length)
+        {
+            if (markup[i] == '[')
+            {
+                // Check for escaped bracket [[
+                if (i + 1 < markup.Length && markup[i + 1] == '[')
+                {
+                    // Escaped opening bracket — treat as visible text [
+                    if (textStart < i)
+                    {
+                        tokens.Add(new MarkupToken(markup[textStart..i], false));
+                    }
+                    tokens.Add(new MarkupToken("[", false));
+                    i += 2;
+                    textStart = i;
+                    continue;
+                }
+
+                // Find matching ]
+                var closePos = markup.IndexOf(']', i + 1);
+                if (closePos < 0)
+                {
+                    // No closing bracket — treat as text
+                    i++;
+                    continue;
+                }
+
+                // Emit any preceding text
+                if (textStart < i)
+                {
+                    tokens.Add(new MarkupToken(markup[textStart..i], false));
+                }
+
+                // Emit the tag
+                var tag = markup[i..(closePos + 1)];
+                tokens.Add(new MarkupToken(tag, true));
+                i = closePos + 1;
+                textStart = i;
+            }
+            else if (markup[i] == ']' && i + 1 < markup.Length && markup[i + 1] == ']')
+            {
+                // Escaped closing bracket ]]
+                if (textStart < i)
+                {
+                    tokens.Add(new MarkupToken(markup[textStart..i], false));
+                }
+                tokens.Add(new MarkupToken("]", false));
+                i += 2;
+                textStart = i;
+            }
+            else
+            {
+                i++;
+            }
+        }
+
+        // Emit trailing text
+        if (textStart < markup.Length)
+        {
+            tokens.Add(new MarkupToken(markup[textStart..markup.Length], false));
+        }
+
+        return tokens;
+    }
+
+    internal record struct MarkupToken(string Text, bool IsTag);
 
     // ── Interactive: Main Menu ───────────────────────────────────────
 
@@ -553,21 +778,37 @@ public class PanelRenderer
 
     /// <summary>
     /// Renders a detail view with scrollable content.
+    /// Callers supply raw markup lines; wrapping/truncation is applied here.
     /// Use <see cref="HandleDetailScroll"/> in the caller's key loop.
     /// </summary>
-    public void RenderDetailPanel(string[] breadcrumbs, string? context, Action renderContent, string hotkeys)
+    public void RenderDetailPanel(string[] breadcrumbs, string? context, List<string> rawContentLines, string hotkeys)
     {
-        var contentLines = CaptureContent(renderContent);
+        var processedLines = new List<string>();
+        foreach (var line in rawContentLines)
+        {
+            if (string.IsNullOrEmpty(line))
+            {
+                processedLines.Add("");
+            }
+            else if (TruncationEnabled)
+            {
+                processedLines.Add(TruncateToFit(line));
+            }
+            else
+            {
+                processedLines.AddRange(WrapMarkupLine(line, RenderContentWidth));
+            }
+        }
 
         _lastDetailBreadcrumbs = breadcrumbs;
         _lastDetailContext = context;
         _lastDetailHotkeys = hotkeys;
-        _lastDetailLines = contentLines;
+        _lastDetailLines = processedLines;
         _lastDetailScrollOffset = 0;
 
         Clear();
         _console.Cursor.Show(false);
-        RenderDetailFrame(breadcrumbs, context, contentLines, 0, hotkeys);
+        RenderDetailFrame(breadcrumbs, context, processedLines, 0, hotkeys);
         _console.Cursor.Show(true);
     }
 
@@ -795,13 +1036,26 @@ public class PanelRenderer
 
     private void RenderPanelLineDirect(string markupContent)
     {
-        var displayContent = TruncationEnabled ? TruncateToFit(markupContent) : markupContent;
+        if (!TruncationEnabled)
+        {
+            var wrapped = WrapMarkupLine(markupContent, RenderContentWidth);
+            foreach (var line in wrapped)
+            {
+                RenderSinglePanelLine(line);
+            }
+            return;
+        }
 
+        RenderSinglePanelLine(TruncateToFit(markupContent));
+    }
+
+    private void RenderSinglePanelLine(string markupContent)
+    {
         _console.Markup($"[{BorderStyle}]{Vertical}[/] ");
-        _console.Markup(displayContent);
+        _console.Markup(markupContent);
 
-        var plainLen = Markup.Remove(displayContent).Length;
-        var padding = Math.Max(0, ContentWidth - plainLen);
+        var plainLen = Markup.Remove(markupContent).Length;
+        var padding = Math.Max(0, RenderContentWidth - plainLen);
         _console.Markup(new string(' ', padding));
         _console.MarkupLine($" [{BorderStyle}]{Vertical}[/]");
     }

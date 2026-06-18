@@ -29,7 +29,7 @@ public sealed class AgentBrowser
                 _ui.RenderDetailPanel(
                     ["Agents"],
                     null,
-                    () => _ui.RenderPanelLine("[red]Failed to load agent tasks from gh CLI.[/]"),
+                    ["[red]Failed to load agent tasks from gh CLI.[/]"],
                     "[blue]Esc[/] Back");
                 Console.ReadKey(true);
                 return;
@@ -40,7 +40,7 @@ public sealed class AgentBrowser
                 _ui.RenderDetailPanel(
                     ["Agents"],
                     null,
-                    () => _ui.RenderPanelLine("[dim]No agent tasks found.[/]"),
+                    ["[dim]No agent tasks found.[/]"],
                     PanelRenderer.BuildCommandBarString(new List<CommandBarItem>
                     {
                         new("Refresh", ConsoleKey.R, -2),
@@ -131,40 +131,41 @@ public sealed class AgentBrowser
             actions.Add("refresh");
 
             // Use RenderDetailPanel for the header info, then SelectInPanel for menu
+            var detailLines = new List<string>
+            {
+                PanelRenderer.FormatField("Name", Markup.Escape(task.Name ?? "unnamed")),
+                PanelRenderer.FormatField("State", FormatState(task.State)),
+                PanelRenderer.FormatField("Repository", Markup.Escape(task.Repository ?? "unknown")),
+            };
+            if (task.Id is not null)
+            {
+                detailLines.Add(PanelRenderer.FormatField("Session", Markup.Escape(task.Id)));
+            }
+            if (task.CreatedAt is not null)
+            {
+                detailLines.Add(PanelRenderer.FormatField("Created", BrowserUI.FormatTime(task.CreatedAt)));
+            }
+            if (task.UpdatedAt is not null)
+            {
+                detailLines.Add(PanelRenderer.FormatField("Updated", BrowserUI.FormatTime(task.UpdatedAt)));
+            }
+            if (task.PullRequestNumber is not null && task.PullRequestUrl is not null)
+            {
+                detailLines.Add(PanelRenderer.FormatField("Pull Request",
+                    $"{BrowserUI.FormatLink(task.PullRequestUrl, $"PR #{task.PullRequestNumber}")} ({Markup.Escape(task.PullRequestState ?? "unknown")})"));
+            }
+            else if (task.PullRequestNumber is not null)
+            {
+                detailLines.Add(PanelRenderer.FormatField("Pull Request", $"#{task.PullRequestNumber}"));
+            }
+            if (isTracked)
+            {
+                detailLines.Add(PanelRenderer.FormatField("Source", "[yellow]Submitted from Tiger[/]"));
+            }
             _ui.RenderDetailPanel(
                 ["Agents", Markup.Escape(task.Name ?? "unnamed")],
                 $"{FormatState(task.State)}  {Markup.Escape(task.Repository ?? "unknown")}",
-                () =>
-                {
-                    _ui.RenderField("Name", Markup.Escape(task.Name ?? "unnamed"));
-                    _ui.RenderField("State", FormatState(task.State));
-                    _ui.RenderField("Repository", Markup.Escape(task.Repository ?? "unknown"));
-                    if (task.Id is not null)
-                    {
-                        _ui.RenderField("Session", Markup.Escape(task.Id));
-                    }
-                    if (task.CreatedAt is not null)
-                    {
-                        _ui.RenderField("Created", BrowserUI.FormatTime(task.CreatedAt));
-                    }
-                    if (task.UpdatedAt is not null)
-                    {
-                        _ui.RenderField("Updated", BrowserUI.FormatTime(task.UpdatedAt));
-                    }
-                    if (task.PullRequestNumber is not null && task.PullRequestUrl is not null)
-                    {
-                        _ui.RenderField("Pull Request",
-                            $"{BrowserUI.FormatLink(task.PullRequestUrl, $"PR #{task.PullRequestNumber}")} ({Markup.Escape(task.PullRequestState ?? "unknown")})");
-                    }
-                    else if (task.PullRequestNumber is not null)
-                    {
-                        _ui.RenderField("Pull Request", $"#{task.PullRequestNumber}");
-                    }
-                    if (isTracked)
-                    {
-                        _ui.RenderField("Source", "[yellow]Submitted from Tiger[/]");
-                    }
-                },
+                detailLines,
                 PanelRenderer.BuildCommandBarString(new List<CommandBarItem>
                 {
                     new("Open PR", ConsoleKey.O, -2),
@@ -351,5 +352,4 @@ public sealed class AgentBrowser
         public string? PullRequestState { get; set; }
     }
 }
-
 

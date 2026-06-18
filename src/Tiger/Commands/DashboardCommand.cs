@@ -165,34 +165,33 @@ public sealed class DashboardCommand : AsyncCommand
             }
             var start = Math.Max(0, end - maxVisible);
             var visible = filtered.Skip(start).Take(end - start).ToList();
+            var detailLines = new List<string>();
+            if (visible.Count == 0)
+            {
+                detailLines.Add("[dim]No log entries yet...[/]");
+            }
+            else
+            {
+                foreach (var entry in visible)
+                {
+                    var time = entry.Timestamp.ToLocalTime().ToString("HH:mm:ss");
+                    var levelColor = entry.Level switch
+                    {
+                        ServiceLogLevel.Success => "green",
+                        ServiceLogLevel.Warning => "yellow",
+                        ServiceLogLevel.Error => "red",
+                        _ => "blue",
+                    };
+                    var service = Markup.Escape(entry.Service);
+                    var message = Markup.Escape(entry.Message);
+                    detailLines.Add($"[dim]{time}[/] [{levelColor}]{service}[/] {message}");
+                }
+            }
 
             _ui.RenderDetailPanel(
                 ["Status", "Service Log"],
                 context,
-                () =>
-                {
-                    if (visible.Count == 0)
-                    {
-                        _ui.RenderPanelLine("[dim]No log entries yet...[/]");
-                    }
-                    else
-                    {
-                        foreach (var entry in visible)
-                        {
-                            var time = entry.Timestamp.ToLocalTime().ToString("HH:mm:ss");
-                            var levelColor = entry.Level switch
-                            {
-                                ServiceLogLevel.Success => "green",
-                                ServiceLogLevel.Warning => "yellow",
-                                ServiceLogLevel.Error => "red",
-                                _ => "blue",
-                            };
-                            var service = Markup.Escape(entry.Service);
-                            var message = Markup.Escape(entry.Message);
-                            _ui.RenderPanelLine($"[dim]{time}[/] [{levelColor}]{service}[/] {message}");
-                        }
-                    }
-                },
+                detailLines,
                 PanelRenderer.BuildCommandBarString(new List<CommandBarItem>
                 {
                     new("Errors toggle", ConsoleKey.E, -2),
@@ -267,5 +266,4 @@ public sealed class DashboardCommand : AsyncCommand
         }
     }
 }
-
 

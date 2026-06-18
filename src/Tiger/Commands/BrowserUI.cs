@@ -321,90 +321,92 @@ public static class BrowserUI
     /// <summary>
     /// Renders test detail info using PanelRenderer (for use inside RenderDetailPanel content delegates).
     /// </summary>
-    public static void RenderTestDetailInPanel(PanelRenderer ui, TestDetailInfo info)
+    public static List<string> BuildTestDetailLines(TestDetailInfo info)
     {
+        var lines = new List<string>();
+
         if (info.IsHelixDeadletter)
         {
-            ui.RenderPanelLine("[bold red on yellow] !! HELIX DEAD LETTER — Infrastructure failure, not a real test failure [/]");
-            ui.RenderEmptyLine();
+            lines.Add("[bold red on yellow] !! HELIX DEAD LETTER — Infrastructure failure, not a real test failure [/]");
+            lines.Add("");
         }
 
-        ui.RenderField("Test Name", Markup.Escape(info.TestName));
+        lines.Add(PanelRenderer.FormatField("Test Name", Markup.Escape(info.TestName)));
         var buildUrl = $"https://dev.azure.com/{Uri.EscapeDataString(info.Org)}/{Uri.EscapeDataString(info.Project)}/_build/results?buildId={info.BuildId}";
-        ui.RenderField("Last Failed Build", Markup.Escape(buildUrl));
-        ui.RenderField("Run", Markup.Escape(info.RunName));
-        ui.RenderField("Failed In", $"{info.BuildCount} build(s)");
-        ui.RenderEmptyLine();
+        lines.Add(PanelRenderer.FormatField("Last Failed Build", Markup.Escape(buildUrl)));
+        lines.Add(PanelRenderer.FormatField("Run", Markup.Escape(info.RunName)));
+        lines.Add(PanelRenderer.FormatField("Failed In", $"{info.BuildCount} build(s)"));
+        lines.Add("");
 
-        ui.RenderSectionTitle("Error");
+        lines.Add(PanelRenderer.FormatSectionTitle("Error"));
         if (!string.IsNullOrWhiteSpace(info.ErrorMessage))
         {
             var errorLines = info.ErrorMessage.ReplaceLineEndings("\n").Split('\n');
             foreach (var line in errorLines.Take(5))
             {
-                ui.RenderPanelLine($"  [red]{Markup.Escape(line)}[/]");
+                lines.Add($"  [red]{Markup.Escape(line)}[/]");
             }
             if (errorLines.Length > 5)
             {
-                ui.RenderPanelLine($"  [dim]... ({errorLines.Length - 5} more lines)[/]");
+                lines.Add($"  [dim]... ({errorLines.Length - 5} more lines)[/]");
             }
         }
         else
         {
-            ui.RenderPanelLine("  [dim]No error message available[/]");
+            lines.Add("  [dim]No error message available[/]");
         }
-        ui.RenderEmptyLine();
+        lines.Add("");
 
-        ui.RenderSectionTitle("Stack Trace");
+        lines.Add(PanelRenderer.FormatSectionTitle("Stack Trace"));
         if (!string.IsNullOrWhiteSpace(info.StackTrace))
         {
             var stackLines = info.StackTrace.ReplaceLineEndings("\n").Split('\n');
             foreach (var line in stackLines.Take(10))
             {
-                ui.RenderPanelLine($"  [dim]{Markup.Escape(line)}[/]");
+                lines.Add($"  [dim]{Markup.Escape(line)}[/]");
             }
             if (stackLines.Length > 10)
             {
-                ui.RenderPanelLine($"  [dim]... ({stackLines.Length - 10} more lines)[/]");
+                lines.Add($"  [dim]... ({stackLines.Length - 10} more lines)[/]");
             }
         }
         else
         {
-            ui.RenderPanelLine("  [dim]No stack trace available[/]");
+            lines.Add("  [dim]No stack trace available[/]");
         }
-        ui.RenderEmptyLine();
+        lines.Add("");
 
-        ui.RenderSectionTitle("Helix");
+        lines.Add(PanelRenderer.FormatSectionTitle("Helix"));
         if (info.HelixJobName is not null)
         {
             if (info.IsHelixDeadletter)
             {
-                ui.RenderPanelLine("  [bold red]!! DEAD LETTER[/]");
+                lines.Add("  [bold red]!! DEAD LETTER[/]");
             }
-            ui.RenderField("Job", Markup.Escape(info.HelixJobName));
+            lines.Add(PanelRenderer.FormatField("Job", Markup.Escape(info.HelixJobName)));
             if (info.HelixWorkItemName is not null)
             {
-                ui.RenderField("Work Item", Markup.Escape(info.HelixWorkItemName));
+                lines.Add(PanelRenderer.FormatField("Work Item", Markup.Escape(info.HelixWorkItemName)));
                 if (info.HelixExitCode is not null)
                 {
                     var exitColor = info.HelixExitCode == 0 ? "green" : "red";
-                    ui.RenderField("Exit Code", $"[{exitColor}]{info.HelixExitCode}[/]");
+                    lines.Add(PanelRenderer.FormatField("Exit Code", $"[{exitColor}]{info.HelixExitCode}[/]"));
                 }
                 var consoleUrl = HelixClient.GetConsoleUrl(info.HelixJobName, info.HelixWorkItemName);
-                ui.RenderField("Console", FormatLink(consoleUrl, "Console Log"));
+                lines.Add(PanelRenderer.FormatField("Console", FormatLink(consoleUrl, "Console Log")));
 
                 if (info.HelixFiles is { Count: > 0 })
                 {
-                    ui.RenderPanelLine($"  [bold]Files ({info.HelixFiles.Count}):[/]");
+                    lines.Add($"  [bold]Files ({info.HelixFiles.Count}):[/]");
                     foreach (var (name, uri) in info.HelixFiles)
                     {
                         if (uri is not null)
                         {
-                            ui.RenderPanelLine($"    {FormatLink(uri, name)}");
+                            lines.Add($"    {FormatLink(uri, name)}");
                         }
                         else
                         {
-                            ui.RenderPanelLine($"    {Markup.Escape(name)}");
+                            lines.Add($"    {Markup.Escape(name)}");
                         }
                     }
                 }
@@ -412,8 +414,10 @@ public static class BrowserUI
         }
         else
         {
-            ui.RenderPanelLine("  [dim]No Helix information available[/]");
+            lines.Add("  [dim]No Helix information available[/]");
         }
+
+        return lines;
     }
 
     public static (string Pattern, bool IsExact) ToSqlPattern(string input)
