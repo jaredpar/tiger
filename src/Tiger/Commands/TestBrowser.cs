@@ -47,7 +47,7 @@ public sealed class TestBrowser
                 _ui.RenderDetailPanel(
                     ["Tests"],
                     context,
-                    () => _ui.RenderPanelLine(emptyMsg),
+                    [emptyMsg],
                     PanelRenderer.BuildCommandBarString(new List<CommandBarItem>
                     {
                         new("Edit filter", ConsoleKey.E, -5),
@@ -107,7 +107,7 @@ public sealed class TestBrowser
                 _ui.RenderDetailPanel(
                     ["Tests", "Detail"],
                     null,
-                    () => _ui.RenderPanelLine("[yellow]No test failure data found.[/]"),
+                    ["[yellow]No test failure data found.[/]"],
                     "[blue]Esc[/] Back");
                 Console.ReadKey(true);
                 return;
@@ -129,7 +129,7 @@ public sealed class TestBrowser
             _ui.RenderDetailPanel(
                 ["Tests", Markup.Escape(shortTitle)],
                 null,
-                () => BrowserUI.RenderTestDetailInPanel(_ui, info),
+                BrowserUI.BuildTestDetailLines(info),
                 PanelRenderer.BuildCommandBarString(commands));
 
             while (true)
@@ -170,40 +170,34 @@ public sealed class TestBrowser
 
     private void ShowHelixWorkItemDetail(BrowserUI.TestDetailInfo info)
     {
+        var detailLines = new List<string>();
+        if (info.IsHelixDeadletter)
+        {
+            detailLines.Add("[bold red on yellow] !! HELIX DEAD LETTER — Infrastructure failure [/]");
+            detailLines.Add("");
+        }
+        detailLines.Add(PanelRenderer.FormatField("Job", Markup.Escape(info.HelixJobName!)));
+        if (info.HelixWorkItemName is not null)
+        {
+            detailLines.Add(PanelRenderer.FormatField("Work Item", Markup.Escape(info.HelixWorkItemName)));
+            var url = HelixClient.GetConsoleUrl(info.HelixJobName!, info.HelixWorkItemName);
+            detailLines.Add(PanelRenderer.FormatField("Console", BrowserUI.FormatLink(url, "Console Log")));
+        }
+        if (info.HelixFiles is { Count: > 0 })
+        {
+            detailLines.Add("");
+            detailLines.Add(PanelRenderer.FormatSectionTitle($"Files ({info.HelixFiles.Count})"));
+            foreach (var (name, uri) in info.HelixFiles)
+            {
+                detailLines.Add(uri is not null
+                    ? $"  {BrowserUI.FormatLink(uri, name)}"
+                    : $"  {Markup.Escape(name)}");
+            }
+        }
         _ui.RenderDetailPanel(
             ["Tests", "Helix Work Item"],
             null,
-            () =>
-            {
-                if (info.IsHelixDeadletter)
-                {
-                    _ui.RenderPanelLine("[bold red on yellow] !! HELIX DEAD LETTER — Infrastructure failure [/]");
-                    _ui.RenderEmptyLine();
-                }
-                _ui.RenderField("Job", Markup.Escape(info.HelixJobName!));
-                if (info.HelixWorkItemName is not null)
-                {
-                    _ui.RenderField("Work Item", Markup.Escape(info.HelixWorkItemName));
-                    var url = HelixClient.GetConsoleUrl(info.HelixJobName!, info.HelixWorkItemName);
-                    _ui.RenderField("Console", BrowserUI.FormatLink(url, "Console Log"));
-                }
-                if (info.HelixFiles is { Count: > 0 })
-                {
-                    _ui.RenderEmptyLine();
-                    _ui.RenderSectionTitle($"Files ({info.HelixFiles.Count})");
-                    foreach (var (name, uri) in info.HelixFiles)
-                    {
-                        if (uri is not null)
-                        {
-                            _ui.RenderPanelLine($"  {BrowserUI.FormatLink(uri, name)}");
-                        }
-                        else
-                        {
-                            _ui.RenderPanelLine($"  {Markup.Escape(name)}");
-                        }
-                    }
-                }
-            },
+            detailLines,
             "[blue]Esc[/] Back");
         while (true)
         {
@@ -223,7 +217,7 @@ public sealed class TestBrowser
             _ui.RenderDetailPanel(
                 ["Tests", Markup.Escape(shortTitle), "Builds"],
                 null,
-                () => _ui.RenderPanelLine("[yellow]No builds found.[/]"),
+                ["[yellow]No builds found.[/]"],
                 "[blue]Esc[/] Back");
             Console.ReadKey(true);
             return;
@@ -381,22 +375,15 @@ public sealed class TestBrowser
             _ui.RenderDetailPanel(
                 ["Tests", "Filter"],
                 null,
-                () =>
+                new List<string>
                 {
-                    _ui.RenderPanelLine("Filter test failures by name, repository, definition, kind, etc.");
-                    _ui.RenderEmptyLine();
-
-                    if (_filter.IsActive)
-                    {
-                        _ui.RenderPanelLine($"[bold]Current filter:[/] {Markup.Escape(_filter.ToString())}");
-                    }
-                    else
-                    {
-                        _ui.RenderPanelLine("[dim]No filter active[/]");
-                    }
-
-                    _ui.RenderEmptyLine();
-                    _ui.RenderPanelLine("[dim]Syntax: substring match by default, * for wildcards, ! suffix for exact[/]");
+                    "Filter test failures by name, repository, definition, kind, etc.",
+                    "",
+                    _filter.IsActive
+                        ? $"[bold]Current filter:[/] {Markup.Escape(_filter.ToString())}"
+                        : "[dim]No filter active[/]",
+                    "",
+                    "[dim]Syntax: substring match by default, * for wildcards, ! suffix for exact[/]",
                 },
                 PanelRenderer.BuildCommandBarString(commands));
 
@@ -457,27 +444,27 @@ public sealed class TestBrowser
         _ui.RenderDetailPanel(
             ["Tests", "Filter Help"],
             null,
-            () =>
+            new List<string>
             {
-                _ui.RenderPanelLine("[bold]Quick filter (E):[/]");
-                _ui.RenderPanelLine("  Type an expression like: [blue]test:Serialization repo:roslyn[/]");
-                _ui.RenderEmptyLine();
-                _ui.RenderPanelLine("[bold]Matching (default: contains / LIKE):[/]");
-                _ui.RenderPanelLine("  [dim]Serial - matches tests containing 'Serial'[/]");
-                _ui.RenderPanelLine("  [dim]*EditAndContinue* - matches tests with 'EditAndContinue'[/]");
-                _ui.RenderEmptyLine();
-                _ui.RenderPanelLine("[bold]Exact match (append !):[/]");
-                _ui.RenderPanelLine("  [dim]dotnet/roslyn! - matches exactly 'dotnet/roslyn'[/]");
-                _ui.RenderEmptyLine();
-                _ui.RenderPanelLine("[bold]Filter prefixes:[/]");
-                _ui.RenderPanelLine("  [blue]test:[/]  Test name");
-                _ui.RenderPanelLine("  [blue]repo:[/]  Repository name");
-                _ui.RenderPanelLine("  [blue]def:[/]   Definition/pipeline name");
-                _ui.RenderPanelLine("  [blue]kind:[/]  Build kind (pr, ci)");
-                _ui.RenderPanelLine("  [blue]pr:[/]    PR number");
-                _ui.RenderPanelLine("  [blue]helix:[/] Show helix work items (on/off, default: off)");
-                _ui.RenderEmptyLine();
-                _ui.RenderPanelLine("[bold]Multiple filters combine with AND.[/]");
+                "[bold]Quick filter (E):[/]",
+                "  Type an expression like: [blue]test:Serialization repo:roslyn[/]",
+                "",
+                "[bold]Matching (default: contains / LIKE):[/]",
+                "  [dim]Serial - matches tests containing 'Serial'[/]",
+                "  [dim]*EditAndContinue* - matches tests with 'EditAndContinue'[/]",
+                "",
+                "[bold]Exact match (append !):[/]",
+                "  [dim]dotnet/roslyn! - matches exactly 'dotnet/roslyn'[/]",
+                "",
+                "[bold]Filter prefixes:[/]",
+                "  [blue]test:[/]  Test name",
+                "  [blue]repo:[/]  Repository name",
+                "  [blue]def:[/]   Definition/pipeline name",
+                "  [blue]kind:[/]  Build kind (pr, ci)",
+                "  [blue]pr:[/]    PR number",
+                "  [blue]helix:[/] Show helix work items (on/off, default: off)",
+                "",
+                "[bold]Multiple filters combine with AND.[/]",
             },
             "[blue]Esc[/] Back");
         Console.ReadKey(true);
@@ -581,5 +568,3 @@ public sealed class TestBrowser
         }
     }
 }
-
-

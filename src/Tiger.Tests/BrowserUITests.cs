@@ -62,133 +62,179 @@ public class BrowserUITests
     [Fact]
     public void RenderBuildDetail_BranchBuild_AllDataAvailable()
     {
-        var console = new TestConsole().Width(120).Height(24);
+        var console = new TestConsole().EmitAnsiSequences().Width(80).Height(30);
         var ui = new PanelRenderer(console);
         var url = "https://dev.azure.com/dnceng/public/_build/results?buildId=42";
+        var finished = BrowserUI.FormatTime("2025-06-01T12:00:00Z");
+        var lines = new List<string>();
 
-        var lines = ui.CaptureContent(() =>
-        {
-            BuildBrowser.RenderBuildDetailHeader(
-                ui,
-                buildId: 42, defName: "runtime-CI", buildNumber: "20250601.1", result: "failed",
-                branch: "refs/heads/main", prNumber: null, repoName: null,
-                prAuthor: null, prTitle: null,
-                finishTime: "2025-06-01T12:00:00Z", url: url);
-            ui.RenderEmptyLine();
-            BuildBrowser.RenderBuildDetailSections(
-                ui,
-                failedJobs: ["Build_Release", "Test_Windows"],
-                failedTests:
-                [
-                    ("Windows x64", "MyNamespace.MyTest.TestMethod1", "Assert.Equal failed"),
-                    ("Windows x64", "MyNamespace.MyTest.TestMethod2", ""),
-                ]);
-        });
+        lines.AddRange(BuildBrowser.BuildDetailHeaderLines(
+            buildId: 42, defName: "runtime-CI", buildNumber: "20250601.1", result: "failed",
+            branch: "refs/heads/main", prNumber: null, repoName: null,
+            prAuthor: null, prTitle: null,
+            finishTime: "2025-06-01T12:00:00Z", url: url));
+        lines.Add("");
+        lines.AddRange(BuildBrowser.BuildDetailSectionLines(
+            failedJobs: ["Build_Release", "Test_Windows"],
+            failedTests:
+            [
+                ("Windows x64", "MyNamespace.MyTest.TestMethod1", "Assert.Equal failed"),
+                ("Windows x64", "MyNamespace.MyTest.TestMethod2", ""),
+            ]));
 
+        ui.RenderDetailPanel(["Builds", "#42"], null, lines, "[blue]Esc[/] Back");
+
+        var actual = PanelRendererTests.StripChrome(console.Output).ReplaceLineEndings("\n").Trim();
+        // Use FormatTime to get timezone-independent expected value; pad to 66 = RenderContentWidth(76) - "Finished: "(10)
+        var finishedPadded = finished.PadRight(66);
         var expected = $"""
-[bold]Build:[/] #42 — runtime-CI 20250601.1
-[bold]Result:[/] [red]X failed[/]
-[bold]Branch:[/] main
-[bold]Finished:[/] {BrowserUI.FormatTime("2025-06-01T12:00:00Z")}
-[bold]URL:[/] [link={url}][blue underline]{url}[/][/]
-
-[bold underline]Timeline[/]
-  [red]X[/] Build_Release
-  [red]X[/] Test_Windows
-
-[bold underline]Tests[/]
-  [bold yellow]Windows x64[/]
-    [red]X[/] MyNamespace.MyTest.TestMethod1
-      [dim]Assert.Equal failed[/]
-    [red]X[/] MyNamespace.MyTest.TestMethod2
-""";
-
-        AssertLines(expected, lines);
+            [dim]╔══════════════════════════════════════════════════════════════════════════════╗[/]
+            [dim]║[/] [bold orange1]TIGER[/] [dim]>[/] Builds > #42                                                         [dim]║[/]
+            [dim]╠══════════════════════════════════════════════════════════════════════════════╣[/]
+            [dim]║[/] [bold]Build:[/] #42 — runtime-CI 20250601.1                                           [dim]║[/]
+            [dim]║[/] [bold]Result:[/] [red]X failed[/]                                                             [dim]║[/]
+            [dim]║[/] [bold]Branch:[/] main                                                                 [dim]║[/]
+            [dim]║[/] [bold]Finished:[/] {finishedPadded} [dim]║[/]
+            [dim]║[/] [bold]URL:[/] [link=https://dev.azure.com/dnceng/public/_build/results?buildId=42][blue underline]https://dev.azure.com/dnceng/public/_build/results?buildId=42[/][/]           [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/] [bold underline]Timeline[/]                                                                     [dim]║[/]
+            [dim]║[/]   [red]X[/] Build_Release                                                            [dim]║[/]
+            [dim]║[/]   [red]X[/] Test_Windows                                                             [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/] [bold underline]Tests[/]                                                                        [dim]║[/]
+            [dim]║[/]   [bold yellow]Windows x64[/]                                                                [dim]║[/]
+            [dim]║[/]     [red]X[/] MyNamespace.MyTest.TestMethod1                                         [dim]║[/]
+            [dim]║[/]       [dim]Assert.Equal failed[/]                                                    [dim]║[/]
+            [dim]║[/]     [red]X[/] MyNamespace.MyTest.TestMethod2                                         [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]╠══════════════════════════════════════════════════════════════════════════════╣[/]
+            [dim]║[/] [blue]Esc[/] Back                                                                     [dim]║[/]
+            [dim]╚══════════════════════════════════════════════════════════════════════════════╝[/]
+            """;
+        var expectedAnsi = PanelRendererTests.MarkupToAnsi(expected.ReplaceLineEndings("\n").Trim());
+        Assert.Equal(expectedAnsi, actual);
     }
 
     [Fact]
     public void RenderBuildDetail_PrBuild_DataNotAvailable()
     {
-        var console = new TestConsole().Width(120).Height(24);
+        var console = new TestConsole().EmitAnsiSequences().Width(80).Height(30);
         var ui = new PanelRenderer(console);
         var url = "https://dev.azure.com/dnceng/public/_build/results?buildId=100";
+        var lines = new List<string>();
 
-        var lines = ui.CaptureContent(() =>
-        {
-            BuildBrowser.RenderBuildDetailHeader(
-                ui,
-                buildId: 100, defName: "aspnetcore-CI", buildNumber: "20250601.2", result: "succeeded",
-                branch: "refs/pull/999/merge", prNumber: 999, repoName: "dotnet/aspnetcore",
-                prAuthor: "jaredpar", prTitle: "Fix all the things",
-                finishTime: null, url: url);
-            ui.RenderEmptyLine();
-            BuildBrowser.RenderBuildDetailSections(
-                ui,
-                failedJobs: null,
-                failedTests: null);
-        });
+        lines.AddRange(BuildBrowser.BuildDetailHeaderLines(
+            buildId: 100, defName: "aspnetcore-CI", buildNumber: "20250601.2", result: "succeeded",
+            branch: "refs/pull/999/merge", prNumber: 999, repoName: "dotnet/aspnetcore",
+            prAuthor: "jaredpar", prTitle: "Fix all the things",
+            finishTime: null, url: url));
+        lines.Add("");
+        lines.AddRange(BuildBrowser.BuildDetailSectionLines(
+            failedJobs: null,
+            failedTests: null));
 
-        var prUrl = "https://github.com/dotnet/aspnetcore/pull/999";
-        var expected = $"""
-[bold]Build:[/] #100 — aspnetcore-CI 20250601.2
-[bold]Result:[/] [green]+ succeeded[/]
-[bold]PR:[/] #999 [blue]jaredpar[/] Fix all the things
-[bold]PR URL:[/] [link={prUrl}][blue underline]PR #999[/][/]
-[bold]URL:[/] [link={url}][blue underline]{url}[/][/]
+        ui.RenderDetailPanel(["Builds", "#100"], null, lines, "[blue]Esc[/] Back");
 
-[bold underline]Timeline[/]
-  [yellow]Timeline not available yet[/]
-
-[bold underline]Tests[/]
-  [yellow]Tests not available yet[/]
-""";
-
-        AssertLines(expected, lines);
+        var actual = PanelRendererTests.StripChrome(console.Output).ReplaceLineEndings("\n").Trim();
+        var expected = """
+            [dim]╔══════════════════════════════════════════════════════════════════════════════╗[/]
+            [dim]║[/] [bold orange1]TIGER[/] [dim]>[/] Builds > #100                                                        [dim]║[/]
+            [dim]╠══════════════════════════════════════════════════════════════════════════════╣[/]
+            [dim]║[/] [bold]Build:[/] #100 — aspnetcore-CI 20250601.2                                       [dim]║[/]
+            [dim]║[/] [bold]Result:[/] [green]+ succeeded[/]                                                          [dim]║[/]
+            [dim]║[/] [bold]PR:[/] #999 [blue]jaredpar[/] Fix all the things                                         [dim]║[/]
+            [dim]║[/] [bold]PR URL:[/] [link=https://github.com/dotnet/aspnetcore/pull/999][blue underline]PR #999[/][/]                                                              [dim]║[/]
+            [dim]║[/] [bold]URL:[/] [link=https://dev.azure.com/dnceng/public/_build/results?buildId=100][blue underline]https://dev.azure.com/dnceng/public/_build/results?buildId=100[/][/]          [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/] [bold underline]Timeline[/]                                                                     [dim]║[/]
+            [dim]║[/]   [yellow]Timeline not available yet[/]                                                 [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/] [bold underline]Tests[/]                                                                        [dim]║[/]
+            [dim]║[/]   [yellow]Tests not available yet[/]                                                    [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]╠══════════════════════════════════════════════════════════════════════════════╣[/]
+            [dim]║[/] [blue]Esc[/] Back                                                                     [dim]║[/]
+            [dim]╚══════════════════════════════════════════════════════════════════════════════╝[/]
+            """;
+        Assert.Equal(PanelRendererTests.MarkupToAnsi(expected.ReplaceLineEndings("\n").Trim()), actual);
     }
 
     [Fact]
     public void RenderBuildDetail_AllTestsPassed_NoFailedJobs()
     {
-        var console = new TestConsole().Width(120).Height(24);
+        var console = new TestConsole().EmitAnsiSequences().Width(80).Height(30);
         var ui = new PanelRenderer(console);
         var url = "https://dev.azure.com/dnceng/public/_build/results?buildId=200";
+        var finished = BrowserUI.FormatTime("2025-06-01T15:30:00Z");
+        var lines = new List<string>();
 
-        var lines = ui.CaptureContent(() =>
-        {
-            BuildBrowser.RenderBuildDetailHeader(
-                ui,
-                buildId: 200, defName: "sdk-CI", buildNumber: "20250601.3", result: "succeeded",
-                branch: "refs/heads/release/9.0", prNumber: null, repoName: null,
-                prAuthor: null, prTitle: null,
-                finishTime: "2025-06-01T15:30:00Z", url: url);
-            ui.RenderEmptyLine();
-            BuildBrowser.RenderBuildDetailSections(
-                ui,
-                failedJobs: [],
-                failedTests: []);
-        });
+        lines.AddRange(BuildBrowser.BuildDetailHeaderLines(
+            buildId: 200, defName: "sdk-CI", buildNumber: "20250601.3", result: "succeeded",
+            branch: "refs/heads/release/9.0", prNumber: null, repoName: null,
+            prAuthor: null, prTitle: null,
+            finishTime: "2025-06-01T15:30:00Z", url: url));
+        lines.Add("");
+        lines.AddRange(BuildBrowser.BuildDetailSectionLines(
+            failedJobs: [],
+            failedTests: []));
 
+        ui.RenderDetailPanel(["Builds", "#200"], null, lines, "[blue]Esc[/] Back");
+
+        var actual = PanelRendererTests.StripChrome(console.Output).ReplaceLineEndings("\n").Trim();
+        // Use FormatTime to get timezone-independent expected value; pad to 66 = RenderContentWidth(76) - "Finished: "(10)
+        var finishedPadded = finished.PadRight(66);
         var expected = $"""
-[bold]Build:[/] #200 — sdk-CI 20250601.3
-[bold]Result:[/] [green]+ succeeded[/]
-[bold]Branch:[/] release/9.0
-[bold]Finished:[/] {BrowserUI.FormatTime("2025-06-01T15:30:00Z")}
-[bold]URL:[/] [link={url}][blue underline]{url}[/][/]
-
-[bold underline]Timeline[/]
-  [green]No failed jobs[/]
-
-[bold underline]Tests[/]
-  [green]All tests passed[/]
-""";
-
-        AssertLines(expected, lines);
-    }
-
-    private static void AssertLines(string expected, List<string> actual)
-    {
-        var actualText = string.Join(Environment.NewLine, actual);
-        var expectedText = expected.TrimStart(Environment.NewLine.ToCharArray()).TrimEnd();
-        Assert.Equal(expectedText, actualText);
+            [dim]╔══════════════════════════════════════════════════════════════════════════════╗[/]
+            [dim]║[/] [bold orange1]TIGER[/] [dim]>[/] Builds > #200                                                        [dim]║[/]
+            [dim]╠══════════════════════════════════════════════════════════════════════════════╣[/]
+            [dim]║[/] [bold]Build:[/] #200 — sdk-CI 20250601.3                                              [dim]║[/]
+            [dim]║[/] [bold]Result:[/] [green]+ succeeded[/]                                                          [dim]║[/]
+            [dim]║[/] [bold]Branch:[/] release/9.0                                                          [dim]║[/]
+            [dim]║[/] [bold]Finished:[/] {finishedPadded} [dim]║[/]
+            [dim]║[/] [bold]URL:[/] [link=https://dev.azure.com/dnceng/public/_build/results?buildId=200][blue underline]https://dev.azure.com/dnceng/public/_build/results?buildId=200[/][/]          [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/] [bold underline]Timeline[/]                                                                     [dim]║[/]
+            [dim]║[/]   [green]No failed jobs[/]                                                             [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/] [bold underline]Tests[/]                                                                        [dim]║[/]
+            [dim]║[/]   [green]All tests passed[/]                                                           [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]╠══════════════════════════════════════════════════════════════════════════════╣[/]
+            [dim]║[/] [blue]Esc[/] Back                                                                     [dim]║[/]
+            [dim]╚══════════════════════════════════════════════════════════════════════════════╝[/]
+            """;
+        Assert.Equal(PanelRendererTests.MarkupToAnsi(expected.ReplaceLineEndings("\n").Trim()), actual);
     }
 }

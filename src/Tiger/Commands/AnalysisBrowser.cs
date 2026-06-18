@@ -34,7 +34,7 @@ public sealed partial class AnalysisBrowser
                 _ui.RenderDetailPanel(
                     ["Analysis"],
                     null,
-                    () => _ui.RenderPanelLine("[dim]No analyses yet. Failed builds will be analyzed automatically.[/]"),
+                    ["[dim]No analyses yet. Failed builds will be analyzed automatically.[/]"],
                     "[blue]Esc[/] Back");
                 Console.ReadKey(true);
                 return;
@@ -100,60 +100,60 @@ public sealed partial class AnalysisBrowser
             commands.Add(new("Build detail", ConsoleKey.B, 4));
 
             _ui.TruncationEnabled = false;
+            var detailLines = new List<string>
+            {
+                PanelRenderer.FormatField("Status", FormatStatus(analysis.Status)),
+                PanelRenderer.FormatField("Organization", Markup.Escape(analysis.Organization)),
+                PanelRenderer.FormatField("Project", Markup.Escape(analysis.Project)),
+                PanelRenderer.FormatField("Build", Markup.Escape(analysis.BuildNumber)),
+                PanelRenderer.FormatField("Branch", Markup.Escape(BrowserUI.SimplifyBranch(analysis.SourceBranch))),
+            };
+            if (analysis.Category is not null)
+            {
+                detailLines.Add(PanelRenderer.FormatField("Category", Markup.Escape(analysis.Category)));
+            }
+            if (analysis.Confidence is not null)
+            {
+                detailLines.Add(PanelRenderer.FormatField("Confidence", Markup.Escape(analysis.Confidence)));
+            }
+            detailLines.Add(PanelRenderer.FormatField("Created", Markup.Escape(analysis.CreatedAt)));
+            if (analysis.CompletedAt is not null)
+            {
+                detailLines.Add(PanelRenderer.FormatField("Completed", Markup.Escape(analysis.CompletedAt)));
+            }
+            if (analysis.LogPath is not null && File.Exists(analysis.LogPath))
+            {
+                detailLines.Add(PanelRenderer.FormatField("Full log", BrowserUI.FormatLink($"file://{analysis.LogPath}", Path.GetFileName(analysis.LogPath))));
+            }
+            detailLines.Add("");
+
+            if (analysis.DiagnosisSummary is not null)
+            {
+                if (analysis.Category == "known-issue")
+                {
+                    detailLines.Add(PanelRenderer.FormatSectionTitle("Known Issues"));
+                    foreach (var line in analysis.DiagnosisSummary.Split('\n'))
+                    {
+                        var rendered = FormatKnownIssueLine(line.Trim());
+                        if (rendered is not null)
+                        {
+                            detailLines.Add(rendered);
+                        }
+                    }
+                }
+                else
+                {
+                    detailLines.Add(PanelRenderer.FormatSectionTitle("Diagnosis"));
+                    foreach (var diagLine in analysis.DiagnosisSummary.ReplaceLineEndings("\n").Split('\n'))
+                    {
+                        detailLines.Add(Markup.Escape(diagLine));
+                    }
+                }
+            }
             _ui.RenderDetailPanel(
                 ["Analysis", $"{Markup.Escape(analysis.DefinitionName)} #{analysis.BuildId}"],
                 $"{FormatStatus(analysis.Status)}  {Markup.Escape(analysis.Project)}",
-                () =>
-                {
-                    _ui.RenderField("Status", FormatStatus(analysis.Status));
-                    _ui.RenderField("Organization", Markup.Escape(analysis.Organization));
-                    _ui.RenderField("Project", Markup.Escape(analysis.Project));
-                    _ui.RenderField("Build", Markup.Escape(analysis.BuildNumber));
-                    _ui.RenderField("Branch", Markup.Escape(BrowserUI.SimplifyBranch(analysis.SourceBranch)));
-                    if (analysis.Category is not null)
-                    {
-                        _ui.RenderField("Category", Markup.Escape(analysis.Category));
-                    }
-                    if (analysis.Confidence is not null)
-                    {
-                        _ui.RenderField("Confidence", Markup.Escape(analysis.Confidence));
-                    }
-                    _ui.RenderField("Created", Markup.Escape(analysis.CreatedAt));
-                    if (analysis.CompletedAt is not null)
-                    {
-                        _ui.RenderField("Completed", Markup.Escape(analysis.CompletedAt));
-                    }
-                    if (analysis.LogPath is not null && File.Exists(analysis.LogPath))
-                    {
-                        _ui.RenderField("Full log", BrowserUI.FormatLink($"file://{analysis.LogPath}", Path.GetFileName(analysis.LogPath)));
-                    }
-                    _ui.RenderEmptyLine();
-
-                    // Show diagnosis summary
-                    if (analysis.DiagnosisSummary is not null)
-                    {
-                        if (analysis.Category == "known-issue")
-                        {
-                            _ui.RenderSectionTitle("Known Issues");
-                            foreach (var line in analysis.DiagnosisSummary.Split('\n'))
-                            {
-                                var rendered = FormatKnownIssueLine(line.Trim());
-                                if (rendered is not null)
-                                {
-                                    _ui.RenderPanelLine(rendered);
-                                }
-                            }
-                        }
-                        else
-                        {
-                            _ui.RenderSectionTitle("Diagnosis");
-                            foreach (var diagLine in analysis.DiagnosisSummary.ReplaceLineEndings("\n").Split('\n'))
-                            {
-                                _ui.RenderPanelLine(Markup.Escape(diagLine));
-                            }
-                        }
-                    }
-                },
+                detailLines,
                 PanelRenderer.BuildCommandBarString(commands));
 
             while (true)
@@ -202,31 +202,26 @@ public sealed partial class AnalysisBrowser
     private void ShowFullLog(BuildAnalysisInfo analysis)
     {
         _ui.TruncationEnabled = false;
+        List<string> detailLines;
+        if (analysis.LogPath is null || !File.Exists(analysis.LogPath))
+        {
+            detailLines = ["[dim]No log file available.[/]"];
+        }
+        else
+        {
+            var content = File.ReadAllText(analysis.LogPath);
+
+            if (content.Length > 10000)
+            {
+                content = content[..10000] + "\n\n... (truncated — see full file on disk)";
+            }
+
+            detailLines = MarkdownRenderer.ToMarkupLines(content);
+        }
         _ui.RenderDetailPanel(
             ["Analysis", $"#{analysis.BuildId}", "Log"],
             $"[dim]{Markup.Escape(analysis.DefinitionName)}[/]",
-            () =>
-            {
-                if (analysis.LogPath is null || !File.Exists(analysis.LogPath))
-                {
-                    _ui.RenderPanelLine("[dim]No log file available.[/]");
-                    return;
-                }
-
-                var content = File.ReadAllText(analysis.LogPath);
-
-                // Truncate very long logs for terminal display
-                if (content.Length > 10000)
-                {
-                    content = content[..10000] + "\n\n... (truncated — see full file on disk)";
-                }
-
-                var markupLines = MarkdownRenderer.ToMarkupLines(content);
-                foreach (var line in markupLines)
-                {
-                    _ui.RenderPanelLine(line);
-                }
-            },
+            detailLines,
             "[blue]Esc[/] Back");
 
         while (true)
@@ -338,5 +333,4 @@ public sealed partial class AnalysisBrowser
         CreatedAt = original.CreatedAt,
     };
 }
-
 

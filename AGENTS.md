@@ -59,6 +59,58 @@ When modifying code that has associated tests (check `src/Tiger.Tests/`), you **
 update or add tests to cover your changes. Run `dotnet test --nologo` to verify all tests
 pass before presenting changes for review.
 
+### UI Rendering Tests
+
+Tests that validate UI rendering **must** render through `IAnsiConsole` (using `TestConsole`
+with `.EmitAnsiSequences()`) and assert against the actual console output. Do not use
+intermediate buffers or capture mechanisms — test what is actually rendered.
+
+Use a **single raw string literal** for the expected value, written in **Spectre markup form**
+so the formatting intent is visible at a glance (`[bold]`, `[red]`, `[dim]`, etc.). The helper
+`MarkupToAnsi()` converts this readable markup to the ANSI-encoded string that TestConsole
+produces, enabling exact comparison.
+
+Use `StripChrome()` to remove terminal chrome (clear screen, cursor hide/show) and normalize
+non-deterministic OSC hyperlink IDs. Use `ReplaceLineEndings("\n")` since TestConsole uses
+`\n` internally when emitting ANSI sequences.
+
+```csharp
+var console = new TestConsole().EmitAnsiSequences().Width(80).Height(30);
+var renderer = new PanelRenderer(console);
+
+var content = new List<string>
+{
+    PanelRenderer.FormatField("Status", "Complete"),
+    "Build failed due to missing package",
+};
+renderer.RenderDetailPanel(["Analysis", "Build #123"], null, content, "[blue]Esc[/] Back");
+
+var actual = PanelRendererTests.StripChrome(console.Output).ReplaceLineEndings("\n").Trim();
+var expected = """
+    [dim]╔══════════════════════════════════════════════════════════════════════════════╗[/]
+    [dim]║[/] [bold orange1]TIGER[/] [dim]>[/] Analysis > Build #123                                                [dim]║[/]
+    [dim]╠══════════════════════════════════════════════════════════════════════════════╣[/]
+    [dim]║[/] [bold]Status:[/] Complete                                                             [dim]║[/]
+    [dim]║[/] Build failed due to missing package                                          [dim]║[/]
+    [dim]║[/]                                                                              [dim]║[/]
+    [dim]╠══════════════════════════════════════════════════════════════════════════════╣[/]
+    [dim]║[/] [blue]Esc[/] Back                                                                     [dim]║[/]
+    [dim]╚══════════════════════════════════════════════════════════════════════════════╝[/]
+    """;
+Assert.Equal(PanelRendererTests.MarkupToAnsi(expected.ReplaceLineEndings("\n").Trim()), actual);
+```
+
+**Markup conventions in expected strings:**
+- Border lines (`╔═╗`, `╠═╣`, `╚═╝`): wrap entire line with `[dim]...[/]`
+- Content lines: `[dim]║[/] content padding [dim]║[/]`
+- Empty lines: `[dim]║[/]` + spaces + `[dim]║[/]`
+- Header: `[dim]║[/] [bold orange1]TIGER[/] [dim]>[/] Breadcrumbs padding [dim]║[/]`
+- Footer hotkeys: `[dim]║[/] [blue]Esc[/] Back padding [dim]║[/]`
+- Content markup stays as-is: `[bold]Label:[/]`, `[red]X[/]`, `[bold underline]Section[/]`
+
+Do **not** use `Assert.Contains` for UI tests — always compare the full expected output.
+The raw string literal shows exactly what formatting and layout the UI produces.
+
 ## UI Conventions
 
 ### Panel Layout
