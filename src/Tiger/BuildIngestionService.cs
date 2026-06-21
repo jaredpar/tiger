@@ -27,8 +27,10 @@ public sealed class BuildIngestionService : IDisposable
 {
     private readonly TigerDatabase _db;
     private readonly AzdoClientFactory _clientFactory;
+    private readonly Func<HelixClient> _helixClientFactory;
     private readonly ServiceLog? _log;
     private readonly ConcurrentStack<IngestionTask> _priorityTasks = new();
+    private readonly SemaphoreSlim _prioritySignal = new(0);
     private CancellationTokenSource? _cts;
     private Task? _workerTask;
 
@@ -36,7 +38,9 @@ public sealed class BuildIngestionService : IDisposable
     private const int WorkerIntervalSeconds = 5;
     private const int CircuitBreakerThreshold = 5;
     private const int CircuitBreakerCooldownSeconds = 120;
-    private const int MaxParallelism = 8;
+    private const int DefaultMaxParallelism = 8;
+
+    private readonly int _maxParallelism;
 
     /// <summary>
     /// Backoff delays per attempt: 30s, 2min, 10min, 1hr, then abandon.
@@ -50,11 +54,13 @@ public sealed class BuildIngestionService : IDisposable
 
     public bool IsRunning => _workerTask is not null && !_workerTask.IsCompleted;
 
-    public BuildIngestionService(TigerDatabase db, AzdoClientFactory clientFactory, ServiceLog? log = null)
+    public BuildIngestionService(TigerDatabase db, AzdoClientFactory clientFactory, ServiceLog? log = null, int maxParallelism = DefaultMaxParallelism, Func<HelixClient>? helixClientFactory = null)
     {
         _db = db;
         _clientFactory = clientFactory;
         _log = log;
+        _maxParallelism = maxParallelism;
+        _helixClientFactory = helixClientFactory ?? (() => HelixClient.Create());
     }
 
     /// <summary>
@@ -252,11 +258,14 @@ public sealed class BuildIngestionService : IDisposable
         cmd.ExecuteNonQuery();
     }
 
-    internal void InsertTimelineIssues(string organization, string project, int buildId, AzdoTimeline timeline)
+    internal void InsertTimelineIssues(string organization, string project, int buildId, AzdoTimeline timeline) =>
+        InsertTimelineIssues(_db, organization, project, buildId, timeline);
+
+    internal static void InsertTimelineIssues(TigerDatabase db, string organization, string project, int buildId, AzdoTimeline timeline)
     {
         var recordNames = timeline.Records.ToDictionary(r => r.Id, r => r.Name);
 
-        _db.WithTransaction((conn, tx) =>
+        db.WithTransaction((conn, tx) =>
         {
             using var cmd = conn.CreateCommand();
             cmd.Transaction = tx;
@@ -340,6 +349,7 @@ public sealed class BuildIngestionService : IDisposable
     /// <summary>
     /// Pushes all non-complete ingestion tasks for the specified build onto the
     /// priority stack so they are picked up before the normal DB queue.
+    /// Signals the worker loop to preempt non-priority in-flight work if needed.
     /// </summary>
     public void PrioritizeBuild(string organization, int buildId)
     {
@@ -374,18 +384,38 @@ public sealed class BuildIngestionService : IDisposable
         {
             _priorityTasks.Push(task);
         }
+
+        // Wake the worker loop so it can preempt non-priority work
+        if (tasks.Count > 0)
+        {
+            _prioritySignal.Release();
+        }
     }
 
     /// <summary>
-    /// Maintains up to <see cref="MaxParallelism"/> in-flight tasks at all times,
+    /// Tracks an in-flight task along with its per-task cancellation token, allowing
+    /// individual tasks to be cancelled for priority preemption without affecting
+    /// the overall worker loop.
+    /// </summary>
+    private sealed class InFlightTask
+    {
+        public required Task<IngestionTask?> Task { get; init; }
+        public required CancellationTokenSource Cts { get; init; }
+        public required bool IsPriority { get; init; }
+    }
+
+    /// <summary>
+    /// Maintains up to <see cref="_maxParallelism"/> in-flight tasks at all times,
     /// adapting concurrency based on AzDO rate-limit headers.
     /// When any task completes, its result is handled immediately and a new task
     /// is claimed to fill the slot — no waiting for an entire batch to drain.
+    /// When priority work arrives, non-priority in-flight tasks are cancelled to
+    /// make room immediately.
     /// </summary>
     private async Task WorkLoopAsync(CancellationToken ct)
     {
         var consecutiveFailures = 0;
-        var inFlight = new List<Task<IngestionTask?>>(MaxParallelism);
+        var inFlight = new List<InFlightTask>(_maxParallelism);
 
         while (!ct.IsCancellationRequested)
         {
@@ -400,8 +430,10 @@ public sealed class BuildIngestionService : IDisposable
                     // Drain in-flight work before cooling down
                     while (inFlight.Count > 0)
                     {
-                        var done = await Task.WhenAny(inFlight);
-                        inFlight.Remove(done);
+                        var done = await Task.WhenAny(inFlight.Select(f => f.Task));
+                        var completed = inFlight.First(f => f.Task == done);
+                        inFlight.Remove(completed);
+                        completed.Cts.Dispose();
                         HandleCompletion(done);
                     }
 
@@ -410,29 +442,75 @@ public sealed class BuildIngestionService : IDisposable
                     continue;
                 }
 
+                // Check for priority preemption: if priority work is pending and all
+                // slots are full, cancel non-priority tasks to make room.
+                if (!_priorityTasks.IsEmpty && inFlight.Count >= GetEffectiveParallelism())
+                {
+                    PreemptNonPriorityTasks(inFlight);
+
+                    // Wait for cancelled tasks to complete and remove them from in-flight
+                    var cancelled = inFlight.Where(f => f.Cts.IsCancellationRequested).ToList();
+                    foreach (var flight in cancelled)
+                    {
+                        try
+                        {
+                            await flight.Task;
+                        }
+                        catch
+                        {
+                        }
+
+                        inFlight.Remove(flight);
+                        flight.Cts.Dispose();
+                        // Don't count preempted tasks as failures
+                    }
+                }
+
                 // Fill available slots up to effective parallelism
                 var effectiveParallelism = GetEffectiveParallelism();
                 while (inFlight.Count < effectiveParallelism)
                 {
-                    var task = GetNextReadyTask();
-                    if (task is null)
+                    var next = GetNextReadyTask();
+                    if (next is null)
                     {
                         break;
                     }
 
-                    inFlight.Add(RunTaskAsync(task, ct));
+                    var (task, isPriority) = next.Value;
+                    var taskCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                    var flight = new InFlightTask
+                    {
+                        Task = RunTaskAsync(task, taskCts.Token),
+                        Cts = taskCts,
+                        IsPriority = isPriority,
+                    };
+                    inFlight.Add(flight);
                 }
 
                 if (inFlight.Count == 0)
                 {
-                    await Task.Delay(TimeSpan.FromSeconds(WorkerIntervalSeconds), ct);
+                    // Wait for either the poll interval or a priority signal
+                    await WaitForWorkOrSignal(ct);
                     continue;
                 }
 
-                // Wait for any one task to complete, then loop to refill the slot
-                var completed = await Task.WhenAny(inFlight);
-                inFlight.Remove(completed);
-                HandleCompletion(completed);
+                // Wait for any one task to complete OR a priority signal to arrive
+                var signalTask = _prioritySignal.WaitAsync(ct);
+                var tasksToAwait = new List<Task>(inFlight.Count + 1);
+                tasksToAwait.AddRange(inFlight.Select(f => (Task)f.Task));
+                tasksToAwait.Add(signalTask);
+                var completedTask = await Task.WhenAny(tasksToAwait);
+
+                // If the priority signal fired, loop back to preempt
+                if (completedTask == signalTask)
+                {
+                    continue;
+                }
+
+                var completedFlight = inFlight.First(f => f.Task == completedTask);
+                inFlight.Remove(completedFlight);
+                completedFlight.Cts.Dispose();
+                HandleCompletion(completedFlight.Task);
             }
             catch (OperationCanceledException)
             {
@@ -446,20 +524,25 @@ public sealed class BuildIngestionService : IDisposable
         }
 
         // Drain remaining in-flight tasks on shutdown
-        foreach (var remaining in inFlight)
+        foreach (var flight in inFlight)
         {
             try
             {
-                await remaining;
+                await flight.Cts.CancelAsync();
+                await flight.Task;
             }
             catch
             {
+            }
+            finally
+            {
+                flight.Cts.Dispose();
             }
         }
 
         void HandleCompletion(Task<IngestionTask?> task)
         {
-            if (task.IsFaulted || task.Result is null)
+            if (task.IsFaulted || task.IsCanceled || task.Result is null)
             {
                 consecutiveFailures++;
             }
@@ -468,6 +551,34 @@ public sealed class BuildIngestionService : IDisposable
                 consecutiveFailures = 0;
             }
         }
+    }
+
+    /// <summary>
+    /// Cancels non-priority in-flight tasks to make room for priority work.
+    /// Cancelled tasks are reset to 'pending' in the DB by <see cref="RunTaskAsync"/>.
+    /// </summary>
+    private void PreemptNonPriorityTasks(List<InFlightTask> inFlight)
+    {
+        var nonPriority = inFlight.Where(f => !f.IsPriority).ToList();
+        foreach (var flight in nonPriority)
+        {
+            _log?.Info("Worker", "Preempting non-priority task for priority work");
+            flight.Cts.Cancel();
+        }
+    }
+
+    /// <summary>
+    /// Waits for either the standard poll interval to elapse or a priority signal
+    /// to arrive, whichever comes first.
+    /// </summary>
+    private async Task WaitForWorkOrSignal(CancellationToken ct)
+    {
+        using var delayCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        var delayTask = Task.Delay(TimeSpan.FromSeconds(WorkerIntervalSeconds), delayCts.Token);
+        var signalTask = _prioritySignal.WaitAsync(ct);
+
+        await Task.WhenAny(delayTask, signalTask);
+        await delayCts.CancelAsync();
     }
 
     /// <summary>
@@ -480,8 +591,8 @@ public sealed class BuildIngestionService : IDisposable
 
         return fraction switch
         {
-            > 0.5 => MaxParallelism,
-            > 0.25 => MaxParallelism / 2,
+            > 0.5 => _maxParallelism,
+            > 0.25 => _maxParallelism / 2,
             > 0.1 => 1,
             _ => 0,
         };
@@ -512,7 +623,8 @@ public sealed class BuildIngestionService : IDisposable
 
     /// <summary>
     /// Processes a single ingestion task and returns it for post-completion handling.
-    /// Exceptions are captured so the caller can inspect them.
+    /// When cancelled (e.g. by priority preemption), resets the task to 'pending'
+    /// so it can be retried later. This does NOT increment the attempt counter.
     /// </summary>
     private async Task<IngestionTask?> RunTaskAsync(IngestionTask task, CancellationToken ct)
     {
@@ -536,20 +648,25 @@ public sealed class BuildIngestionService : IDisposable
 
         try
         {
-            MarkRunning();
+            MarkRunning(_db, task);
             await ProcessTaskAsync(task, ct);
-            MarkComplete();
+            MarkComplete(_db, task);
         }
         catch (OperationCanceledException)
         {
-            throw;
+            // Preemption or shutdown — reset to pending so the task can be retried.
+            // No attempt increment, no backoff.
+            MarkPreempted(_db, task);
+            _log?.Info("Worker",
+                $"Task {task.TaskType} for build #{task.BuildId} preempted, reset to pending");
+            return null;
         }
         catch (Exception ex)
         {
             var newAttempts = task.Attempts + 1;
             if (newAttempts >= MaxAttempts)
             {
-                MarkAbandoned(ex.Message);
+                MarkAbandoned(_db, task, ex.Message);
                 _log?.Error("Worker",
                     $"Task {task.TaskType} for build #{task.BuildId} abandoned after {newAttempts} attempts: {ex.Message}");
             }
@@ -557,7 +674,7 @@ public sealed class BuildIngestionService : IDisposable
             {
                 var backoffIndex = Math.Min(newAttempts - 1, s_backoffSeconds.Length - 1);
                 var delaySecs = s_backoffSeconds[backoffIndex];
-                MarkFailed(ex.Message, delaySecs);
+                MarkFailed(_db, task, ex.Message, delaySecs);
                 _log?.Warning("Worker",
                     $"Task {task.TaskType} for build #{task.BuildId} failed (attempt {newAttempts}), retry in {delaySecs}s: {ex.Message}");
             }
@@ -571,9 +688,12 @@ public sealed class BuildIngestionService : IDisposable
 
         return task; // signals success
 
-        void MarkRunning()
+        // All Mark* functions are static to guarantee they cannot capture the
+        // CancellationToken. DB writes must never be interrupted by cancellation.
+
+        static void MarkRunning(TigerDatabase db, IngestionTask task)
         {
-            _db.WithCommand(cmd =>
+            db.WithCommand(cmd =>
             {
                 cmd.CommandText = """
                     UPDATE build_ingestion_tasks
@@ -587,9 +707,9 @@ public sealed class BuildIngestionService : IDisposable
             });
         }
 
-        void MarkComplete()
+        static void MarkComplete(TigerDatabase db, IngestionTask task)
         {
-            _db.WithCommand(cmd =>
+            db.WithCommand(cmd =>
             {
                 cmd.CommandText = """
                     UPDATE build_ingestion_tasks
@@ -603,9 +723,9 @@ public sealed class BuildIngestionService : IDisposable
             });
         }
 
-        void MarkFailed(string error, int retryDelaySecs)
+        static void MarkFailed(TigerDatabase db, IngestionTask task, string error, int retryDelaySecs)
         {
-            _db.WithCommand(cmd =>
+            db.WithCommand(cmd =>
             {
                 cmd.CommandText = $"""
                     UPDATE build_ingestion_tasks
@@ -624,9 +744,9 @@ public sealed class BuildIngestionService : IDisposable
             });
         }
 
-        void MarkAbandoned(string error)
+        static void MarkAbandoned(TigerDatabase db, IngestionTask task, string error)
         {
-            _db.WithCommand(cmd =>
+            db.WithCommand(cmd =>
             {
                 cmd.CommandText = """
                     UPDATE build_ingestion_tasks
@@ -644,6 +764,22 @@ public sealed class BuildIngestionService : IDisposable
                 cmd.ExecuteNonQuery();
             });
         }
+
+        static void MarkPreempted(TigerDatabase db, IngestionTask task)
+        {
+            db.WithCommand(cmd =>
+            {
+                cmd.CommandText = """
+                    UPDATE build_ingestion_tasks
+                    SET status = 'pending', next_retry_time = NULL
+                    WHERE organization = @org AND build_id = @buildId AND task_type = @type
+                    """;
+                cmd.Parameters.AddWithValue("@org", task.Organization);
+                cmd.Parameters.AddWithValue("@buildId", task.BuildId);
+                cmd.Parameters.AddWithValue("@type", task.TaskType);
+                cmd.ExecuteNonQuery();
+            });
+        }
     }
 
     private async Task ProcessTaskAsync(IngestionTask task, CancellationToken ct)
@@ -653,263 +789,262 @@ public sealed class BuildIngestionService : IDisposable
         switch (task.TaskType)
         {
             case "tests":
-                await ProcessTestsAsync(client, task, ct);
+                await ProcessTests();
                 break;
             case "timeline":
-                await ProcessTimelineAsync(client, task, ct);
+                await ProcessTimeline();
                 break;
             case "pr_info":
-                await ProcessPrInfoAsync(task, ct);
+                await ProcessPrInfo();
                 break;
             default:
                 _log?.Warning("Worker", $"Unknown task type: {task.TaskType}");
                 break;
         }
-    }
-
-    private async Task ProcessTestsAsync(AzdoClient client, IngestionTask task, CancellationToken ct)
-    {
-        _log?.Info("Worker", $"Fetching tests for build #{task.BuildId}...");
-
-        var (testSummary, failures) = await FetchTestResults();
-        var helixWorkItems = await FetchHelixWorkItems();
-
-        // Both fetches succeeded — persist everything in one transaction
-        _db.WithTransaction((conn, tx) =>
-        {
-            InsertTestData(conn, tx);
-            InsertHelixData(conn, tx);
-        });
-
-        if (failures.Count > 0)
-        {
-            _log?.Info("Worker",
-                $"  Build #{task.BuildId} — {failures.Count} test failure(s) across {failures.GroupBy(f => f.TestRunId).Count()} run(s)");
-        }
-        else
-        {
-            _log?.Info("Worker", $"  Build #{task.BuildId} — tests complete (no failures)");
-        }
-
-        if (helixWorkItems.Count > 0)
-        {
-            _log?.Info("Worker", $"  Build #{task.BuildId} — helix complete ({helixWorkItems.Count} work item(s) fetched)");
-        }
 
         return;
 
-        async Task<(List<AzdoJobTestSummary> Summary, List<AzdoTestResult> Failures)> FetchTestResults()
+        // ── Tests ───────────────────────────────────────────────────
+
+        async Task ProcessTests()
         {
-            var summary = await client.GetTestSummaryByJobAsync(task.BuildId);
-            var results = await client.GetTestFailuresAsync(task.BuildId, subResultCount: 50);
-            return (summary, results);
+            _log?.Info("Worker", $"Fetching tests for build #{task.BuildId}...");
+            var data = await FetchTestsDataAsync(client, _helixClientFactory, _db, _log, task, ct);
+            InsertTestsData(_db, task, data);
+
+            if (data.Failures.Count > 0)
+            {
+                _log?.Info("Worker",
+                    $"  Build #{task.BuildId} — {data.Failures.Count} test failure(s) across {data.Failures.GroupBy(f => f.TestRunId).Count()} run(s)");
+            }
+            else
+            {
+                _log?.Info("Worker", $"  Build #{task.BuildId} — tests complete (no failures)");
+            }
+
+            if (data.HelixWorkItems.Count > 0)
+            {
+                _log?.Info("Worker", $"  Build #{task.BuildId} — helix complete ({data.HelixWorkItems.Count} work item(s) fetched)");
+            }
         }
 
-        async Task<List<HelixWorkItem>> FetchHelixWorkItems()
+        static async Task<TestsData> FetchTestsDataAsync(
+            AzdoClient client, Func<HelixClient> helixClientFactory, TigerDatabase db,
+            ServiceLog? log, IngestionTask task, CancellationToken ct)
         {
-            // Extract helix job/work-item pairs directly from the fetched test results
+            var summary = await client.GetTestSummaryByJobAsync(task.BuildId, ct);
+            var failures = await client.GetTestFailuresAsync(task.BuildId, subResultCount: 50, ct: ct);
+
+            // Fetch helix work items for any failures that reference them
             var workItemKeys = failures
                 .Where(f => f.HelixJobName is not null && f.HelixWorkItemName is not null)
                 .Select(f => (f.HelixJobName!, f.HelixWorkItemName!))
                 .Distinct()
                 .ToList();
 
-            if (workItemKeys.Count == 0)
+            var helixWorkItems = new List<HelixWorkItem>();
+            if (workItemKeys.Count > 0)
             {
-                return [];
-            }
+                log?.Info("Worker", $"Fetching helix work items for build #{task.BuildId}...");
+                var helixClient = helixClientFactory();
 
-            _log?.Info("Worker", $"Fetching helix work items for build #{task.BuildId}...");
-
-            var helixClient = HelixClient.Create();
-            var items = new List<HelixWorkItem>();
-
-            foreach (var (jobName, workItemName) in workItemKeys)
-            {
-                if (ct.IsCancellationRequested)
+                foreach (var (jobName, workItemName) in workItemKeys)
                 {
-                    break;
-                }
+                    ct.ThrowIfCancellationRequested();
 
-                // Skip if already fetched in a previous ingestion
-                var exists = _db.WithCommand(cmd =>
-                {
-                    cmd.CommandText = "SELECT 1 FROM helix_work_items WHERE job_name = @job AND work_item_name = @wi";
-                    cmd.Parameters.AddWithValue("@job", jobName);
-                    cmd.Parameters.AddWithValue("@wi", workItemName);
-                    return cmd.ExecuteScalar() is not null;
-                });
+                    var exists = db.WithCommand(cmd =>
+                    {
+                        cmd.CommandText = "SELECT 1 FROM helix_work_items WHERE job_name = @job AND work_item_name = @wi";
+                        cmd.Parameters.AddWithValue("@job", jobName);
+                        cmd.Parameters.AddWithValue("@wi", workItemName);
+                        return cmd.ExecuteScalar() is not null;
+                    });
 
-                if (exists)
-                {
-                    continue;
-                }
+                    if (exists)
+                    {
+                        continue;
+                    }
 
-                try
-                {
-                    var workItem = await helixClient.GetWorkItemAsync(jobName, workItemName);
-                    items.Add(workItem);
-                }
-                catch (HttpRequestException ex)
-                {
-                    _log?.Warning("Worker", $"  Failed to fetch helix work item {jobName}/{workItemName}: {ex.Message}");
+                    try
+                    {
+                        var workItem = await helixClient.GetWorkItemAsync(jobName, workItemName, ct);
+                        helixWorkItems.Add(workItem);
+                    }
+                    catch (HttpRequestException ex)
+                    {
+                        log?.Warning("Worker", $"  Failed to fetch helix work item {jobName}/{workItemName}: {ex.Message}");
+                    }
                 }
             }
 
-            return items;
+            return new TestsData(summary, failures, helixWorkItems);
         }
 
-        void InsertTestData(SqliteConnection conn, SqliteTransaction tx)
+        static void InsertTestsData(TigerDatabase db, IngestionTask task, TestsData data)
         {
-            using var cmd = conn.CreateCommand();
-            cmd.Transaction = tx;
-
-            // Insert test runs for ALL runs from the summary
-            foreach (var summary in testSummary)
+            db.WithTransaction((conn, tx) =>
             {
-                InsertTestRun(cmd, task.Organization, task.Project, task.BuildId,
-                    summary.RunId, summary.JobName, summary.TotalCount, summary.PassedCount,
-                    summary.FailedCount, summary.SkippedCount, summary.Duration?.TotalSeconds);
-            }
+                using var cmd = conn.CreateCommand();
+                cmd.Transaction = tx;
 
-            // Insert individual failure results
-            var runGroups = failures.GroupBy(f => f.TestRunId);
-            foreach (var group in runGroups)
-            {
-                var first = group.First();
-
-                // If this run wasn't in the summary (unlikely but defensive), insert it now
-                if (!testSummary.Any(s => s.RunId == group.Key))
+                foreach (var summary in data.Summary)
                 {
                     InsertTestRun(cmd, task.Organization, task.Project, task.BuildId,
-                        group.Key, first.TestRunName, group.Count(), 0, group.Count(), 0);
+                        summary.RunId, summary.JobName, summary.TotalCount, summary.PassedCount,
+                        summary.FailedCount, summary.SkippedCount, summary.Duration?.TotalSeconds);
                 }
 
-                foreach (var r in group)
+                var runGroups = data.Failures.GroupBy(f => f.TestRunId);
+                foreach (var group in runGroups)
                 {
-                    InsertTestResult(cmd, task.Organization, task.Project, group.Key, r);
-                }
-            }
-        }
-
-        void InsertHelixData(SqliteConnection conn, SqliteTransaction tx)
-        {
-            foreach (var workItem in helixWorkItems)
-            {
-                // Collect non-console-log files as JSON
-                string? filesJson = null;
-                if (workItem.Files is { Count: > 0 })
-                {
-                    var filtered = workItem.Files
-                        .Where(f => !f.IsConsoleLog)
-                        .Select(f => new { fileName = f.FileName, uri = f.Uri })
-                        .ToList();
-                    if (filtered.Count > 0)
+                    var first = group.First();
+                    if (!data.Summary.Any(s => s.RunId == group.Key))
                     {
-                        filesJson = System.Text.Json.JsonSerializer.Serialize(filtered);
+                        InsertTestRun(cmd, task.Organization, task.Project, task.BuildId,
+                            group.Key, first.TestRunName, group.Count(), 0, group.Count(), 0);
+                    }
+
+                    foreach (var r in group)
+                    {
+                        InsertTestResult(cmd, task.Organization, task.Project, group.Key, r);
                     }
                 }
 
-                using (var cmd = conn.CreateCommand())
+                foreach (var workItem in data.HelixWorkItems)
                 {
-                    cmd.Transaction = tx;
-                    cmd.CommandText = """
-                        INSERT OR IGNORE INTO helix_work_items
-                            (job_name, work_item_name, state, exit_code, console_output_uri, files, is_deadletter)
-                        VALUES
-                            (@job, @wi, @state, @exitCode, @consoleUri, @files, @isDeadletter)
-                        """;
-                    cmd.Parameters.AddWithValue("@job", workItem.Job);
-                    cmd.Parameters.AddWithValue("@wi", workItem.Name);
-                    cmd.Parameters.AddWithValue("@state", workItem.State);
-                    cmd.Parameters.AddWithValue("@exitCode", workItem.ExitCode.HasValue ? workItem.ExitCode.Value : DBNull.Value);
-                    cmd.Parameters.AddWithValue("@consoleUri", (object?)workItem.ConsoleOutputUri ?? DBNull.Value);
-                    cmd.Parameters.AddWithValue("@files", (object?)filesJson ?? DBNull.Value);
-                    cmd.Parameters.AddWithValue("@isDeadletter", workItem.IsDeadLetter ? 1 : 0);
-                    cmd.ExecuteNonQuery();
-                }
+                    string? filesJson = null;
+                    if (workItem.Files is { Count: > 0 })
+                    {
+                        var filtered = workItem.Files
+                            .Where(f => !f.IsConsoleLog)
+                            .Select(f => new { fileName = f.FileName, uri = f.Uri })
+                            .ToList();
+                        if (filtered.Count > 0)
+                        {
+                            filesJson = System.Text.Json.JsonSerializer.Serialize(filtered);
+                        }
+                    }
 
-                if (workItem.IsDeadLetter)
-                {
-                    using var cmd = conn.CreateCommand();
-                    cmd.Transaction = tx;
-                    cmd.CommandText = """
-                        UPDATE test_results
-                        SET error_message = 'Helix Work Item Dead Lettered. ' || COALESCE(error_message, '')
-                        WHERE is_helix_work_item = 1
-                          AND helix_job_name = @job
-                          AND helix_work_item_name = @wi
-                          AND organization = @org
-                          AND run_id IN (
-                              SELECT run_id FROM test_runs
-                              WHERE organization = @org AND build_id = @buildId
-                          )
-                          AND error_message NOT LIKE 'Helix Work Item Dead Lettered.%'
-                        """;
-                    cmd.Parameters.AddWithValue("@job", workItem.Job);
-                    cmd.Parameters.AddWithValue("@wi", workItem.Name);
-                    cmd.Parameters.AddWithValue("@org", task.Organization);
-                    cmd.Parameters.AddWithValue("@buildId", task.BuildId);
-                    cmd.ExecuteNonQuery();
-                    _log?.Warning("Worker", $"  Helix work item {workItem.Name} is dead-lettered");
+                    using (var helixCmd = conn.CreateCommand())
+                    {
+                        helixCmd.Transaction = tx;
+                        helixCmd.CommandText = """
+                            INSERT OR IGNORE INTO helix_work_items
+                                (job_name, work_item_name, state, exit_code, console_output_uri, files, is_deadletter)
+                            VALUES
+                                (@job, @wi, @state, @exitCode, @consoleUri, @files, @isDeadletter)
+                            """;
+                        helixCmd.Parameters.AddWithValue("@job", workItem.Job);
+                        helixCmd.Parameters.AddWithValue("@wi", workItem.Name);
+                        helixCmd.Parameters.AddWithValue("@state", workItem.State);
+                        helixCmd.Parameters.AddWithValue("@exitCode", workItem.ExitCode.HasValue ? workItem.ExitCode.Value : DBNull.Value);
+                        helixCmd.Parameters.AddWithValue("@consoleUri", (object?)workItem.ConsoleOutputUri ?? DBNull.Value);
+                        helixCmd.Parameters.AddWithValue("@files", (object?)filesJson ?? DBNull.Value);
+                        helixCmd.Parameters.AddWithValue("@isDeadletter", workItem.IsDeadLetter ? 1 : 0);
+                        helixCmd.ExecuteNonQuery();
+                    }
+
+                    if (workItem.IsDeadLetter)
+                    {
+                        using var dlCmd = conn.CreateCommand();
+                        dlCmd.Transaction = tx;
+                        dlCmd.CommandText = """
+                            UPDATE test_results
+                            SET error_message = 'Helix Work Item Dead Lettered. ' || COALESCE(error_message, '')
+                            WHERE is_helix_work_item = 1
+                              AND helix_job_name = @job
+                              AND helix_work_item_name = @wi
+                              AND organization = @org
+                              AND run_id IN (
+                                  SELECT run_id FROM test_runs
+                                  WHERE organization = @org AND build_id = @buildId
+                              )
+                              AND error_message NOT LIKE 'Helix Work Item Dead Lettered.%'
+                            """;
+                        dlCmd.Parameters.AddWithValue("@job", workItem.Job);
+                        dlCmd.Parameters.AddWithValue("@wi", workItem.Name);
+                        dlCmd.Parameters.AddWithValue("@org", task.Organization);
+                        dlCmd.Parameters.AddWithValue("@buildId", task.BuildId);
+                        dlCmd.ExecuteNonQuery();
+                    }
                 }
-            }
+            });
         }
-    }
 
-    private async Task ProcessTimelineAsync(AzdoClient client, IngestionTask task, CancellationToken ct)
-    {
-        _log?.Info("Worker", $"Fetching timeline for build #{task.BuildId}...");
-        var timeline = await client.GetTimelineAsync(task.BuildId);
-        InsertTimelineIssues(task.Organization, task.Project, task.BuildId, timeline);
+        // ── Timeline ────────────────────────────────────────────────
 
-        var issueCount = timeline.Records.Sum(r => r.Issues.Count(i => i.Type is "error" or "warning"));
-        _log?.Info("Worker", $"  Build #{task.BuildId} — timeline complete ({issueCount} issues)");
-    }
-
-    private async Task ProcessPrInfoAsync(IngestionTask task, CancellationToken ct)
-    {
-        // Look up the build's PR number and repo
-        var prInfo = _db.WithCommand(cmd =>
+        async Task ProcessTimeline()
         {
-            cmd.CommandText = "SELECT pr_number, repository_name FROM builds WHERE organization = @org AND build_id = @buildId";
-            cmd.Parameters.AddWithValue("@org", task.Organization);
-            cmd.Parameters.AddWithValue("@buildId", task.BuildId);
+            _log?.Info("Worker", $"Fetching timeline for build #{task.BuildId}...");
+            var timeline = await FetchTimelineDataAsync(client, task, ct);
+            InsertTimelineData(_db, task, timeline);
 
-            using var reader = cmd.ExecuteReader();
-            if (!reader.Read() || reader.IsDBNull(0) || reader.IsDBNull(1))
+            var issueCount = timeline.Records.Sum(r => r.Issues.Count(i => i.Type is "error" or "warning"));
+            _log?.Info("Worker", $"  Build #{task.BuildId} — timeline complete ({issueCount} issues)");
+        }
+
+        static async Task<AzdoTimeline> FetchTimelineDataAsync(
+            AzdoClient client, IngestionTask task, CancellationToken ct)
+        {
+            return await client.GetTimelineAsync(task.BuildId, ct);
+        }
+
+        static void InsertTimelineData(TigerDatabase db, IngestionTask task, AzdoTimeline timeline)
+        {
+            InsertTimelineIssues(db, task.Organization, task.Project, task.BuildId, timeline);
+        }
+
+        // ── PR Info ─────────────────────────────────────────────────
+
+        async Task ProcessPrInfo()
+        {
+            var prData = await FetchPrInfoDataAsync(_db, _log, task, ct);
+            if (prData is not null)
             {
-                return ((int PrNumber, string Repository)?)null;
+                InsertPrInfoData(_db, prData.Value);
+                _log?.Info("Worker", $"  Build #{task.BuildId} — PR #{prData.Value.PrNumber} info cached ({prData.Value.Author})");
+            }
+        }
+
+        static async Task<PrInfoData?> FetchPrInfoDataAsync(
+            TigerDatabase db, ServiceLog? log, IngestionTask task, CancellationToken ct)
+        {
+            var prInfo = db.WithCommand(cmd =>
+            {
+                cmd.CommandText = "SELECT pr_number, repository_name FROM builds WHERE organization = @org AND build_id = @buildId";
+                cmd.Parameters.AddWithValue("@org", task.Organization);
+                cmd.Parameters.AddWithValue("@buildId", task.BuildId);
+
+                using var reader = cmd.ExecuteReader();
+                if (!reader.Read() || reader.IsDBNull(0) || reader.IsDBNull(1))
+                {
+                    return ((int PrNumber, string Repository)?)null;
+                }
+
+                return (reader.GetInt32(0), reader.GetString(1));
+            });
+
+            if (prInfo is null)
+            {
+                log?.Info("Worker", $"  Build #{task.BuildId} — no PR info to fetch");
+                return null;
             }
 
-            return (reader.GetInt32(0), reader.GetString(1));
-        });
+            var (prNumber, repository) = prInfo.Value;
 
-        if (prInfo is null)
-        {
-            _log?.Info("Worker", $"  Build #{task.BuildId} — no PR info to fetch");
-            return;
-        }
+            var exists = db.WithCommand(cmd =>
+            {
+                cmd.CommandText = "SELECT 1 FROM pull_requests WHERE repository = @repo AND pr_number = @pr";
+                cmd.Parameters.AddWithValue("@repo", repository);
+                cmd.Parameters.AddWithValue("@pr", prNumber);
+                return cmd.ExecuteScalar() is not null;
+            });
+            if (exists)
+            {
+                log?.Info("Worker", $"  Build #{task.BuildId} — PR #{prNumber} already cached");
+                return null;
+            }
 
-        var (prNumber, repository) = prInfo.Value;
-
-        // Check if we already have this PR cached
-        var exists = _db.WithCommand(cmd =>
-        {
-            cmd.CommandText = "SELECT 1 FROM pull_requests WHERE repository = @repo AND pr_number = @pr";
-            cmd.Parameters.AddWithValue("@repo", repository);
-            cmd.Parameters.AddWithValue("@pr", prNumber);
-            return cmd.ExecuteScalar() is not null;
-        });
-        if (exists)
-        {
-            _log?.Info("Worker", $"  Build #{task.BuildId} — PR #{prNumber} already cached");
-            return;
-        }
-
-        // Fetch PR info via gh CLI
-        try
-        {
             var psi = new System.Diagnostics.ProcessStartInfo("gh", $"pr view {prNumber} --repo {repository} --json title,author")
             {
                 RedirectStandardOutput = true,
@@ -921,8 +1056,8 @@ public sealed class BuildIngestionService : IDisposable
             using var process = System.Diagnostics.Process.Start(psi);
             if (process is null)
             {
-                _log?.Warning("Worker", $"  Build #{task.BuildId} — failed to start gh process");
-                return;
+                log?.Warning("Worker", $"  Build #{task.BuildId} — failed to start gh process");
+                return null;
             }
 
             var output = await process.StandardOutput.ReadToEndAsync(ct);
@@ -930,47 +1065,54 @@ public sealed class BuildIngestionService : IDisposable
 
             if (process.ExitCode != 0)
             {
-                _log?.Warning("Worker", $"  Build #{task.BuildId} — gh pr view failed (exit {process.ExitCode})");
-                return;
+                log?.Warning("Worker", $"  Build #{task.BuildId} — gh pr view failed (exit {process.ExitCode})");
+                return null;
             }
 
-            var prData = System.Text.Json.JsonDocument.Parse(output);
-            var title = prData.RootElement.TryGetProperty("title", out var t) ? t.GetString() : null;
-            var author = prData.RootElement.TryGetProperty("author", out var a) && a.TryGetProperty("login", out var login)
+            var prDoc = System.Text.Json.JsonDocument.Parse(output);
+            var title = prDoc.RootElement.TryGetProperty("title", out var t) ? t.GetString() : null;
+            var author = prDoc.RootElement.TryGetProperty("author", out var a) && a.TryGetProperty("login", out var login)
                 ? login.GetString() : null;
 
-            _db.WithCommand(cmd =>
+            return new PrInfoData(repository, prNumber, title, author);
+        }
+
+        static void InsertPrInfoData(TigerDatabase db, PrInfoData data)
+        {
+            db.WithCommand(cmd =>
             {
                 cmd.CommandText = """
                     INSERT OR IGNORE INTO pull_requests (repository, pr_number, title, author)
                     VALUES (@repo, @pr, @title, @author)
                     """;
-                cmd.Parameters.AddWithValue("@repo", repository);
-                cmd.Parameters.AddWithValue("@pr", prNumber);
-                cmd.Parameters.AddWithValue("@title", (object?)title ?? DBNull.Value);
-                cmd.Parameters.AddWithValue("@author", (object?)author ?? DBNull.Value);
+                cmd.Parameters.AddWithValue("@repo", data.Repository);
+                cmd.Parameters.AddWithValue("@pr", data.PrNumber);
+                cmd.Parameters.AddWithValue("@title", (object?)data.Title ?? DBNull.Value);
+                cmd.Parameters.AddWithValue("@author", (object?)data.Author ?? DBNull.Value);
                 cmd.ExecuteNonQuery();
             });
-
-            _log?.Info("Worker", $"  Build #{task.BuildId} — PR #{prNumber} info cached ({author})");
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            _log?.Warning("Worker", $"  Build #{task.BuildId} — PR info fetch failed: {ex.Message}");
         }
     }
 
+    private readonly record struct TestsData(
+        List<AzdoJobTestSummary> Summary,
+        List<AzdoTestResult> Failures,
+        List<HelixWorkItem> HelixWorkItems);
+
+    private readonly record struct PrInfoData(
+        string Repository, int PrNumber, string? Title, string? Author);
+
     // ── DB Helpers ──────────────────────────────────────────────────
 
-    private IngestionTask? GetNextReadyTask()
+    private (IngestionTask Task, bool IsPriority)? GetNextReadyTask()
     {
         // Priority tasks take precedence over the normal DB query
         if (_priorityTasks.TryPop(out var priority))
         {
-            return priority;
+            return (priority, true);
         }
 
-        return _db.WithCommand(cmd =>
+        var dbTask = _db.WithCommand(cmd =>
         {
             cmd.CommandText = """
                 SELECT t.organization, b.project, t.build_id, t.task_type, t.status, t.attempts
@@ -997,6 +1139,8 @@ public sealed class BuildIngestionService : IDisposable
 
             return null;
         });
+
+        return dbTask is not null ? (dbTask, false) : null;
     }
 
     /// <summary>
@@ -1109,6 +1253,7 @@ public sealed class BuildIngestionService : IDisposable
     {
         _cts?.Cancel();
         _cts?.Dispose();
+        _prioritySignal.Dispose();
     }
 
     private record IngestionTask(

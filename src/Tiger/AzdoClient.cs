@@ -58,6 +58,23 @@ public sealed class AzdoClient
         return new AzdoClient(httpClient, organization, project, rateLimitState);
     }
 
+    /// <summary>
+    /// Creates an <see cref="AzdoClient"/> with a custom <see cref="HttpMessageHandler"/>.
+    /// Useful for testing — inject a handler that intercepts or blocks HTTP calls.
+    /// </summary>
+    public static AzdoClient Create(
+        HttpMessageHandler handler,
+        string organization = DefaultOrganization,
+        string project = DefaultProject)
+    {
+        var httpClient = new HttpClient(handler)
+        {
+            BaseAddress = new Uri($"https://dev.azure.com/{organization}/{project}/"),
+        };
+
+        return new AzdoClient(httpClient, organization, project, new AzdoRateLimitState());
+    }
+
     /// <inheritdoc cref="Create"/>
     public static Task<AzdoClient> CreateAsync(
         TokenCredential tokenCredential,
@@ -96,7 +113,7 @@ public sealed class AzdoClient
         return null;
     }
 
-    public async Task<List<AzdoBuild>> GetRecentBuildsAsync(int? definitionId = null, int top = 10)
+    public async Task<List<AzdoBuild>> GetRecentBuildsAsync(int? definitionId = null, int top = 10, CancellationToken ct = default)
     {
         var url = $"_apis/build/builds?api-version=7.1&$top={top}";
         if (definitionId is not null)
@@ -104,10 +121,10 @@ public sealed class AzdoClient
             url += $"&definitions={definitionId}";
         }
 
-        var response = await HttpClient.GetAsync(url);
+        var response = await HttpClient.GetAsync(url, ct);
         response.EnsureSuccessStatusCode();
 
-        var json = await response.Content.ReadAsStringAsync();
+        var json = await response.Content.ReadAsStringAsync(ct);
         var result = JsonSerializer.Deserialize<AzdoListResponse<AzdoBuildRaw>>(json, s_jsonOptions)
             ?? throw new InvalidOperationException("Failed to deserialize builds response");
 
@@ -158,7 +175,7 @@ public sealed class AzdoClient
         return all;
     }
 
-    public async Task<List<AzdoBuild>> GetBuildsForRepositoryAsync(string repository, int top = 10, string? reasonFilter = null)
+    public async Task<List<AzdoBuild>> GetBuildsForRepositoryAsync(string repository, int top = 10, string? reasonFilter = null, CancellationToken ct = default)
     {
         var url = $"_apis/build/builds?api-version=7.1&$top={top}&repositoryId={Uri.EscapeDataString(repository)}&repositoryType=GitHub";
         if (reasonFilter is not null)
@@ -166,25 +183,25 @@ public sealed class AzdoClient
             url += $"&reasonFilter={Uri.EscapeDataString(reasonFilter)}";
         }
 
-        var response = await HttpClient.GetAsync(url);
+        var response = await HttpClient.GetAsync(url, ct);
         response.EnsureSuccessStatusCode();
 
-        var json = await response.Content.ReadAsStringAsync();
+        var json = await response.Content.ReadAsStringAsync(ct);
         var result = JsonSerializer.Deserialize<AzdoListResponse<AzdoBuildRaw>>(json, s_jsonOptions)
             ?? throw new InvalidOperationException("Failed to deserialize builds response");
 
         return result.Value.Select(MapBuild).ToList();
     }
 
-    public async Task<List<AzdoBuild>> GetBuildsForPullRequestAsync(string repository, int prNumber, int top = 10)
+    public async Task<List<AzdoBuild>> GetBuildsForPullRequestAsync(string repository, int prNumber, int top = 10, CancellationToken ct = default)
     {
         var branchName = $"refs/pull/{prNumber}/merge";
         var url = $"_apis/build/builds?api-version=7.1&$top={top}&branchName={Uri.EscapeDataString(branchName)}&repositoryId={Uri.EscapeDataString(repository)}&repositoryType=GitHub";
 
-        var response = await HttpClient.GetAsync(url);
+        var response = await HttpClient.GetAsync(url, ct);
         response.EnsureSuccessStatusCode();
 
-        var json = await response.Content.ReadAsStringAsync();
+        var json = await response.Content.ReadAsStringAsync(ct);
         var result = JsonSerializer.Deserialize<AzdoListResponse<AzdoBuildRaw>>(json, s_jsonOptions)
             ?? throw new InvalidOperationException("Failed to deserialize builds response");
 
@@ -197,15 +214,15 @@ public sealed class AzdoClient
     /// <param name="buildId">The build ID.</param>
     /// <param name="subResultCount">Controls sub-result fetching for grouped results (e.g. xUnit theories):
     /// null = do not fetch sub-results, positive = fetch up to that many, -1 = no limit.</param>
-    public async Task<List<AzdoTestResult>> GetTestFailuresAsync(int buildId, int? subResultCount = null)
+    public async Task<List<AzdoTestResult>> GetTestFailuresAsync(int buildId, int? subResultCount = null, CancellationToken ct = default)
     {
         var buildUri = $"vstfs:///Build/Build/{buildId}";
         var runsUrl = $"_apis/test/runs?api-version=7.1&buildUri={Uri.EscapeDataString(buildUri)}";
 
-        var runsResponse = await HttpClient.GetAsync(runsUrl);
+        var runsResponse = await HttpClient.GetAsync(runsUrl, ct);
         runsResponse.EnsureSuccessStatusCode();
 
-        var runsJson = await runsResponse.Content.ReadAsStringAsync();
+        var runsJson = await runsResponse.Content.ReadAsStringAsync(ct);
         var runs = JsonSerializer.Deserialize<AzdoListResponse<AzdoTestRun>>(runsJson, s_jsonOptions)
             ?? throw new InvalidOperationException("Failed to deserialize test runs response");
 
@@ -215,10 +232,10 @@ public sealed class AzdoClient
         foreach (var run in runs.Value)
         {
             var resultsUrl = $"_apis/test/Runs/{run.Id}/results?api-version=7.1&outcomes=Failed";
-            var resultsResponse = await HttpClient.GetAsync(resultsUrl);
+            var resultsResponse = await HttpClient.GetAsync(resultsUrl, ct);
             resultsResponse.EnsureSuccessStatusCode();
 
-            var resultsJson = await resultsResponse.Content.ReadAsStringAsync();
+            var resultsJson = await resultsResponse.Content.ReadAsStringAsync(ct);
             var results = JsonSerializer.Deserialize<AzdoListResponse<AzdoTestResult>>(resultsJson, s_jsonOptions)
                 ?? throw new InvalidOperationException("Failed to deserialize test results response");
 
@@ -229,7 +246,7 @@ public sealed class AzdoClient
 
                 if (result.HasSubResults && canFetchSubs)
                 {
-                    var detailed = await GetTestResultWithSubResultsAsync(run.Id, result.Id);
+                    var detailed = await GetTestResultWithSubResultsAsync(run.Id, result.Id, ct);
                     if (detailed is not null && detailed.SubResults.Count > 0)
                     {
                         var failedSubs = detailed.SubResults
@@ -256,38 +273,38 @@ public sealed class AzdoClient
     /// <summary>
     /// Fetches a single test result with sub-results included.
     /// </summary>
-    private async Task<AzdoTestResult?> GetTestResultWithSubResultsAsync(int runId, int resultId)
+    private async Task<AzdoTestResult?> GetTestResultWithSubResultsAsync(int runId, int resultId, CancellationToken ct = default)
     {
         var url = $"_apis/test/Runs/{runId}/results/{resultId}?api-version=7.1&detailsToInclude=SubResults";
-        var response = await HttpClient.GetAsync(url);
+        var response = await HttpClient.GetAsync(url, ct);
         response.EnsureSuccessStatusCode();
 
-        var json = await response.Content.ReadAsStringAsync();
+        var json = await response.Content.ReadAsStringAsync(ct);
         return JsonSerializer.Deserialize<AzdoTestResult>(json, s_jsonOptions);
     }
 
-    public async Task<List<AzdoTestAttachment>> GetTestResultAttachmentsAsync(int runId, int testCaseResultId)
+    public async Task<List<AzdoTestAttachment>> GetTestResultAttachmentsAsync(int runId, int testCaseResultId, CancellationToken ct = default)
     {
         var url = $"_apis/test/Runs/{runId}/Results/{testCaseResultId}/attachments?api-version=7.2-preview.1";
-        var response = await HttpClient.GetAsync(url);
+        var response = await HttpClient.GetAsync(url, ct);
         response.EnsureSuccessStatusCode();
 
-        var json = await response.Content.ReadAsStringAsync();
+        var json = await response.Content.ReadAsStringAsync(ct);
         var result = JsonSerializer.Deserialize<AzdoListResponse<AzdoTestAttachment>>(json, s_jsonOptions)
             ?? throw new InvalidOperationException("Failed to deserialize test result attachments response");
 
         return result.Value;
     }
 
-    public async Task<List<AzdoJobTestSummary>> GetTestSummaryByJobAsync(int buildId)
+    public async Task<List<AzdoJobTestSummary>> GetTestSummaryByJobAsync(int buildId, CancellationToken ct = default)
     {
         var buildUri = $"vstfs:///Build/Build/{buildId}";
         var runsUrl = $"_apis/test/runs?api-version=7.1&includeRunDetails=true&buildUri={Uri.EscapeDataString(buildUri)}";
 
-        var response = await HttpClient.GetAsync(runsUrl);
+        var response = await HttpClient.GetAsync(runsUrl, ct);
         response.EnsureSuccessStatusCode();
 
-        var json = await response.Content.ReadAsStringAsync();
+        var json = await response.Content.ReadAsStringAsync(ct);
         var runs = JsonSerializer.Deserialize<AzdoListResponse<AzdoTestRun>>(json, s_jsonOptions)
             ?? throw new InvalidOperationException("Failed to deserialize test runs response");
 
@@ -305,13 +322,13 @@ public sealed class AzdoClient
         }).ToList();
     }
 
-    public async Task<AzdoTimeline> GetTimelineAsync(int buildId)
+    public async Task<AzdoTimeline> GetTimelineAsync(int buildId, CancellationToken ct = default)
     {
         var url = $"_apis/build/builds/{buildId}/timeline?api-version=7.1";
-        var response = await HttpClient.GetAsync(url);
+        var response = await HttpClient.GetAsync(url, ct);
         response.EnsureSuccessStatusCode();
 
-        var json = await response.Content.ReadAsStringAsync();
+        var json = await response.Content.ReadAsStringAsync(ct);
         var raw = JsonSerializer.Deserialize<AzdoTimelineRaw>(json, s_jsonOptions)
             ?? throw new InvalidOperationException("Failed to deserialize timeline response");
 
@@ -342,13 +359,13 @@ public sealed class AzdoClient
         };
     }
 
-    public async Task<List<AzdoArtifact>> GetArtifactsAsync(int buildId)
+    public async Task<List<AzdoArtifact>> GetArtifactsAsync(int buildId, CancellationToken ct = default)
     {
         var url = $"_apis/build/builds/{buildId}/artifacts?api-version=7.1";
-        var response = await HttpClient.GetAsync(url);
+        var response = await HttpClient.GetAsync(url, ct);
         response.EnsureSuccessStatusCode();
 
-        var json = await response.Content.ReadAsStringAsync();
+        var json = await response.Content.ReadAsStringAsync(ct);
         var raw = JsonSerializer.Deserialize<AzdoListResponse<AzdoArtifactRaw>>(json, s_jsonOptions)
             ?? throw new InvalidOperationException("Failed to deserialize artifacts response");
 
@@ -363,34 +380,34 @@ public sealed class AzdoClient
         }).ToList();
     }
 
-    public async Task DownloadArtifactAsync(int buildId, string artifactName, string outputPath)
+    public async Task DownloadArtifactAsync(int buildId, string artifactName, string outputPath, CancellationToken ct = default)
     {
-        var artifacts = await GetArtifactsAsync(buildId);
+        var artifacts = await GetArtifactsAsync(buildId, ct);
         var artifact = artifacts.FirstOrDefault(a => a.Name == artifactName)
             ?? throw new InvalidOperationException($"Artifact '{artifactName}' not found for build {buildId}");
 
         var downloadUrl = artifact.DownloadUrl
             ?? throw new InvalidOperationException($"Artifact '{artifactName}' has no download URL");
 
-        using var response = await HttpClient.GetAsync(downloadUrl, HttpCompletionOption.ResponseHeadersRead);
+        using var response = await HttpClient.GetAsync(downloadUrl, HttpCompletionOption.ResponseHeadersRead, ct);
         response.EnsureSuccessStatusCode();
 
         using var fileStream = File.Create(outputPath);
-        await response.Content.CopyToAsync(fileStream);
+        await response.Content.CopyToAsync(fileStream, ct);
     }
 
     /// <summary>
     /// Lists files within an artifact. Supports both Container and PipelineArtifact types.
     /// </summary>
-    public async Task<List<ArtifactFileEntry>> GetArtifactFilesAsync(int buildId, AzdoArtifact artifact)
+    public async Task<List<ArtifactFileEntry>> GetArtifactFilesAsync(int buildId, AzdoArtifact artifact, CancellationToken ct = default)
     {
         if (artifact.ResourceType == "Container")
         {
-            return await GetContainerFilesAsync(artifact);
+            return await GetContainerFilesAsync(artifact, ct);
         }
         else if (artifact.ResourceType == "PipelineArtifact")
         {
-            return await GetPipelineArtifactFilesAsync(buildId, artifact);
+            return await GetPipelineArtifactFilesAsync(buildId, artifact, ct);
         }
         else
         {
@@ -401,7 +418,7 @@ public sealed class AzdoClient
     /// <summary>
     /// Downloads a single file from an artifact to the specified output path.
     /// </summary>
-    public async Task DownloadArtifactFileAsync(int buildId, AzdoArtifact artifact, ArtifactFileEntry file, string outputPath)
+    public async Task DownloadArtifactFileAsync(int buildId, AzdoArtifact artifact, ArtifactFileEntry file, string outputPath, CancellationToken ct = default)
     {
         string downloadUrl;
         if (artifact.ResourceType == "Container")
@@ -415,7 +432,7 @@ public sealed class AzdoClient
             downloadUrl = $"_apis/build/builds/{buildId}/artifacts?artifactName={Uri.EscapeDataString(artifact.Name)}&fileId={file.BlobId}&fileName={Uri.EscapeDataString(Path.GetFileName(file.Path))}&api-version=7.1";
         }
 
-        using var response = await HttpClient.GetAsync(downloadUrl, HttpCompletionOption.ResponseHeadersRead);
+        using var response = await HttpClient.GetAsync(downloadUrl, HttpCompletionOption.ResponseHeadersRead, ct);
         response.EnsureSuccessStatusCode();
 
         var dir = Path.GetDirectoryName(outputPath);
@@ -425,10 +442,10 @@ public sealed class AzdoClient
         }
 
         using var fileStream = File.Create(outputPath);
-        await response.Content.CopyToAsync(fileStream);
+        await response.Content.CopyToAsync(fileStream, ct);
     }
 
-    private async Task<List<ArtifactFileEntry>> GetContainerFilesAsync(AzdoArtifact artifact)
+    private async Task<List<ArtifactFileEntry>> GetContainerFilesAsync(AzdoArtifact artifact, CancellationToken ct = default)
     {
         // resource.data is "#/{containerId}/{artifactName}"
         var data = artifact.ResourceData
@@ -441,10 +458,10 @@ public sealed class AzdoClient
         // The resource URL points to the container. Append $format=json if not present
         var listUrl = url.Contains("?") ? $"{url}&$format=json" : $"{url}?$format=json";
 
-        using var response = await HttpClient.GetAsync(listUrl);
+        using var response = await HttpClient.GetAsync(listUrl, ct);
         response.EnsureSuccessStatusCode();
 
-        var json = await response.Content.ReadAsStringAsync();
+        var json = await response.Content.ReadAsStringAsync(ct);
         var container = JsonSerializer.Deserialize<ContainerItemsResponse>(json, s_jsonOptions);
         if (container?.Value is null)
         {
@@ -461,17 +478,17 @@ public sealed class AzdoClient
             }).ToList();
     }
 
-    private async Task<List<ArtifactFileEntry>> GetPipelineArtifactFilesAsync(int buildId, AzdoArtifact artifact)
+    private async Task<List<ArtifactFileEntry>> GetPipelineArtifactFilesAsync(int buildId, AzdoArtifact artifact, CancellationToken ct = default)
     {
         var fileId = artifact.ResourceData
             ?? throw new InvalidOperationException($"Artifact '{artifact.Name}' has no resource data (file ID)");
 
         var url = $"_apis/build/builds/{buildId}/artifacts?artifactName={Uri.EscapeDataString(artifact.Name)}&fileId={fileId}&fileName=manifest.json&api-version=7.1";
 
-        using var response = await HttpClient.GetAsync(url);
+        using var response = await HttpClient.GetAsync(url, ct);
         response.EnsureSuccessStatusCode();
 
-        var json = await response.Content.ReadAsStringAsync();
+        var json = await response.Content.ReadAsStringAsync(ct);
         var manifest = JsonSerializer.Deserialize<PipelineArtifactManifest>(json, s_jsonOptions);
         if (manifest?.Items is null)
         {
