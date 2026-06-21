@@ -1,5 +1,5 @@
 using System.Threading.Channels;
-using GitHub.Copilot.SDK;
+using GitHub.Copilot;
 
 namespace Tiger;
 
@@ -609,7 +609,7 @@ public sealed class BuildAnalysisService : IDisposable
             var responseText = new System.Text.StringBuilder();
             var lastEventKind = TranscriptEventKind.None;
 
-            using var subscription = session.On(evt =>
+            using var subscription = session.On<SessionEvent>(evt =>
             {
                 switch (evt)
                 {
