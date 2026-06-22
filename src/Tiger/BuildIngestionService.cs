@@ -152,7 +152,9 @@ public sealed class BuildIngestionService : IDisposable
         var taskTypes = new List<string> { "tests", "timeline" };
 
         // Only create pr_info task if this is a PR build and we don't already have the PR cached
-        if (build.PrNumber is not null && build.RepositoryName is not null)
+        if (build.PrNumber is not null &&
+            build.RepositoryName is not null &&
+            AzdoRepositoryTypes.IsGitHub(build.RepositoryType))
         {
             if (!HasPullRequest(build.RepositoryName, build.PrNumber.Value))
             {

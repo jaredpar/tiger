@@ -20,6 +20,7 @@ public class ConfigShowCommand : Command
         foreach (var source in config.Sources)
         {
             AnsiConsole.MarkupLine($"  [green]{source.Organization}[/] / [green]{source.Project}[/]");
+            AnsiConsole.MarkupLine($"    Repository type: [blue]{source.RepositoryType}[/]");
             if (source.Repositories.Count > 0)
             {
                 foreach (var repo in source.Repositories)

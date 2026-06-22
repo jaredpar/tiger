@@ -147,7 +147,7 @@ public sealed class BuildBackfillService : IDisposable
         return totalIngested;
     }
 
-    private async Task<int> BackfillSourceAsync(AzdoSource source, bool forceFullWindow, CancellationToken ct)
+    internal async Task<int> BackfillSourceAsync(AzdoSource source, bool forceFullWindow, CancellationToken ct)
     {
         DateTime since;
         if (forceFullWindow)
@@ -172,8 +172,8 @@ public sealed class BuildBackfillService : IDisposable
             builds = [];
             foreach (var repo in source.Repositories)
             {
-                _log.Info("Backfill", $"  Querying {repo}...");
-                var repoBuilds = await client.GetCompletedBuildsSinceAsync(since, repositoryId: repo, ct: ct);
+                _log.Info("Backfill", $"  Querying {repo} ({source.RepositoryType})...");
+                var repoBuilds = await client.GetCompletedBuildsSinceAsync(since, repositoryId: repo, repositoryType: source.RepositoryType, ct: ct);
                 builds.AddRange(repoBuilds);
             }
         }

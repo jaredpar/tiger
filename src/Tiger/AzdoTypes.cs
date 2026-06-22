@@ -35,6 +35,9 @@ public class AzdoBuild
     [JsonPropertyName("repositoryName")]
     public string? RepositoryName { get; init; }
 
+    [JsonPropertyName("repositoryType")]
+    public string? RepositoryType { get; init; }
+
     [JsonPropertyName("prNumber")]
     public int? PrNumber { get; init; }
 

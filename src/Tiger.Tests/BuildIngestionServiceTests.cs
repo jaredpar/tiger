@@ -83,6 +83,54 @@ public class BuildIngestionServiceTests : IDisposable
     }
 
     [Fact]
+    public void InsertBuild_GitHubPr_CreatesPrInfoTask()
+    {
+        var build = new AzdoBuild
+        {
+            Id = 4,
+            BuildNumber = "20250101.4",
+            DefinitionName = "runtime",
+            DefinitionId = 42,
+            Status = "completed",
+            Result = "succeeded",
+            Uri = "https://dev.azure.com/org/proj/_build/results?buildId=4",
+            SourceBranch = "refs/pull/99/merge",
+            RepositoryName = "dotnet/runtime",
+            RepositoryType = AzdoRepositoryTypes.GitHub,
+            PrNumber = 99,
+        };
+
+        _service.InsertBuild("org", "proj", build);
+
+        var taskCount = CountIngestionTasks(4, "pr_info");
+        Assert.Equal(1L, taskCount);
+    }
+
+    [Fact]
+    public void InsertBuild_AzureReposPr_DoesNotCreatePrInfoTask()
+    {
+        var build = new AzdoBuild
+        {
+            Id = 5,
+            BuildNumber = "20250101.5",
+            DefinitionName = "runtime",
+            DefinitionId = 42,
+            Status = "completed",
+            Result = "succeeded",
+            Uri = "https://dev.azure.com/org/proj/_build/results?buildId=5",
+            SourceBranch = "refs/pull/99/merge",
+            RepositoryName = "runtime",
+            RepositoryType = AzdoRepositoryTypes.TfsGit,
+            PrNumber = 99,
+        };
+
+        _service.InsertBuild("org", "proj", build);
+
+        var taskCount = CountIngestionTasks(5, "pr_info");
+        Assert.Equal(0L, taskCount);
+    }
+
+    [Fact]
     public void InsertBuild_Duplicate_IsIgnored()
     {
         var build = new AzdoBuild
@@ -324,6 +372,20 @@ public class BuildIngestionServiceTests : IDisposable
             Status = "completed",
             Uri = $"https://example.com/{buildId}",
             SourceBranch = "main",
+        });
+    }
+
+    private long CountIngestionTasks(int buildId, string taskType)
+    {
+        return _db.WithCommand(cmd =>
+        {
+            cmd.CommandText = """
+                SELECT COUNT(*) FROM build_ingestion_tasks
+                WHERE organization = 'org' AND build_id = @buildId AND task_type = @taskType
+                """;
+            cmd.Parameters.AddWithValue("@buildId", buildId);
+            cmd.Parameters.AddWithValue("@taskType", taskType);
+            return (long)cmd.ExecuteScalar()!;
         });
     }
 

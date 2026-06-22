@@ -97,6 +97,7 @@ public sealed class AzdoClient
         DefinitionId = b.Definition?.Id ?? 0,
         SourceVersion = b.SourceVersion,
         RepositoryName = b.Repository?.Id ?? b.Repository?.Name,
+        RepositoryType = b.Repository?.Type,
         PrNumber = ExtractPrNumber(b.SourceBranch),
         FinishTime = b.FinishTime,
     };
@@ -143,20 +144,27 @@ public sealed class AzdoClient
     public async Task<List<AzdoBuild>> GetCompletedBuildsSinceAsync(
         DateTime minFinishTime,
         string? repositoryId = null,
+        string repositoryType = AzdoRepositoryTypes.GitHub,
         int pageSize = 100,
         CancellationToken ct = default)
     {
         var all = new List<AzdoBuild>();
         string? continuationToken = null;
         var minTimeStr = minFinishTime.ToUniversalTime().ToString("o");
+        repositoryType = AzdoRepositoryTypes.Normalize(repositoryType);
+        var buildRepositoryId = repositoryId is not null
+            ? await ResolveRepositoryIdForBuildQueryAsync(repositoryId, repositoryType, ct)
+            : null;
 
         do
         {
             ct.ThrowIfCancellationRequested();
 
             var url = $"_apis/build/builds?api-version=7.1&statusFilter=completed&minTime={Uri.EscapeDataString(minTimeStr)}&$top={pageSize}&queryOrder=finishTimeAscending";
-            if (repositoryId is not null)
-                url += $"&repositoryId={Uri.EscapeDataString(repositoryId)}&repositoryType=GitHub";
+            if (buildRepositoryId is not null)
+            {
+                url += $"&repositoryId={Uri.EscapeDataString(buildRepositoryId)}&repositoryType={Uri.EscapeDataString(repositoryType)}";
+            }
             if (continuationToken is not null)
                 url += $"&continuationToken={Uri.EscapeDataString(continuationToken)}";
 
@@ -179,9 +187,17 @@ public sealed class AzdoClient
         return all;
     }
 
-    public async Task<List<AzdoBuild>> GetBuildsForRepositoryAsync(string repository, int top = 10, string? reasonFilter = null, string? statusFilter = null, CancellationToken ct = default)
+    public async Task<List<AzdoBuild>> GetBuildsForRepositoryAsync(
+        string repository,
+        int top = 10,
+        string? reasonFilter = null,
+        string? statusFilter = null,
+        string repositoryType = AzdoRepositoryTypes.GitHub,
+        CancellationToken ct = default)
     {
-        var url = $"_apis/build/builds?api-version=7.1&$top={top}&repositoryId={Uri.EscapeDataString(repository)}&repositoryType=GitHub";
+        repositoryType = AzdoRepositoryTypes.Normalize(repositoryType);
+        var buildRepositoryId = await ResolveRepositoryIdForBuildQueryAsync(repository, repositoryType, ct);
+        var url = $"_apis/build/builds?api-version=7.1&$top={top}&repositoryId={Uri.EscapeDataString(buildRepositoryId)}&repositoryType={Uri.EscapeDataString(repositoryType)}";
         if (reasonFilter is not null)
         {
             url += $"&reasonFilter={Uri.EscapeDataString(reasonFilter)}";
@@ -199,6 +215,36 @@ public sealed class AzdoClient
             ?? throw new InvalidOperationException("Failed to deserialize builds response");
 
         return result.Value.Select(MapBuild).ToList();
+    }
+
+    private async Task<string> ResolveRepositoryIdForBuildQueryAsync(
+        string repository,
+        string repositoryType,
+        CancellationToken ct)
+    {
+        if (!repositoryType.Equals(AzdoRepositoryTypes.TfsGit, StringComparison.OrdinalIgnoreCase) ||
+            Guid.TryParse(repository, out _))
+        {
+            return repository;
+        }
+
+        var response = await HttpClient.GetAsync("_apis/git/repositories?api-version=7.1", ct);
+        response.EnsureSuccessStatusCode();
+
+        var json = await response.Content.ReadAsStringAsync(ct);
+        var result = JsonSerializer.Deserialize<AzdoListResponse<AzdoGitRepository>>(json, s_jsonOptions)
+            ?? throw new InvalidOperationException("Failed to deserialize repositories response");
+
+        var match = result.Value.FirstOrDefault(r =>
+            repository.Equals(r.Id, StringComparison.OrdinalIgnoreCase) ||
+            repository.Equals(r.Name, StringComparison.OrdinalIgnoreCase));
+        if (match is null)
+        {
+            throw new InvalidOperationException(
+                $"Azure Repos repository '{repository}' was not found in {Organization}/{Project}. Use the repository name or repository ID from AzDO.");
+        }
+
+        return match.Id;
     }
 
     public async Task<List<AzdoBuild>> GetBuildsForPullRequestAsync(string repository, int prNumber, int top = 10, CancellationToken ct = default)
@@ -573,6 +619,18 @@ public sealed class AzdoClient
 
         [JsonPropertyName("name")]
         public string? Name { get; init; }
+
+        [JsonPropertyName("type")]
+        public string? Type { get; init; }
+    }
+
+    private class AzdoGitRepository
+    {
+        [JsonPropertyName("id")]
+        public required string Id { get; init; }
+
+        [JsonPropertyName("name")]
+        public required string Name { get; init; }
     }
 
     private class AzdoTestRun
