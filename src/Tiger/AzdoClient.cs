@@ -113,12 +113,16 @@ public sealed class AzdoClient
         return null;
     }
 
-    public async Task<List<AzdoBuild>> GetRecentBuildsAsync(int? definitionId = null, int top = 10, CancellationToken ct = default)
+    public async Task<List<AzdoBuild>> GetRecentBuildsAsync(int? definitionId = null, int top = 10, string? statusFilter = null, CancellationToken ct = default)
     {
         var url = $"_apis/build/builds?api-version=7.1&$top={top}";
         if (definitionId is not null)
         {
             url += $"&definitions={definitionId}";
+        }
+        if (statusFilter is not null)
+        {
+            url += $"&statusFilter={Uri.EscapeDataString(statusFilter)}";
         }
 
         var response = await HttpClient.GetAsync(url, ct);
@@ -175,12 +179,16 @@ public sealed class AzdoClient
         return all;
     }
 
-    public async Task<List<AzdoBuild>> GetBuildsForRepositoryAsync(string repository, int top = 10, string? reasonFilter = null, CancellationToken ct = default)
+    public async Task<List<AzdoBuild>> GetBuildsForRepositoryAsync(string repository, int top = 10, string? reasonFilter = null, string? statusFilter = null, CancellationToken ct = default)
     {
         var url = $"_apis/build/builds?api-version=7.1&$top={top}&repositoryId={Uri.EscapeDataString(repository)}&repositoryType=GitHub";
         if (reasonFilter is not null)
         {
             url += $"&reasonFilter={Uri.EscapeDataString(reasonFilter)}";
+        }
+        if (statusFilter is not null)
+        {
+            url += $"&statusFilter={Uri.EscapeDataString(statusFilter)}";
         }
 
         var response = await HttpClient.GetAsync(url, ct);

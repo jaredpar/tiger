@@ -74,37 +74,56 @@ public class BuildPollerTests : IDisposable
     }
 
     [Fact]
-    public async Task PollsAndCallsOnNewBuilds()
+    public void FilterNewBuilds_NewBuildsAreIncluded()
     {
+        var poller = CreatePoller();
         var builds = new List<AzdoBuild>
         {
-            new() { Id = 5, BuildNumber = "5", Status = "completed", Result = "succeeded", Uri = "", SourceBranch = "main", DefinitionName = "def" },
-            new() { Id = 10, BuildNumber = "10", Status = "completed", Result = "failed", Uri = "", SourceBranch = "main", DefinitionName = "def" },
-            new() { Id = 3, BuildNumber = "3", Status = "inProgress", Uri = "", SourceBranch = "main", DefinitionName = "def" },
+            MakeBuild(1, finishTime: new DateTime(2025, 1, 1, 12, 0, 0)),
+            MakeBuild(2, finishTime: new DateTime(2025, 1, 1, 13, 0, 0)),
         };
 
-        var config = new TigerConfig
-        {
-            PollIntervalSeconds = 3600,
-            Sources = [new AzdoSource { Organization = "org", Project = "proj" }],
-        };
+        var result = poller.FilterNewBuilds("org", builds);
+        Assert.Equal(2, result.Count);
+    }
 
-        var captured = new List<(string org, string proj, List<AzdoBuild> builds)>();
-        var poller = new BuildPoller(config, _db, new AzdoClientFactory((org, proj) => throw new NotImplementedException()))
-        {
-            OnNewBuilds = (org, proj, newBuilds) =>
-            {
-                captured.Add((org, proj, newBuilds));
-                return Task.CompletedTask;
-            }
-        };
+    [Fact]
+    public void FilterNewBuilds_AlreadyIngestedBuildsAreSkipped()
+    {
+        var poller = CreatePoller();
+        var build = MakeBuild(1, finishTime: new DateTime(2025, 1, 1, 12, 0, 0));
 
-        // Directly test PollSourceAsync would be ideal but it's private.
-        // Instead test watermark behavior which is the core logic.
-        poller.SetWatermark("org", "proj", 0);
-        Assert.Equal(0, poller.GetWatermark("org", "proj"));
-        poller.SetWatermark("org", "proj", 10);
-        Assert.Equal(10, poller.GetWatermark("org", "proj"));
+        // Pre-insert the build
+        var service = new BuildIngestionService(_db);
+        service.InsertBuild("org", "proj", build);
+
+        var result = poller.FilterNewBuilds("org", [build]);
+        Assert.Empty(result);
+    }
+
+    [Fact]
+    public void FilterNewBuilds_LongRunningBuildNotMissed()
+    {
+        // Simulates the scenario where a long-running build completes after
+        // other builds with higher IDs have already been ingested.
+        var poller = CreatePoller();
+        var service = new BuildIngestionService(_db);
+
+        // Build 100 was ingested in a previous poll cycle
+        var earlyBuild = MakeBuild(100, finishTime: new DateTime(2025, 1, 1, 10, 0, 0));
+        service.InsertBuild("org", "proj", earlyBuild);
+
+        // Build 200 was also ingested (higher ID)
+        var laterBuild = MakeBuild(200, finishTime: new DateTime(2025, 1, 1, 11, 0, 0));
+        service.InsertBuild("org", "proj", laterBuild);
+
+        // Build 150 was long-running and just completed — it's new
+        var longRunning = MakeBuild(150, finishTime: new DateTime(2025, 1, 1, 12, 0, 0));
+
+        // The API returns all three (completed), our filter should pick up only 150
+        var result = poller.FilterNewBuilds("org", [earlyBuild, longRunning, laterBuild]);
+        Assert.Single(result);
+        Assert.Equal(150, result[0].Id);
     }
 
     private BuildPoller CreatePoller()
@@ -112,4 +131,16 @@ public class BuildPollerTests : IDisposable
         var config = new TigerConfig { Sources = [] };
         return new BuildPoller(config, _db, new AzdoClientFactory((org, proj) => throw new NotImplementedException()));
     }
+
+    private static AzdoBuild MakeBuild(int id, DateTime? finishTime = null) => new()
+    {
+        Id = id,
+        BuildNumber = $"2025.{id}",
+        Status = "completed",
+        Result = "failed",
+        Uri = "",
+        SourceBranch = "refs/heads/main",
+        DefinitionName = "test-def",
+        FinishTime = finishTime,
+    };
 }

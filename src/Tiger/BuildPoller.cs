@@ -89,29 +89,30 @@ public sealed class BuildPoller : IDisposable
 
     private async Task PollSourceAsync(AzdoSource source, CancellationToken ct)
     {
-        var watermark = GetWatermark(source.Organization, source.Project);
         var client = _clientFactory.Create(source.Organization, source.Project);
 
-        // Fetch recent completed builds, filtered by repository if configured
+        // Fetch recent completed builds, filtered by repository if configured.
+        // We use statusFilter=completed so only terminal builds are returned,
+        // avoiding the old watermark race where in-progress builds caused the
+        // watermark to advance past long-running builds.
         List<AzdoBuild> builds;
         if (source.Repositories.Count > 0)
         {
             builds = [];
             foreach (var repo in source.Repositories)
             {
-                var repoBuilds = await client.GetBuildsForRepositoryAsync(repo, top: 50);
+                var repoBuilds = await client.GetBuildsForRepositoryAsync(repo, top: 50, statusFilter: "completed");
                 builds.AddRange(repoBuilds);
             }
         }
         else
         {
-            builds = await client.GetRecentBuildsAsync(top: 50);
+            builds = await client.GetRecentBuildsAsync(top: 50, statusFilter: "completed");
         }
 
-        var newBuilds = builds
-            .Where(b => b.Id > watermark && b.Status == "completed")
-            .OrderBy(b => b.Id)
-            .ToList();
+        // Filter to builds not yet in the DB. Already-ingested builds are
+        // skipped because INSERT OR IGNORE on tasks makes re-insertion a no-op.
+        var newBuilds = FilterNewBuilds(source.Organization, builds);
 
         if (newBuilds.Count == 0) return;
 
@@ -123,12 +124,35 @@ public sealed class BuildPoller : IDisposable
             await OnNewBuilds(source.Organization, source.Project, newBuilds);
         }
 
-        // Update watermark to the highest build ID we processed
-        var newWatermark = newBuilds.Max(b => b.Id);
-        SetWatermark(source.Organization, source.Project, newWatermark);
-
         _log?.Success("Poller",
             $"Ingested {newBuilds.Count} builds for {source.Organization}/{source.Project}");
+    }
+
+    /// <summary>
+    /// Returns builds that are not yet in the database.
+    /// </summary>
+    internal List<AzdoBuild> FilterNewBuilds(string organization, List<AzdoBuild> builds)
+    {
+        var result = new List<AzdoBuild>();
+        foreach (var build in builds)
+        {
+            if (!BuildExists(organization, build.Id))
+            {
+                result.Add(build);
+            }
+        }
+        return result;
+    }
+
+    private bool BuildExists(string organization, int buildId)
+    {
+        return _db.WithCommand(cmd =>
+        {
+            cmd.CommandText = "SELECT 1 FROM builds WHERE organization = @org AND build_id = @buildId";
+            cmd.Parameters.AddWithValue("@org", organization);
+            cmd.Parameters.AddWithValue("@buildId", buildId);
+            return cmd.ExecuteScalar() is not null;
+        });
     }
 
     internal int GetWatermark(string organization, string project)
