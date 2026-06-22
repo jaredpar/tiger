@@ -87,7 +87,7 @@ public sealed class BuildPoller : IDisposable
         }
     }
 
-    private async Task PollSourceAsync(AzdoSource source, CancellationToken ct)
+    internal async Task PollSourceAsync(AzdoSource source, CancellationToken ct)
     {
         var client = _clientFactory.Create(source.Organization, source.Project);
 
@@ -101,7 +101,7 @@ public sealed class BuildPoller : IDisposable
             builds = [];
             foreach (var repo in source.Repositories)
             {
-                var repoBuilds = await client.GetBuildsForRepositoryAsync(repo, top: 50, statusFilter: "completed");
+                var repoBuilds = await client.GetBuildsForRepositoryAsync(repo, top: 50, statusFilter: "completed", repositoryType: source.RepositoryType, ct: ct);
                 builds.AddRange(repoBuilds);
             }
         }

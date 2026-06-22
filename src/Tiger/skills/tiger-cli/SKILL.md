@@ -33,7 +33,7 @@ All output is structured **JSON** suitable for programmatic consumption.
 | `azdo download <build-id>` | Download an artifact from a build |
 | `azdo download-dumps <build-id>` | Download crash dump files from build artifacts |
 | `azdo pr-builds` | Get builds for a pull request |
-| `azdo repo-builds` | Get builds for a repository |
+| `azdo repo-builds` | Get builds for a repository; use `--repository-type TfsGit` for Azure Repos |
 
 ### `tiger helix` — Helix queries
 

@@ -3,6 +3,40 @@ using System.Text.Json.Serialization;
 
 namespace Tiger;
 
+public static class AzdoRepositoryTypes
+{
+    public const string GitHub = "GitHub";
+    public const string TfsGit = "TfsGit";
+
+    public static bool IsGitHub(string? repositoryType) =>
+        repositoryType is null || repositoryType.Equals(GitHub, StringComparison.OrdinalIgnoreCase);
+
+    public static bool IsSupported(string? repositoryType) =>
+        repositoryType is not null &&
+        (repositoryType.Equals(GitHub, StringComparison.OrdinalIgnoreCase) ||
+         repositoryType.Equals(TfsGit, StringComparison.OrdinalIgnoreCase));
+
+    public static string Normalize(string? repositoryType)
+    {
+        if (repositoryType is null)
+        {
+            return GitHub;
+        }
+
+        if (repositoryType.Equals(GitHub, StringComparison.OrdinalIgnoreCase))
+        {
+            return GitHub;
+        }
+
+        if (repositoryType.Equals(TfsGit, StringComparison.OrdinalIgnoreCase))
+        {
+            return TfsGit;
+        }
+
+        throw new InvalidOperationException($"Unsupported AzDO repository type '{repositoryType}'. Supported values are '{GitHub}' and '{TfsGit}'.");
+    }
+}
+
 /// <summary>
 /// An AzDO organization/project pair to monitor.
 /// </summary>
@@ -13,6 +47,9 @@ public sealed class AzdoSource
 
     [JsonPropertyName("project")]
     public required string Project { get; set; }
+
+    [JsonPropertyName("repositoryType")]
+    public string RepositoryType { get; set; } = AzdoRepositoryTypes.GitHub;
 
     [JsonPropertyName("repositories")]
     public List<string> Repositories { get; set; } = [];
@@ -51,8 +88,10 @@ public sealed class TigerConfig
         }
 
         var json = File.ReadAllText(path);
-        return JsonSerializer.Deserialize<TigerConfig>(json, s_jsonOptions)
+        var config = JsonSerializer.Deserialize<TigerConfig>(json, s_jsonOptions)
             ?? CreateDefault();
+        config.Normalize();
+        return config;
     }
 
     /// <summary>
@@ -60,6 +99,7 @@ public sealed class TigerConfig
     /// </summary>
     public void Save(string configDirectory)
     {
+        Normalize();
         Directory.CreateDirectory(configDirectory);
         var path = GetConfigPath(configDirectory);
         var json = JsonSerializer.Serialize(this, s_jsonOptions);
@@ -68,6 +108,14 @@ public sealed class TigerConfig
 
     public static string GetConfigPath(string configDirectory) =>
         Path.Combine(configDirectory, "config.json");
+
+    private void Normalize()
+    {
+        foreach (var source in Sources)
+        {
+            source.RepositoryType = AzdoRepositoryTypes.Normalize(source.RepositoryType);
+        }
+    }
 
     private static TigerConfig CreateDefault() => new()
     {

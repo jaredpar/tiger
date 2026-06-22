@@ -362,6 +362,10 @@ public class AzdoRepoBuildsCommand : AsyncCommand<AzdoRepoBuildsCommand.Settings
         [CommandOption("--top")]
         [Description("Maximum number of builds to return")]
         public int Top { get; set; } = 10;
+
+        [CommandOption("--repository-type")]
+        [Description("AzDO repository type: GitHub or TfsGit")]
+        public string RepositoryType { get; set; } = AzdoRepositoryTypes.GitHub;
     }
 
     protected override async Task<int> ExecuteAsync(CommandContext context, Settings settings, CancellationToken ct)
@@ -374,7 +378,7 @@ public class AzdoRepoBuildsCommand : AsyncCommand<AzdoRepoBuildsCommand.Settings
         };
 
         var client = settings.CreateClient();
-        var builds = await client.GetBuildsForRepositoryAsync(settings.Repository, settings.Top, reasonFilter);
+        var builds = await client.GetBuildsForRepositoryAsync(settings.Repository, settings.Top, reasonFilter, repositoryType: settings.RepositoryType, ct: ct);
         Console.WriteLine(JsonSerializer.Serialize(builds, JsonOptions.Indented));
         return 0;
     }

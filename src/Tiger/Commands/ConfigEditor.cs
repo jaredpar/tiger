@@ -30,6 +30,7 @@ public sealed class ConfigEditor
             "[blue]R[/]epository — add to a source",
             "[blue]D[/]elete source",
             "Remove repository from a source ([blue]X[/])",
+            "Repository type — set for source ([blue]T[/])",
         };
         var hotkeys = new Dictionary<ConsoleKey, int>
         {
@@ -37,6 +38,7 @@ public sealed class ConfigEditor
             [ConsoleKey.R] = 1,
             [ConsoleKey.D] = 2,
             [ConsoleKey.X] = 3,
+            [ConsoleKey.T] = 4,
         };
 
         while (true)
@@ -64,6 +66,9 @@ public sealed class ConfigEditor
                     break;
                 case 3:
                     RemoveRepository();
+                    break;
+                case 4:
+                    SetRepositoryType();
                     break;
             }
         }
@@ -93,7 +98,7 @@ public sealed class ConfigEditor
             for (var i = 0; i < _config.Sources.Count; i++)
             {
                 var source = _config.Sources[i];
-                AnsiConsole.MarkupLine($"  [green]{i + 1}.[/] [bold]{Markup.Escape(source.Organization)}[/] / [bold]{Markup.Escape(source.Project)}[/]");
+                AnsiConsole.MarkupLine($"  [green]{i + 1}.[/] [bold]{Markup.Escape(source.Organization)}[/] / [bold]{Markup.Escape(source.Project)}[/] [dim]({Markup.Escape(source.RepositoryType)})[/]");
                 if (source.Repositories.Count > 0)
                 {
                     foreach (var repo in source.Repositories)
@@ -168,7 +173,9 @@ public sealed class ConfigEditor
         var source = SelectSource("Select source to add repository to:");
         if (source is null) return;
 
-        var repo = BrowserUI.PromptPattern("Repository (e.g. dotnet/roslyn):");
+        var repo = BrowserUI.PromptPattern(source.RepositoryType.Equals(AzdoRepositoryTypes.TfsGit, StringComparison.OrdinalIgnoreCase)
+            ? "Repository name or ID:"
+            : "Repository (e.g. dotnet/roslyn):");
         if (repo is null) return;
 
         if (source.Repositories.Contains(repo, StringComparer.OrdinalIgnoreCase))
@@ -206,6 +213,28 @@ public sealed class ConfigEditor
         _config.Save(_configDirectory);
         Changed = true;
         AnsiConsole.MarkupLine($"[green]Removed {Markup.Escape(repo)} from {Markup.Escape(source.Organization)}/{Markup.Escape(source.Project)}[/]");
+        Console.ReadKey(true);
+    }
+
+    private void SetRepositoryType()
+    {
+        var source = SelectSource("Select source to update:");
+        if (source is null) return;
+
+        var choices = new List<string>
+        {
+            AzdoRepositoryTypes.GitHub,
+            AzdoRepositoryTypes.TfsGit,
+        };
+
+        AnsiConsole.WriteLine();
+        var selected = BrowserUI.SelectWithEscape("Repository type:", choices);
+        if (selected < 0) return;
+
+        source.RepositoryType = choices[selected];
+        _config.Save(_configDirectory);
+        Changed = true;
+        AnsiConsole.MarkupLine($"[green]Set repository type for {Markup.Escape(source.Organization)}/{Markup.Escape(source.Project)} to {source.RepositoryType}[/]");
         Console.ReadKey(true);
     }
 

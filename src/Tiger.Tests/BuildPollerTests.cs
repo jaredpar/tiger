@@ -1,3 +1,4 @@
+using System.Net;
 using Xunit;
 
 namespace Tiger.Tests;
@@ -126,6 +127,75 @@ public class BuildPollerTests : IDisposable
         Assert.Equal(150, result[0].Id);
     }
 
+    [Fact]
+    public async Task PollSourceAsync_UsesConfiguredRepositoryType()
+    {
+        var requestUris = new List<Uri>();
+        var source = new AzdoSource
+        {
+            Organization = "org",
+            Project = "proj",
+            RepositoryType = AzdoRepositoryTypes.TfsGit,
+            Repositories = ["Repo"],
+        };
+        var config = new TigerConfig
+        {
+            Sources = [source],
+        };
+        var handler = new DelegateHandler((request, ct) =>
+        {
+            requestUris.Add(request.RequestUri!);
+            if (request.RequestUri!.ToString().Contains("_apis/git/repositories"))
+            {
+                return Task.FromResult(CreateJsonResponse("""
+                    {
+                      "count": 1,
+                      "value": [
+                        {
+                          "id": "11111111-1111-1111-1111-111111111111",
+                          "name": "Repo"
+                        }
+                      ]
+                    }
+                    """));
+            }
+
+            return Task.FromResult(CreateJsonResponse("""
+                {
+                  "count": 1,
+                  "value": [
+                    {
+                      "id": 42,
+                      "buildNumber": "20250622.1",
+                      "status": "completed",
+                      "result": "succeeded",
+                      "uri": "vstfs:///Build/Build/42",
+                      "sourceBranch": "refs/heads/main",
+                      "definition": { "id": 7, "name": "CI" },
+                      "repository": { "id": "Repo", "name": "Repo", "type": "TfsGit" }
+                    }
+                  ]
+                }
+                """));
+        });
+        var poller = new BuildPoller(config, _db, new AzdoClientFactory((org, proj) => AzdoClient.Create(handler, org, proj)));
+        List<AzdoBuild>? observedBuilds = null;
+        poller.OnNewBuilds = (_, _, builds) =>
+        {
+            observedBuilds = builds;
+            return Task.CompletedTask;
+        };
+
+        await poller.PollSourceAsync(source, CancellationToken.None);
+
+        Assert.Equal(2, requestUris.Count);
+        Assert.Contains("_apis/git/repositories", requestUris[0].ToString());
+        Assert.Contains("repositoryId=11111111-1111-1111-1111-111111111111", requestUris[1].ToString());
+        Assert.Contains("repositoryType=TfsGit", requestUris[1].ToString());
+        var build = Assert.Single(observedBuilds!);
+        Assert.Equal(AzdoRepositoryTypes.TfsGit, build.RepositoryType);
+    }
+
     private BuildPoller CreatePoller()
     {
         var config = new TigerConfig { Sources = [] };
@@ -143,4 +213,19 @@ public class BuildPollerTests : IDisposable
         DefinitionName = "test-def",
         FinishTime = finishTime,
     };
+
+    private sealed class DelegateHandler(
+        Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> handler) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken ct) => handler(request, ct);
+    }
+
+    private static HttpResponseMessage CreateJsonResponse(string json)
+    {
+        return new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(json, System.Text.Encoding.UTF8, "application/json"),
+        };
+    }
 }
