@@ -37,6 +37,16 @@ public sealed partial class HelixClient
         return new HelixClient(httpClient);
     }
 
+    /// <summary>
+    /// Creates a <see cref="HelixClient"/> with a custom <see cref="HttpMessageHandler"/>
+    /// for testing purposes.
+    /// </summary>
+    public static HelixClient Create(HttpMessageHandler handler)
+    {
+        var httpClient = new HttpClient(handler) { BaseAddress = new Uri(BaseUrl) };
+        return new HelixClient(httpClient);
+    }
+
     /// <inheritdoc cref="Create"/>
     public static Task<HelixClient> CreateAsync(string? bearerToken = null) =>
         Task.FromResult(Create(bearerToken));
@@ -50,39 +60,39 @@ public sealed partial class HelixClient
     /// <summary>
     /// Get summary information about a single job.
     /// </summary>
-    public async Task<HelixJob> GetJobAsync(string jobName)
+    public async Task<HelixJob> GetJobAsync(string jobName, CancellationToken ct = default)
     {
         var url = $"api/jobs/{Uri.EscapeDataString(jobName)}?api-version={ApiVersion}";
-        return await GetAsync<HelixJob>(url);
+        return await GetAsync<HelixJob>(url, ct);
     }
 
     /// <summary>
     /// List all work items for a given job.
     /// </summary>
-    public async Task<List<HelixWorkItemSummary>> GetWorkItemsAsync(string jobName)
+    public async Task<List<HelixWorkItemSummary>> GetWorkItemsAsync(string jobName, CancellationToken ct = default)
     {
         var url = $"api/jobs/{Uri.EscapeDataString(jobName)}/workitems?api-version={ApiVersion}";
-        return await GetAsync<List<HelixWorkItemSummary>>(url);
+        return await GetAsync<List<HelixWorkItemSummary>>(url, ct);
     }
 
     /// <summary>
     /// Get detailed information about a single work item.
     /// </summary>
-    public async Task<HelixWorkItem> GetWorkItemAsync(string jobName, string workItemName)
+    public async Task<HelixWorkItem> GetWorkItemAsync(string jobName, string workItemName, CancellationToken ct = default)
     {
         var url = $"api/jobs/{Uri.EscapeDataString(jobName)}/workitems/{Uri.EscapeDataString(workItemName)}?api-version={ApiVersion}";
-        return await GetAsync<HelixWorkItem>(url);
+        return await GetAsync<HelixWorkItem>(url, ct);
     }
 
     /// <summary>
     /// Get console output for a specific work item.
     /// </summary>
-    public async Task<HelixWorkItemConsole> GetConsoleAsync(string jobName, string workItemName)
+    public async Task<HelixWorkItemConsole> GetConsoleAsync(string jobName, string workItemName, CancellationToken ct = default)
     {
         var url = $"api/jobs/{Uri.EscapeDataString(jobName)}/workitems/{Uri.EscapeDataString(workItemName)}/console?api-version={ApiVersion}";
-        var response = await HttpClient.GetAsync(url);
+        var response = await HttpClient.GetAsync(url, ct);
         response.EnsureSuccessStatusCode();
-        var text = await response.Content.ReadAsStringAsync();
+        var text = await response.Content.ReadAsStringAsync(ct);
         return new HelixWorkItemConsole
         {
             Job = jobName,
@@ -94,12 +104,12 @@ public sealed partial class HelixClient
     /// <summary>
     /// Get console output for multiple work items.
     /// </summary>
-    public async Task<List<HelixWorkItemConsole>> GetConsolesAsync(string jobName, List<HelixWorkItemSummary> workItems)
+    public async Task<List<HelixWorkItemConsole>> GetConsolesAsync(string jobName, List<HelixWorkItemSummary> workItems, CancellationToken ct = default)
     {
         var list = new List<HelixWorkItemConsole>();
         foreach (var workItem in workItems)
         {
-            var console = await GetConsoleAsync(jobName, workItem.Name);
+            var console = await GetConsoleAsync(jobName, workItem.Name, ct);
             list.Add(console);
         }
         return list;
@@ -108,35 +118,35 @@ public sealed partial class HelixClient
     /// <summary>
     /// List files uploaded from a specific work item.
     /// </summary>
-    public async Task<List<HelixUploadedFile>> GetFilesAsync(string jobName, string workItemName)
+    public async Task<List<HelixUploadedFile>> GetFilesAsync(string jobName, string workItemName, CancellationToken ct = default)
     {
         var url = $"api/jobs/{Uri.EscapeDataString(jobName)}/workitems/{Uri.EscapeDataString(workItemName)}/files?api-version={ApiVersion}";
-        return await GetAsync<List<HelixUploadedFile>>(url);
+        return await GetAsync<List<HelixUploadedFile>>(url, ct);
     }
 
     /// <summary>
     /// Download a specific file from a work item to a local path.
     /// </summary>
-    public async Task DownloadFileAsync(string jobName, string workItemName, string fileName, string outputPath)
+    public async Task DownloadFileAsync(string jobName, string workItemName, string fileName, string outputPath, CancellationToken ct = default)
     {
         var url = $"api/jobs/{Uri.EscapeDataString(jobName)}/workitems/{Uri.EscapeDataString(workItemName)}/files/{Uri.EscapeDataString(fileName)}?api-version={ApiVersion}";
-        var response = await HttpClient.GetAsync(url);
+        var response = await HttpClient.GetAsync(url, ct);
         response.EnsureSuccessStatusCode();
-        var bytes = await response.Content.ReadAsByteArrayAsync();
+        var bytes = await response.Content.ReadAsByteArrayAsync(ct);
         var dir = Path.GetDirectoryName(outputPath);
         if (dir is not null)
         {
             Directory.CreateDirectory(dir);
         }
-        await File.WriteAllBytesAsync(outputPath, bytes);
+        await File.WriteAllBytesAsync(outputPath, bytes, ct);
     }
 
     /// <summary>
     /// Download all files from a work item to a directory.
     /// </summary>
-    public async Task DownloadFilesAsync(string jobName, string workItemName, string outputDir)
+    public async Task DownloadFilesAsync(string jobName, string workItemName, string outputDir, CancellationToken ct = default)
     {
-        var files = await GetFilesAsync(jobName, workItemName);
+        var files = await GetFilesAsync(jobName, workItemName, ct);
         using var httpClient = new HttpClient();
         foreach (var file in files)
         {
@@ -148,16 +158,16 @@ public sealed partial class HelixClient
             {
                 Directory.CreateDirectory(dir);
             }
-            var bytes = await httpClient.GetByteArrayAsync(file.Link);
-            await File.WriteAllBytesAsync(filePath, bytes);
+            var bytes = await httpClient.GetByteArrayAsync(file.Link, ct);
+            await File.WriteAllBytesAsync(filePath, bytes, ct);
         }
     }
 
-    private async Task<T> GetAsync<T>(string url)
+    private async Task<T> GetAsync<T>(string url, CancellationToken ct = default)
     {
-        var response = await HttpClient.GetAsync(url);
+        var response = await HttpClient.GetAsync(url, ct);
         response.EnsureSuccessStatusCode();
-        var json = await response.Content.ReadAsStringAsync();
+        var json = await response.Content.ReadAsStringAsync(ct);
         return JsonSerializer.Deserialize<T>(json, s_jsonOptions)
             ?? throw new InvalidOperationException($"Failed to deserialize response from {url}");
     }
