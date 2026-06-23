@@ -59,6 +59,20 @@ When modifying code that has associated tests (check `src/Tiger.Tests/`), you **
 update or add tests to cover your changes. Run `dotnet test --nologo` to verify all tests
 pass before presenting changes for review.
 
+### Assertion Style — All Tests
+
+Do **not** use `Assert.Contains` to spot-check fragments of output. Every test must assert
+against the **complete expected value** using `Assert.Equal` with a raw string literal so the
+full behavior is visible and regressions are caught precisely.
+
+- For single-value results: `Assert.Equal("expected value", actual);`
+- For multi-line output: use a raw string literal (`"""..."""`) as the expected value and
+  `Assert.Equal(expected, actual)` (with `ignoreLineEndingDifferences: true` if needed).
+- For list results: join lines and compare the full string, or assert each element by index.
+  Never use `Assert.Contains(collection, predicate)` to search for a matching element.
+
+This applies to **all** test classes — not just UI rendering tests.
+
 ### UI Rendering Tests
 
 Tests that validate UI rendering **must** render through `IAnsiConsole` (using `TestConsole`

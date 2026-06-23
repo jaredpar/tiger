@@ -57,8 +57,12 @@ public static class MarkdownRenderer
 
             if (IsTableRow(trimmed) && i + 1 < lines.Length && IsTableSeparator(lines[i + 1].TrimEnd('\r')))
             {
-                // Tables can't be rendered to lines — skip (handled by Render directly)
-                i++;
+                // Skip entire table — tables are rendered by Render() directly via Spectre.Console Table
+                i += 2; // skip header + separator
+                while (i < lines.Length && IsTableRow(lines[i].TrimEnd('\r')))
+                {
+                    i++;
+                }
                 continue;
             }
 
@@ -260,6 +264,27 @@ public static class MarkdownRenderer
                 continue;
             }
 
+            // Numbered lists
+            if (trimmed.Length > 2 && char.IsDigit(trimmed[0]))
+            {
+                var dotIndex = trimmed.IndexOf(". ");
+                if (dotIndex > 0 && dotIndex <= 3 && trimmed[..dotIndex].All(char.IsDigit))
+                {
+                    var number = trimmed[..dotIndex];
+                    var content = FormatInlineMarkup(trimmed[(dotIndex + 2)..]);
+                    result.Add($"  [blue]{number}.[/] {content}");
+                    continue;
+                }
+            }
+
+            // Blockquotes
+            if (trimmed.StartsWith("> "))
+            {
+                var content = FormatInlineMarkup(trimmed[2..]);
+                result.Add($"  [dim]│[/] [italic]{content}[/]");
+                continue;
+            }
+
             // Empty lines
             if (string.IsNullOrWhiteSpace(trimmed))
             {
@@ -308,6 +333,9 @@ public static class MarkdownRenderer
 
         // Inline code: `text` → [grey]text[/]
         escaped = Regex.Replace(escaped, @"`(.+?)`", "[grey]$1[/]");
+
+        // Strikethrough: ~~text~~ → [strikethrough]text[/]
+        escaped = Regex.Replace(escaped, @"~~(.+?)~~", "[strikethrough]$1[/]");
 
         return escaped;
     }
