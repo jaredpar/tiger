@@ -424,4 +424,108 @@ public class MarkdownRendererTests
             """;
         Assert.Equal(expected, string.Join(Environment.NewLine, lines), ignoreLineEndingDifferences: true);
     }
+
+    [Fact]
+    public void Blockquote_RenderedWithBarAndItalic()
+    {
+        var md = "> Generated: 2026-06-22 14:15 | Window: 3 days";
+
+        var lines = MarkdownRenderer.ToMarkupLines(md);
+
+        Assert.Single(lines);
+        Assert.Equal("  [dim]│[/] [italic]Generated: 2026-06-22 14:15 | Window: 3 days[/]", lines[0]);
+    }
+
+    [Fact]
+    public void NumberedList_RenderedWithBlueNumbers()
+    {
+        var md = "1. First item\n2. Second item with **bold**";
+
+        var lines = MarkdownRenderer.ToMarkupLines(md);
+
+        var expected = """
+            [blue]1.[/] First item
+            [blue]2.[/] Second item with [bold]bold[/]
+            """;
+        Assert.Equal(expected.ReplaceLineEndings("\n").Trim(),
+            string.Join("\n", lines.Select(l => l.TrimStart())));
+    }
+
+    [Fact]
+    public void Strikethrough_RenderedWithStrikethroughMarkup()
+    {
+        var result = MarkdownRenderer.FormatInlineMarkup("~~resolved issue~~");
+
+        Assert.Equal("[strikethrough]resolved issue[/]", result);
+    }
+
+    [Fact]
+    public void HealthReport_RendersAllElements()
+    {
+        // Real-world health report content from a health agent run.
+        // Uses RenderToLines which properly tracks code blocks and skips tables.
+        var md = """
+            # Health Report — dotnet/roslyn / roslyn-CI
+
+            > Generated: 2026-06-22 2:14 PM PT | Window: 3 days
+
+            **Overall Health: 🟡 YELLOW**
+
+            **CI pass rate (main):** 3 succeeded / 5 failed in last 3 days.
+
+            ### Active Problems
+
+            | Problem | Since | Severity | Trend |
+            |---------|-------|----------|-------|
+            | Helix work item crashes | ~10+ days ago | 🟡 Medium | **Chronic** — infrastructure issue |
+            | `Fuzz_2` test host crash | Jun 22 | 🟠 Watch | **New** — first occurrence |
+
+            ### Known Issue Correlations
+            - None of the 6 active known issues matched failures in this window.
+
+            ### Recently Resolved
+            - ~~Main branch failure streak (Jun 19–22)~~: Partially resolved.
+
+            ### Recommended Actions
+            1. **Monitor `Fuzz_2` crash**: If it recurs, investigate the dump file.
+            2. **Investigate recurring 120-min timeout** on `Test_Windows_CoreClr_Debug_Single_Machine`.
+
+            ### Trends
+            - **Unstable YELLOW**: Main branch alternates between green and infrastructure-caused failures.
+            - **Upgrade to GREEN** if: Next 2+ main builds pass without timeout/crash issues.
+            """;
+
+        var lines = MarkdownRenderer.RenderToLines(md);
+        var actual = string.Join("\n", lines);
+
+        var expected = """
+            [bold blue underline]Health Report — dotnet/roslyn / roslyn-CI[/]
+
+              [dim]│[/] [italic]Generated: 2026-06-22 2:14 PM PT | Window: 3 days[/]
+
+              [bold]Overall Health: 🟡 YELLOW[/]
+
+              [bold]CI pass rate (main):[/] 3 succeeded / 5 failed in last 3 days.
+
+            [bold]Active Problems[/]
+
+
+            [bold]Known Issue Correlations[/]
+              [blue]•[/] None of the 6 active known issues matched failures in this window.
+
+            [bold]Recently Resolved[/]
+              [blue]•[/] [strikethrough]Main branch failure streak (Jun 19–22)[/]: Partially resolved.
+
+            [bold]Recommended Actions[/]
+              [blue]1.[/] [bold]Monitor [grey]Fuzz_2[/] crash[/]: If it recurs, investigate the dump file.
+              [blue]2.[/] [bold]Investigate recurring 120-min timeout[/] on [grey]Test_Windows_CoreClr_Debug_Single_Machine[/].
+
+            [bold]Trends[/]
+              [blue]•[/] [bold]Unstable YELLOW[/]: Main branch alternates between green and infrastructure-caused failures.
+              [blue]•[/] [bold]Upgrade to GREEN[/] if: Next 2+ main builds pass without timeout/crash issues.
+            """;
+        Assert.Equal(
+            expected.ReplaceLineEndings("\n").Trim(),
+            actual.ReplaceLineEndings("\n").Trim());
+    }
 }

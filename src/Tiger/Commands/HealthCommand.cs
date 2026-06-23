@@ -88,15 +88,7 @@ public sealed class HealthCommand : AsyncCommand
             var detailLines = new List<string>();
             if (state is not null)
             {
-                var lines = state.ReplaceLineEndings("\n").Split('\n');
-                foreach (var line in lines.Take(30))
-                {
-                    detailLines.Add(Markup.Escape(line));
-                }
-                if (lines.Length > 30)
-                {
-                    detailLines.Add($"[dim]... ({lines.Length - 30} more lines)[/]");
-                }
+                detailLines = MarkdownRenderer.ToMarkupLines(state);
             }
             else
             {
@@ -237,14 +229,7 @@ public sealed class HealthCommand : AsyncCommand
         if (File.Exists(run.LogPath))
         {
             var content = File.ReadAllText(run.LogPath);
-            var lines = content.ReplaceLineEndings("\n").Split('\n');
-            detailLines = lines.Take(40)
-                .Select(line => Markup.Escape(line))
-                .ToList();
-            if (lines.Length > 40)
-            {
-                detailLines.Add($"[dim]... ({lines.Length - 40} more lines)[/]");
-            }
+            detailLines = MarkdownRenderer.ToMarkupLines(content);
         }
         else
         {
