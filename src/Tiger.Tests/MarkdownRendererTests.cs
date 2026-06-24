@@ -1,3 +1,4 @@
+using Spectre.Console;
 using Xunit;
 
 namespace Tiger.Tests;
@@ -527,5 +528,269 @@ public class MarkdownRendererTests
         Assert.Equal(
             expected.ReplaceLineEndings("\n").Trim(),
             actual.ReplaceLineEndings("\n").Trim());
+    }
+
+    [Fact]
+    public void ToMarkupLines_RendersTableAsText()
+    {
+        var md = """
+            | Problem | Severity | Trend |
+            |---------|----------|-------|
+            | Helix crashes | Medium | Chronic |
+            | Test timeout | High | New |
+            """;
+
+        var lines = MarkdownRenderer.ToMarkupLines(md);
+        var actual = string.Join("\n", lines);
+
+        var expected = """
+              [bold]Problem      [/] [dim]│[/] [bold]Severity[/] [dim]│[/] [bold]Trend  [/]
+              [dim]──────────────┼──────────┼────────[/]
+              Helix crashes [dim]│[/] Medium   [dim]│[/] Chronic
+              Test timeout  [dim]│[/] High     [dim]│[/] New    
+            """;
+        Assert.Equal(
+            expected.ReplaceLineEndings("\n").Trim(),
+            actual.ReplaceLineEndings("\n").Trim());
+    }
+
+    [Fact]
+    public void RenderTableAsText_FormatsColumnsCorrectly()
+    {
+        var headers = new[] { "Name", "Status" };
+        var rows = new List<string[]>
+        {
+            new[] { "Alpha", "OK" },
+            new[] { "Beta release", "Failed" },
+        };
+
+        var lines = MarkdownRenderer.RenderTableAsText(headers, rows);
+        var actual = string.Join("\n", lines);
+
+        var expected = """
+              [bold]Name        [/] [dim]│[/] [bold]Status[/]
+              [dim]─────────────┼───────[/]
+              Alpha        [dim]│[/] OK    
+              Beta release [dim]│[/] Failed
+            """;
+        Assert.Equal(
+            expected.ReplaceLineEndings("\n").Trim(),
+            actual.ReplaceLineEndings("\n").Trim());
+    }
+
+    [Fact]
+    public void ToMarkupLines_ConstrainsTableToMaxWidth()
+    {
+        // Real-world table that's much wider than a typical terminal
+        var md = """
+            | Problem | Since | Severity | Trend |
+            |---------|-------|----------|-------|
+            | Test_Windows_CoreClr_Debug_Single_Machine 120-min timeout | Jun 20 | High | Persistent — 5 hits in 3 days |
+            | Razor AddImport code action tests (12 tests) | Jun 22 | Medium | Active — tracked by #83775 |
+            """;
+
+        var constrained = MarkdownRenderer.ToMarkupLines(md, 80);
+        var actual = string.Join("\n", constrained);
+
+        var expected = """
+              [bold]Problem                             [/] [dim]│[/] [bold]Since [/] [dim]│[/] [bold]Severity[/] [dim]│[/] [bold]Trend              [/]
+              [dim]─────────────────────────────────────┼────────┼──────────┼────────────────────[/]
+              Test_Windows_CoreClr_Debug_Single_Ma [dim]│[/] Jun 20 [dim]│[/] High     [dim]│[/] Persistent — 5     
+              chine 120-min timeout                [dim]│[/]        [dim]│[/]          [dim]│[/] hits in 3 days     
+              Razor AddImport code action tests    [dim]│[/] Jun 22 [dim]│[/] Medium   [dim]│[/] Active — tracked   
+              (12 tests)                           [dim]│[/]        [dim]│[/]          [dim]│[/] by #83775          
+            """;
+        Assert.Equal(expected.ReplaceLineEndings("\n"), actual);
+    }
+
+    [Fact]
+    public void RenderTableAsText_WordWrapsWhenConstrained()
+    {
+        var headers = new[] { "Name", "Description" };
+        var rows = new List<string[]>
+        {
+            new[] { "Alpha", "A very long description that should be truncated to fit the width" },
+        };
+
+        // maxWidth = 40: available for columns = 40 - 2 (indent) - 3 (separator) = 35
+        // "Name" (natural=5) is ≤12 so stays at 5; "Description" gets remainder = 30
+        var lines = MarkdownRenderer.RenderTableAsText(headers, rows, 40);
+        var actual = string.Join("\n", lines);
+
+        var expected = """
+              [bold]Name [/] [dim]│[/] [bold]Description                   [/]
+              [dim]──────┼───────────────────────────────[/]
+              Alpha [dim]│[/] A very long description that  
+                    [dim]│[/] should be truncated to fit    
+                    [dim]│[/] the width                     
+            """;
+        Assert.Equal(expected.ReplaceLineEndings("\n"), actual);
+    }
+
+    [Fact]
+    public void Emoji_PreservedInBoldText()
+    {
+        // Emoji characters like 🟡 must pass through to ANSI output unchanged.
+        // The MarkupToAnsi helper renders via Spectre to capture real ANSI codes.
+        var md = "**Overall Health: 🟡 YELLOW**";
+        var lines = MarkdownRenderer.ToMarkupLines(md);
+
+        var actual = string.Join("\n", lines);
+        // Bold inline: "  [bold]Overall Health: 🟡 YELLOW[/]"
+        Assert.Equal("  [bold]Overall Health: 🟡 YELLOW[/]", actual);
+
+        // Verify the emoji survives ANSI rendering
+        var ansi = RenderMarkupToAnsi(actual.Trim());
+        Assert.Equal("\x1b[1mOverall Health: 🟡 YELLOW\x1b[0m", ansi);
+    }
+
+    [Fact]
+    public void Emoji_PreservedInPlainText()
+    {
+        var md = "Status: 🟢 GREEN — all passing";
+        var lines = MarkdownRenderer.ToMarkupLines(md);
+
+        var actual = string.Join("\n", lines);
+        Assert.Equal("  Status: 🟢 GREEN — all passing", actual);
+
+        var ansi = RenderMarkupToAnsi(actual.Trim());
+        Assert.Equal("Status: 🟢 GREEN — all passing", ansi);
+    }
+
+    [Fact]
+    public void Emoji_PreservedInTableCells()
+    {
+        var md = """
+            | Status | Meaning |
+            |--------|---------|
+            | 🟢 | Passing |
+            | 🟡 | Degraded |
+            | 🔴 | Failing |
+            """;
+
+        var lines = MarkdownRenderer.ToMarkupLines(md);
+        var actual = string.Join("\n", lines);
+
+        // Emoji in cells are preserved after inline formatting
+        var expected = """
+              [bold]Status[/] [dim]│[/] [bold]Meaning [/]
+              [dim]───────┼─────────[/]
+              🟢     [dim]│[/] Passing 
+              🟡     [dim]│[/] Degraded
+              🔴     [dim]│[/] Failing 
+            """;
+        Assert.Equal(
+            expected.ReplaceLineEndings("\n").Trim(),
+            actual.ReplaceLineEndings("\n").Trim());
+    }
+
+    [Fact]
+    public void Emoji_PreservedInBulletPoints()
+    {
+        var md = "- 🟡 Medium severity issue";
+        var lines = MarkdownRenderer.ToMarkupLines(md);
+
+        var actual = string.Join("\n", lines);
+        Assert.Equal("  [blue]•[/] 🟡 Medium severity issue", actual);
+
+        var ansi = RenderMarkupToAnsi(actual.Trim());
+        Assert.Equal("\x1b[38;5;12m•\x1b[0m 🟡 Medium severity issue", ansi);
+    }
+
+    /// <summary>
+    /// Renders a Spectre markup string to raw ANSI escape sequences.
+    /// </summary>
+    private static string RenderMarkupToAnsi(string markupText)
+    {
+        var console = AnsiConsole.Create(new AnsiConsoleSettings
+        {
+            Ansi = AnsiSupport.Yes,
+            ColorSystem = ColorSystemSupport.TrueColor,
+        });
+        return console.ToAnsi(new Markup(markupText));
+    }
+
+    [Fact]
+    public void FormatInlineMarkup_LinksWithQueryStrings_ProduceValidMarkup()
+    {
+        // Real-world line from health reports with links containing query strings
+        var line = "5 succeeded / 10 failed. Latest 2 builds ([1477359](https://dev.azure.com/dnceng-public/public/_build/results?buildId=1477359), [1477299](https://dev.azure.com/dnceng-public/public/_build/results?buildId=1477299)) both **succeeded**.";
+
+        var result = MarkdownRenderer.FormatInlineMarkup(line);
+
+        // Must not throw when rendered by Spectre
+        var markup = new Markup($"  {result}");
+        Assert.NotNull(markup);
+    }
+
+    [Fact]
+    public void ToMarkupLines_RealHealthReport_AllLinesAreValidMarkup()
+    {
+        // Content from a real health report — exercises links in table cells,
+        // backtick-quoted identifiers, bold text, and emoji
+        var md = """
+            > Generated: 2026-06-23 08:48 | Window: 3 days
+
+            **Overall Health: 🟡 YELLOW**
+
+            **CI pass rate (main):** 5 succeeded / 10 failed since Jun 20. Latest 2 builds ([1477359](https://dev.azure.com/dnceng-public/public/_build/results?buildId=1477359), [1477299](https://dev.azure.com/dnceng-public/public/_build/results?buildId=1477299)) both **succeeded** (Jun 23 ~8 AM PT).
+
+            ### Active Problems
+
+            | Problem | Since | Severity | Trend |
+            |---------|-------|----------|-------|
+            | `Test_Windows_CoreClr_Debug_Single_Machine` 120-min timeout | Jun 19 | 🔴 High | **Persistent** — 4 hits across 4 days on different NetCore-Public agents; systemic queue capacity issue |
+            | `Test_Linux_Debug` Helix work item crashes | Jun 22 | 🔴 High | **Active** — 5 CI builds affected; test crashes (exit code 1) in multiple work items |
+            | Razor AddImport code action tests (12 tests) | Jun 22 | 🟡 Medium | **Active** — tracked by [#83775](https://github.com/dotnet/roslyn/issues/83775), only on Linux legs |
+            | "Helix completed without specifying a job id" | Jun 23 | 🟡 Low | **New** — single PR occurrence, monitoring |
+
+            ### Known Issue Correlations
+            - **#83775** actively matching Razor AddImport failures (2 CI + 1 PR build)
+            - **#83972** (Pool leak) — matched 1 occurrence in CI (workitem_0 in build 1476004)
+            - No other known issues triggered
+
+            ### Recommended Actions
+            1. **🔴 File Known Build Error for timeout**: Pattern `ran longer than the maximum time of 120 minutes` with `BuildRetry: true`
+            2. **🔴 Investigate Linux Helix work item crashes**: 5 CI builds failed due to work item crashes on Linux
+            3. **🟡 Razor AddImport**: Tracked by #83775 — no additional action needed
+            """;
+
+        // Test at multiple widths to catch wrapping issues
+        foreach (var width in new[] { 80, 100, 116, 150, 200 })
+        {
+            var lines = MarkdownRenderer.ToMarkupLines(md, width);
+
+            for (var i = 0; i < lines.Count; i++)
+            {
+                try
+                {
+                    _ = new Markup(lines[i]);
+                }
+                catch (Exception ex)
+                {
+                    Assert.Fail($"Width={width}, Line {i} produced invalid markup: {ex.Message}\nLine: {lines[i]}");
+                }
+            }
+
+            // Also test wrapping at various panel widths
+            foreach (var wrapWidth in new[] { 70, 100, 116, 150 })
+            {
+                foreach (var line in lines)
+                {
+                    var wrapped = Tiger.Commands.PanelRenderer.WrapMarkupLine(line, wrapWidth);
+                    for (var j = 0; j < wrapped.Count; j++)
+                    {
+                        try
+                        {
+                            _ = new Markup(wrapped[j]);
+                        }
+                        catch (Exception ex)
+                        {
+                            Assert.Fail($"Width={width}, WrapWidth={wrapWidth}: invalid markup: {ex.Message}\nOriginal: {line}\nWrapped[{j}]: {wrapped[j]}");
+                        }
+                    }
+                }
+            }
+        }
     }
 }
