@@ -82,13 +82,22 @@ public sealed class HealthCommand : AsyncCommand
     /// </summary>
     private void ShowStatePage(HealthAgentService agent, string repository, string definition)
     {
+        _ui.TruncationEnabled = false;
+        var showRawMarkdown = false;
         while (true)
         {
             var state = agent.GetCurrentState(repository, definition);
             var detailLines = new List<string>();
             if (state is not null)
             {
-                detailLines = MarkdownRenderer.ToMarkupLines(state);
+                if (showRawMarkdown)
+                {
+                    detailLines = state.Split('\n').Select(l => Markup.Escape(l)).ToList();
+                }
+                else
+                {
+                    detailLines = MarkdownRenderer.ToMarkupLines(state, _ui.ContentWidth);
+                }
             }
             else
             {
@@ -104,31 +113,44 @@ public sealed class HealthCommand : AsyncCommand
                     new("Re-run", ConsoleKey.R, -2),
                     new("Gist", ConsoleKey.G, -3),
                     new("View runs", ConsoleKey.V, -4),
+                    new(showRawMarkdown ? "Rendered" : "Markdown", ConsoleKey.M, -5),
                 }));
 
-            var key = Console.ReadKey(true);
-            switch (key.Key)
+            while (true)
             {
-                case ConsoleKey.R:
-                    AnsiConsole.MarkupLine("[dim]Running health analysis...[/]");
-                    try
-                    {
-                        agent.RequestEvaluationAsync(repository, definition).GetAwaiter().GetResult();
-                        AnsiConsole.MarkupLine("[green]Health analysis complete.[/]");
-                    }
-                    catch (Exception ex)
-                    {
-                        AnsiConsole.MarkupLine($"[red]Analysis failed: {Markup.Escape(ex.Message)}[/]");
-                    }
-                    break;
-                case ConsoleKey.G:
-                    CreateGist(repository, definition, state);
-                    break;
-                case ConsoleKey.V:
-                    ShowRunsPage(agent, repository, definition);
-                    break;
-                case ConsoleKey.Escape:
-                    return;
+                var key = Console.ReadKey(true);
+                if (_ui.HandleDetailScroll(key))
+                {
+                    continue;
+                }
+
+                switch (key.Key)
+                {
+                    case ConsoleKey.R:
+                        AnsiConsole.MarkupLine("[dim]Running health analysis...[/]");
+                        try
+                        {
+                            agent.RequestEvaluationAsync(repository, definition).GetAwaiter().GetResult();
+                            AnsiConsole.MarkupLine("[green]Health analysis complete.[/]");
+                        }
+                        catch (Exception ex)
+                        {
+                            AnsiConsole.MarkupLine($"[red]Analysis failed: {Markup.Escape(ex.Message)}[/]");
+                        }
+                        break;
+                    case ConsoleKey.G:
+                        CreateGist(repository, definition, state);
+                        break;
+                    case ConsoleKey.V:
+                        ShowRunsPage(agent, repository, definition);
+                        break;
+                    case ConsoleKey.M:
+                        showRawMarkdown = !showRawMarkdown;
+                        break;
+                    case ConsoleKey.Escape:
+                        return;
+                }
+                break;
             }
         }
     }
@@ -225,23 +247,56 @@ public sealed class HealthCommand : AsyncCommand
 
     private void ShowRunDetail(HealthRunInfo run)
     {
-        List<string> detailLines;
-        if (File.Exists(run.LogPath))
+        _ui.TruncationEnabled = false;
+        var showRawMarkdown = false;
+        while (true)
         {
-            var content = File.ReadAllText(run.LogPath);
-            detailLines = MarkdownRenderer.ToMarkupLines(content);
-        }
-        else
-        {
-            detailLines = ["[red]Log file not found.[/]"];
-        }
-        _ui.RenderDetailPanel(
-            ["Health", "Run", Markup.Escape(run.Timestamp.Replace("_", " "))],
-            null,
-            detailLines,
-            "[blue]Esc[/] Back");
+            List<string> detailLines;
+            if (File.Exists(run.LogPath))
+            {
+                var content = File.ReadAllText(run.LogPath);
+                if (showRawMarkdown)
+                {
+                    detailLines = content.Split('\n').Select(l => Markup.Escape(l)).ToList();
+                }
+                else
+                {
+                    detailLines = MarkdownRenderer.ToMarkupLines(content, _ui.ContentWidth);
+                }
+            }
+            else
+            {
+                detailLines = ["[red]Log file not found.[/]"];
+            }
+            _ui.RenderDetailPanel(
+                ["Health", "Run", Markup.Escape(run.Timestamp.Replace("_", " "))],
+                null,
+                detailLines,
+                PanelRenderer.BuildCommandBarString(new List<CommandBarItem>
+                {
+                    new(showRawMarkdown ? "Rendered" : "Markdown", ConsoleKey.M, -5),
+                }));
 
-        Console.ReadKey(true);
+            while (true)
+            {
+                var key = Console.ReadKey(true);
+                if (_ui.HandleDetailScroll(key))
+                {
+                    continue;
+                }
+                switch (key.Key)
+                {
+                    case ConsoleKey.M:
+                        showRawMarkdown = !showRawMarkdown;
+                        break;
+                    case ConsoleKey.Escape:
+                        return;
+                    default:
+                        continue;
+                }
+                break;
+            }
+        }
     }
 }
 

@@ -216,7 +216,7 @@ public sealed partial class AnalysisBrowser
                 content = content[..10000] + "\n\n... (truncated — see full file on disk)";
             }
 
-            detailLines = MarkdownRenderer.ToMarkupLines(content);
+            detailLines = MarkdownRenderer.ToMarkupLines(content, _ui.ContentWidth);
         }
         _ui.RenderDetailPanel(
             ["Analysis", $"#{analysis.BuildId}", "Log"],

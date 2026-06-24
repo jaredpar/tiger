@@ -1,7 +1,11 @@
 using Spectre.Console;
 using Spectre.Console.Cli;
+using System.Text;
 using Tiger;
 using Tiger.Commands;
+
+// Enable UTF-8 output for emoji and special characters
+Console.OutputEncoding = Encoding.UTF8;
 
 // Warn about missing external tools
 CheckRequiredTools();

@@ -604,6 +604,129 @@ public partial class PanelRendererTests
         Assert.Equal(MarkupToAnsi(expected.ReplaceLineEndings("\n").Trim()), actual);
     }
 
+    [Fact]
+    public void RenderDetailPanel_RendersTableWithinPanel_WhenTruncationDisabled()
+    {
+        // Width 60 gives content width of 56 (60 - 4 for borders/padding).
+        // Table fits naturally: "Problem" col=13, "Since" col=6, "Severity" col=8.
+        // Visible row = 2 + 13 + 3 + 6 + 3 + 8 = 35, fits in 56.
+        var console = new TestConsole().EmitAnsiSequences().Width(60).Height(12);
+        var renderer = new PanelRenderer(console);
+        renderer.TruncationEnabled = false;
+
+        var md = """
+            | Problem | Since | Severity |
+            |---------|-------|----------|
+            | Helix timeout | Jun 20 | High |
+            | Test crash | Jun 22 | Medium |
+            """;
+
+        var contentLines = MarkdownRenderer.ToMarkupLines(md, renderer.ContentWidth);
+
+        renderer.RenderDetailPanel(
+            ["Health"],
+            null,
+            contentLines,
+            "[blue]Esc[/] Back");
+
+        var actual = StripChrome(console.Output).ReplaceLineEndings("\n").Trim();
+        var lines = actual.Split('\n');
+
+        // Every rendered line should fit within the panel width
+        foreach (var line in lines)
+        {
+            var stripped = StripAnsiEscapes(line);
+            Assert.True(stripped.Length <= 60, $"Line exceeds panel width (was {stripped.Length}): {stripped}");
+        }
+
+        // Table data is intact — no truncation ellipsis in the output
+        Assert.Equal(12, lines.Length);
+        Assert.True(!actual.Contains("..."), "Table should not be truncated when it fits");
+    }
+
+    [Fact]
+    public void RenderDetailPanel_ConstrainsTableToFit_WhenNarrowerThanContent()
+    {
+        // Width 50 gives content width of 46 (50 - 4).
+        // With maxWidth passed, table cells are truncated to fit panel width.
+        var console = new TestConsole().EmitAnsiSequences().Width(50).Height(12);
+        var renderer = new PanelRenderer(console);
+        renderer.TruncationEnabled = false;
+
+        var md = """
+            | Name | Description |
+            |------|-------------|
+            | Beta | This description exceeds the panel width boundary |
+            """;
+
+        var contentLines = MarkdownRenderer.ToMarkupLines(md, renderer.ContentWidth);
+
+        renderer.RenderDetailPanel(
+            ["Test"],
+            null,
+            contentLines,
+            "[blue]Esc[/] Back");
+
+        var actual = StripChrome(console.Output).ReplaceLineEndings("\n").Trim();
+        var lines = actual.Split('\n');
+
+        // Every rendered line must fit within the 50-char panel
+        foreach (var line in lines)
+        {
+            var stripped = StripAnsiEscapes(line);
+            Assert.True(stripped.Length <= 50, $"Line exceeds panel width (was {stripped.Length}): {stripped}");
+        }
+    }
+
+    [Fact]
+    public void RenderDetailPanel_TruncatesTableRow_WhenTruncationEnabled()
+    {
+        // Width 50, truncation ON. Without maxWidth, the table produces long lines
+        // that get truncated by the panel renderer with "..."
+        var console = new TestConsole().EmitAnsiSequences().Width(50).Height(12);
+        var renderer = new PanelRenderer(console);
+        renderer.TruncationEnabled = true;
+
+        var md = """
+            | Name | Description |
+            |------|-------------|
+            | Beta | A much longer description that will exceed the panel width easily |
+            """;
+
+        // No maxWidth — table renders naturally wide, then truncation kicks in
+        var contentLines = MarkdownRenderer.ToMarkupLines(md);
+
+        renderer.RenderDetailPanel(
+            ["Test"],
+            null,
+            contentLines,
+            "[blue]Esc[/] Back");
+
+        var actual = StripChrome(console.Output).ReplaceLineEndings("\n").Trim();
+        var lines = actual.Split('\n');
+
+        // With truncation, the data row is too wide and gets "..." appended
+        // Find the content line that has the data row (contains "Beta")
+        var dataLine = lines.First(l => l.Contains("Beta"));
+        var dataPlain = StripAnsiEscapes(dataLine);
+        // The line ends with "..." followed by padding and border
+        Assert.True(dataPlain.Contains("..."), $"Expected truncation '...' in: {dataPlain}");
+        // The full visible content is: ║ <content>... <padding> ║
+        // Verify the exact truncation point
+        Assert.Equal("║   Beta │ A much longer description that wil... ║", dataPlain);
+        // The tail of the description is cut off
+        Assert.True(!actual.Contains("panel width easily"), "Truncated text should not appear");
+    }
+
+    /// <summary>
+    /// Strips ANSI escape sequences from a string, leaving only visible text.
+    /// </summary>
+    private static string StripAnsiEscapes(string text) =>
+        AnsiEscapeRegex().Replace(text, "");
+
+    [GeneratedRegex(@"\x1b\[[0-9;]*[A-Za-z]|\x1b\]8;[^\x1b]*\x1b\\")]
+    private static partial Regex AnsiEscapeRegex();
+
     // ── Tokenizer ───────────────────────────────────────────────────
 
     [Fact]

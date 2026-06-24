@@ -337,7 +337,7 @@ public class PanelRenderer
                 var chunk = text[pos..];
                 if (chunk.Length <= remaining)
                 {
-                    currentLine.Append(chunk);
+                    currentLine.Append(EscapeBrackets(chunk));
                     visibleLen += chunk.Length;
                     pos = text.Length;
                 }
@@ -362,7 +362,7 @@ public class PanelRenderer
                         }
                     }
 
-                    currentLine.Append(chunk[..breakPos]);
+                    currentLine.Append(EscapeBrackets(chunk[..breakPos]));
                     visibleLen += breakPos;
                     pos += breakPos;
 
@@ -439,6 +439,20 @@ public class PanelRenderer
             }
         }
         return lastSpace > 0 ? lastSpace : 0;
+    }
+
+    /// <summary>
+    /// Re-escapes literal bracket characters in visible text so the output is valid
+    /// Spectre markup. TokenizeMarkup decodes [[ → [ and ]] → ] for width measurement,
+    /// but the output string must use [[ and ]] for Spectre to treat them as literals.
+    /// </summary>
+    private static string EscapeBrackets(string text)
+    {
+        if (!text.Contains('[') && !text.Contains(']'))
+        {
+            return text;
+        }
+        return text.Replace("[", "[[").Replace("]", "]]");
     }
 
     /// <summary>
