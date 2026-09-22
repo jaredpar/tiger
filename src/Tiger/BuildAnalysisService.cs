@@ -694,7 +694,7 @@ public sealed class BuildAnalysisService : IDisposable
         }
     }
 
-    private static AnalysisParsedResponse ParseResponse(string response)
+    internal static AnalysisParsedResponse ParseResponse(string response)
     {
         var parsed = new AnalysisParsedResponse();
 
@@ -731,10 +731,7 @@ public sealed class BuildAnalysisService : IDisposable
             var diagnosisText = nextSection >= 0
                 ? afterDiagnosis[..nextSection].Trim()
                 : afterDiagnosis.Trim();
-            // Take first 500 chars as summary
-            parsed.DiagnosisSummary = diagnosisText.Length > 500
-                ? diagnosisText[..500] + "..."
-                : diagnosisText;
+            parsed.DiagnosisSummary = diagnosisText;
         }
 
         return parsed;

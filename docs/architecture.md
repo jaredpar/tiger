@@ -167,6 +167,13 @@ while (true)
 
 ### Conventions
 
+Build analysis details render the full Diagnosis section as Markdown, including
+clickable terminal hyperlinks, and wrap/scroll it within the content pane. New
+analyses retain the complete diagnosis in `diagnosis_summary`. For older analyses
+with a 500-character summary, the detail view recovers matching full text from the
+saved transcript when available; without that log, re-run the analysis to restore
+the missing text.
+
 - **Escape** and **B** always mean "go back"
 - Toggle hotkeys show current action (e.g., `"[blue]E[/] Show all"` when errors-only is active,
   `"[blue]E[/] Errors only"` when showing all)

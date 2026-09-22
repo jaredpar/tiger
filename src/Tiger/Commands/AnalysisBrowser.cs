@@ -143,11 +143,7 @@ public sealed partial class AnalysisBrowser
                 }
                 else
                 {
-                    detailLines.Add(PanelRenderer.FormatSectionTitle("Diagnosis"));
-                    foreach (var diagLine in analysis.DiagnosisSummary.ReplaceLineEndings("\n").Split('\n'))
-                    {
-                        detailLines.Add(Markup.Escape(diagLine));
-                    }
+                    detailLines.AddRange(BuildDiagnosisLines(analysis, _ui.ContentWidth));
                 }
             }
             _ui.RenderDetailPanel(
@@ -197,6 +193,37 @@ public sealed partial class AnalysisBrowser
                 }
             }
         }
+    }
+
+    internal static List<string> BuildDiagnosisLines(BuildAnalysisInfo analysis, int contentWidth) =>
+        [PanelRenderer.FormatSectionTitle("Diagnosis"),
+         .. MarkdownRenderer.ToMarkupLines(GetDiagnosisSummary(analysis) ?? "", contentWidth)];
+
+    internal static string? GetDiagnosisSummary(BuildAnalysisInfo analysis)
+    {
+        var summary = analysis.DiagnosisSummary;
+
+        // Older analyses stored only the first 500 characters. Recover from the
+        // transcript, not the prompt (which also contains a Diagnosis heading).
+        if (summary is { Length: 503 } && summary.EndsWith("...", StringComparison.Ordinal)
+            && analysis.LogPath is not null && File.Exists(analysis.LogPath))
+        {
+            var log = File.ReadAllText(analysis.LogPath).ReplaceLineEndings("\n");
+            const string transcriptHeading = "\n## Transcript\n";
+            var transcriptIndex = log.IndexOf(transcriptHeading, StringComparison.Ordinal);
+            if (transcriptIndex >= 0)
+            {
+                var transcript = log[(transcriptIndex + transcriptHeading.Length)..];
+                var diagnosis = BuildAnalysisService.ParseResponse(transcript).DiagnosisSummary;
+                if (diagnosis is not null
+                    && diagnosis.StartsWith(summary[..500].ReplaceLineEndings("\n"), StringComparison.Ordinal))
+                {
+                    return diagnosis;
+                }
+            }
+        }
+
+        return summary;
     }
 
     private void ShowFullLog(BuildAnalysisInfo analysis)
@@ -333,4 +360,3 @@ public sealed partial class AnalysisBrowser
         CreatedAt = original.CreatedAt,
     };
 }
-
