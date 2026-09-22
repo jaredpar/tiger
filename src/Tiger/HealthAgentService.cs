@@ -424,7 +424,7 @@ public sealed class HealthAgentService : IDisposable
 
             await using var session = await client.CreateSessionAsync(new SessionConfig
             {
-                Model = "claude-opus-4.6",
+                Model = "gpt-6-astra",
                 Streaming = false,
                 OnPermissionRequest = PermissionHandler.ApproveAll,
                 SystemMessage = new SystemMessageConfig { Content = systemMessage },
