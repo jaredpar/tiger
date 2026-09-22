@@ -589,17 +589,18 @@ public sealed class TigerDatabase : IDisposable
     /// <summary>
     /// Records an agent task that was submitted via <c>gh agent-task create</c>.
     /// </summary>
-    public void InsertAgentTask(string sessionId, string repository, string? testName, string? filePath)
+    public void InsertAgentTask(string sessionId, string repository, string? agentName, string? filePath)
     {
         WithCommand(cmd =>
         {
+            // Keep the legacy column name so existing databases remain compatible.
             cmd.CommandText = """
                 INSERT OR IGNORE INTO agent_tasks (session_id, repository, test_name, file_path)
-                VALUES (@sessionId, @repo, @testName, @filePath)
+                VALUES (@sessionId, @repo, @agentName, @filePath)
                 """;
             cmd.Parameters.AddWithValue("@sessionId", sessionId);
             cmd.Parameters.AddWithValue("@repo", repository);
-            cmd.Parameters.AddWithValue("@testName", (object?)testName ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@agentName", (object?)agentName ?? DBNull.Value);
             cmd.Parameters.AddWithValue("@filePath", (object?)filePath ?? DBNull.Value);
             cmd.ExecuteNonQuery();
         });

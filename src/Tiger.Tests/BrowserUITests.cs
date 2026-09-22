@@ -6,6 +6,80 @@ namespace Tiger.Tests;
 
 public class BrowserUITests
 {
+    [Fact]
+    public void BuildTestAgentContext_PreservesFullFailureDetails()
+    {
+        var info = new BrowserUI.TestDetailInfo(
+            "ClientTests.Shutdown(client: [1])", "org name", "proj/name", 123, "Linux [x64]", 7,
+            """
+            Assert.Equal() Failure
+            Expected: 0
+            Actual:   1
+            Shutdown failed after the daemon-alive assertion passed.
+            """,
+            """
+            at Client.Stop() in /src/Client.cs:line 123
+            at ClientTests.Shutdown() in /src/ClientTests.cs:line 456
+              --- End of stack trace ---
+            """,
+            "helix-job-123", "ClientTests [linux]");
+
+        var expected = """
+            ## Failure Details
+
+            - **Test:** `ClientTests.Shutdown(client: [1])`
+            - **Repository:** dotnet/runtime
+            - **Build:** [#123](https://dev.azure.com/org%20name/proj%2Fname/_build/results?buildId=123)
+            - **Run:** Linux [x64]
+            - **Failed in:** 7 build(s)
+            - **Helix Job:** `helix-job-123`
+            - **Helix Work Item:** `ClientTests [linux]`
+
+            ## Error Message
+
+            ```
+            Assert.Equal() Failure
+            Expected: 0
+            Actual:   1
+            Shutdown failed after the daemon-alive assertion passed.
+            ```
+
+            ## Stack Trace
+
+            ```
+            at Client.Stop() in /src/Client.cs:line 123
+            at ClientTests.Shutdown() in /src/ClientTests.cs:line 456
+              --- End of stack trace ---
+            ```
+
+
+            """;
+        Assert.Equal(expected, BrowserUI.BuildTestAgentContext(info, "dotnet/runtime"),
+            ignoreLineEndingDifferences: true);
+    }
+
+    [Fact]
+    public void BuildTestAgentContext_OmitsAbsentOptionalDetails()
+    {
+        var info = new BrowserUI.TestDetailInfo(
+            "ClientTests.Shutdown", "org", "proj", 123, "Linux x64", 1,
+            null, null, null, null);
+
+        var expected = """
+            ## Failure Details
+
+            - **Test:** `ClientTests.Shutdown`
+            - **Repository:** dotnet/runtime
+            - **Build:** [#123](https://dev.azure.com/org/proj/_build/results?buildId=123)
+            - **Run:** Linux x64
+            - **Failed in:** 1 build(s)
+
+
+            """;
+        Assert.Equal(expected, BrowserUI.BuildTestAgentContext(info, "dotnet/runtime"),
+            ignoreLineEndingDifferences: true);
+    }
+
     [Theory]
     [InlineData("refs/heads/main", "main")]
     [InlineData("refs/heads/release/8.0", "release/8.0")]
@@ -379,4 +453,3 @@ public class BrowserUITests
         Assert.Equal(PanelRendererTests.MarkupToAnsi(expected.ReplaceLineEndings("\n").Trim()), actual);
     }
 }
-

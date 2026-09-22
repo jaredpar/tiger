@@ -25,6 +25,42 @@ public class TigerDatabaseTests : IDisposable
     }
 
     [Fact]
+    public void InsertAgentTask_PersistsGenericNamesAndPreservesSessionKeys()
+    {
+        using (var db = TigerDatabase.Open(_dbPath))
+        {
+            db.InsertAgentTask("session-test", "dotnet/roslyn", "ClientTests.Shutdown", "test.md");
+            db.InsertAgentTask("session-build", "dotnet/roslyn", "roslyn-CI #1607626", "build.md");
+            db.InsertAgentTask("session-other", "dotnet/runtime", "Dependency update", "other.md");
+            db.InsertAgentTask("session-build", "dotnet/roslyn", "Duplicate", "duplicate.md");
+        }
+
+        using var reopened = TigerDatabase.Open(_dbPath);
+        var actual = reopened.WithCommand(cmd =>
+        {
+            cmd.CommandText = "SELECT session_id, repository, test_name, file_path FROM agent_tasks ORDER BY session_id";
+            using var reader = cmd.ExecuteReader();
+            var rows = new List<string>();
+            while (reader.Read())
+            {
+                rows.Add($"{reader.GetString(0)}|{reader.GetString(1)}|{reader.GetString(2)}|{reader.GetString(3)}");
+            }
+            return string.Join("\n", rows);
+        });
+        var expected = """
+            session-build|dotnet/roslyn|roslyn-CI #1607626|build.md
+            session-other|dotnet/runtime|Dependency update|other.md
+            session-test|dotnet/roslyn|ClientTests.Shutdown|test.md
+            """;
+        Assert.Equal(expected.ReplaceLineEndings("\n"), actual);
+        Assert.Equal("""
+            session-build
+            session-other
+            session-test
+            """.ReplaceLineEndings("\n"), string.Join("\n", reopened.GetAgentTaskSessionIds().Order()));
+    }
+
+    [Fact]
     public void Open_SetsSchemaVersion()
     {
         using var db = TigerDatabase.Open(_dbPath);

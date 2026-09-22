@@ -118,7 +118,7 @@ public static class BrowserUI
     /// <summary>
     /// Prompts for a text pattern with Escape to cancel.
     /// </summary>
-    public static string? PromptPattern(string prompt)
+    public static string? PromptPattern(string prompt, bool allowEmpty = false)
     {
         AnsiConsole.WriteLine();
         AnsiConsole.MarkupLine($"[bold]{Markup.Escape(prompt)}[/]");
@@ -135,7 +135,7 @@ public static class BrowserUI
             {
                 AnsiConsole.WriteLine();
                 var result = buffer.ToString().Trim();
-                return string.IsNullOrEmpty(result) ? null : result;
+                return !allowEmpty && string.IsNullOrEmpty(result) ? null : result;
             }
             if (key.Key == ConsoleKey.Backspace)
             {
@@ -590,30 +590,25 @@ public static class BrowserUI
     /// </summary>
     public static void CreateAgentTask(TigerDatabase db, TestDetailInfo info)
     {
-        AnsiConsole.Clear();
-        AnsiConsole.MarkupLine("[bold underline]Create Agent Task[/]");
-        AnsiConsole.WriteLine();
+        var repository = GetBuildRepository(db, info.Org, info.BuildId);
+        AgentTaskPage.Show(db, repository, info.TestName, $"Test Failure: {info.TestName}",
+            repository is null ? "" : BuildTestAgentContext(info, repository), requireInstructions: true);
+    }
 
-        // Look up the repository name from the build
-        var repoName = db.WithCommand(cmd =>
+    internal static string? GetBuildRepository(TigerDatabase db, string organization, int buildId) =>
+        db.WithCommand(cmd =>
         {
             cmd.CommandText = """
                 SELECT repository_name FROM builds
                 WHERE organization = @org AND build_id = @buildId
                 """;
-            cmd.Parameters.AddWithValue("@org", info.Org);
-            cmd.Parameters.AddWithValue("@buildId", info.BuildId);
+            cmd.Parameters.AddWithValue("@org", organization);
+            cmd.Parameters.AddWithValue("@buildId", buildId);
             return cmd.ExecuteScalar() as string;
         });
 
-        if (repoName is null)
-        {
-            AnsiConsole.MarkupLine("[red]Could not determine repository for this test.[/]");
-            AnsiConsole.MarkupLine("[dim]Press any key to go back...[/]");
-            Console.ReadKey(true);
-            return;
-        }
-
+    internal static string BuildTestAgentContext(TestDetailInfo info, string repoName)
+    {
         var buildUrl = $"https://dev.azure.com/{Uri.EscapeDataString(info.Org)}/{Uri.EscapeDataString(info.Project)}/_build/results?buildId={info.BuildId}";
 
         // Build the context markdown (everything except instructions)
@@ -657,111 +652,9 @@ public static class BrowserUI
             }
         }
 
-        // Show the context that will be sent to the agent
         var preview = new System.Text.StringBuilder();
         AppendContext(preview, info, repoName, buildUrl);
-
-        AnsiConsole.MarkupLine("[dim]The following context will be included in the agent task:[/]");
-        AnsiConsole.WriteLine();
-        MarkdownRenderer.Render(preview.ToString());
-
-        AnsiConsole.MarkupLine("[dim]Enter instructions for the agent (what should it do about this failure?):[/]");
-        AnsiConsole.Markup("[blue]> [/]");
-        var instructions = Console.ReadLine()?.Trim();
-        if (string.IsNullOrWhiteSpace(instructions))
-        {
-            AnsiConsole.MarkupLine("[yellow]No instructions provided, cancelled.[/]");
-            Console.ReadKey(true);
-            return;
-        }
-
-        // Build the full task description
-        var sb = new System.Text.StringBuilder();
-        sb.AppendLine($"# Test Failure: {info.TestName}");
-        sb.AppendLine();
-        sb.AppendLine("## Instructions");
-        sb.AppendLine();
-        sb.AppendLine(instructions);
-        sb.AppendLine();
-        AppendContext(sb, info, repoName, buildUrl);
-
-        // Write to disk
-        var agentDir = Path.Combine(TigerUtils.GetConfigDirectory(), "agent-tasks");
-        Directory.CreateDirectory(agentDir);
-        var timestamp = DateTime.Now.ToString("yyyyMMdd-HHmmss");
-        var safeTestName = info.TestName.Split('.').Last();
-        if (safeTestName.Length > 40)
-        {
-            safeTestName = safeTestName[..40];
-        }
-        // Remove characters that aren't safe for filenames
-        safeTestName = string.Concat(safeTestName.Select(c => char.IsLetterOrDigit(c) || c == '_' ? c : '_'));
-        var filePath = Path.Combine(agentDir, $"{timestamp}-{safeTestName}.md");
-        File.WriteAllText(filePath, sb.ToString());
-
-        AnsiConsole.WriteLine();
-        AnsiConsole.MarkupLine($"[bold]Task file:[/] {Markup.Escape(filePath)}");
-        AnsiConsole.MarkupLine($"[bold]Repository:[/] {Markup.Escape(repoName)}");
-        AnsiConsole.WriteLine();
-        AnsiConsole.MarkupLine("[dim]Review the file, then press [blue]Enter[/] to submit or [blue]Esc[/] to cancel.[/]");
-
-        while (true)
-        {
-            var key = Console.ReadKey(true);
-            if (key.Key == ConsoleKey.Escape)
-            {
-                AnsiConsole.MarkupLine("[yellow]Cancelled.[/]");
-                Console.ReadKey(true);
-                return;
-            }
-            if (key.Key == ConsoleKey.Enter)
-            {
-                break;
-            }
-        }
-
-        // Launch the agent task
-        AnsiConsole.MarkupLine("[dim]Submitting agent task...[/]");
-        var process = new System.Diagnostics.Process();
-        process.StartInfo.FileName = "gh";
-        process.StartInfo.Arguments = $"agent-task create -F \"{filePath}\" -R {repoName}";
-        process.StartInfo.RedirectStandardOutput = true;
-        process.StartInfo.RedirectStandardError = true;
-        process.StartInfo.UseShellExecute = false;
-        process.Start();
-
-        var output = process.StandardOutput.ReadToEnd();
-        var error = process.StandardError.ReadToEnd();
-        process.WaitForExit();
-
-        AnsiConsole.WriteLine();
-        if (process.ExitCode == 0)
-        {
-            AnsiConsole.MarkupLine($"[green]Agent task created![/]");
-            if (!string.IsNullOrWhiteSpace(output))
-            {
-                AnsiConsole.WriteLine(output.Trim());
-            }
-
-            // Try to extract session ID from output and save to DB
-            var sessionId = ExtractSessionId(output);
-            if (sessionId is not null)
-            {
-                db.InsertAgentTask(sessionId, repoName, info.TestName, filePath);
-            }
-        }
-        else
-        {
-            AnsiConsole.MarkupLine($"[red]Failed to create agent task (exit code {process.ExitCode}):[/]");
-            if (!string.IsNullOrWhiteSpace(error))
-            {
-                AnsiConsole.WriteLine(error.Trim());
-            }
-        }
-
-        AnsiConsole.WriteLine();
-        AnsiConsole.MarkupLine("[dim]Press any key to continue...[/]");
-        Console.ReadKey(true);
+        return preview.ToString();
     }
 
     /// <summary>
@@ -781,5 +674,3 @@ public static class BrowserUI
         return match.Success ? match.Value : null;
     }
 }
-
-

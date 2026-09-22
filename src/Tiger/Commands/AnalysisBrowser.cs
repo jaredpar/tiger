@@ -90,14 +90,7 @@ public sealed partial class AnalysisBrowser
     {
         while (true)
         {
-            var commands = new List<CommandBarItem>();
-            if (_analysisService is not null)
-            {
-                commands.Add(new("Re-run", ConsoleKey.R, 1));
-                commands.Add(new("Force full", ConsoleKey.F, 2));
-            }
-            commands.Add(new("View log", ConsoleKey.V, 3));
-            commands.Add(new("Build detail", ConsoleKey.B, 4));
+            var commands = BuildDetailCommands(_analysisService is not null);
 
             _ui.TruncationEnabled = false;
             var detailLines = new List<string>
@@ -191,8 +184,43 @@ public sealed partial class AnalysisBrowser
                     buildBrowser.BrowseBuild(analysis.Organization, analysis.Project, analysis.BuildId);
                     break; // re-render
                 }
+
+                if (key.Key == ConsoleKey.A)
+                {
+                    var repository = BrowserUI.GetBuildRepository(_db, analysis.Organization, analysis.BuildId);
+                    AgentTaskPage.Show(_db, repository, $"{analysis.DefinitionName} #{analysis.BuildId}",
+                        $"Build Analysis: {analysis.DefinitionName} #{analysis.BuildId}",
+                        BuildAgentContext(analysis));
+                    break;
+                }
             }
         }
+    }
+
+    internal static List<CommandBarItem> BuildDetailCommands(bool canAnalyze)
+    {
+        var commands = new List<CommandBarItem>();
+        if (canAnalyze)
+        {
+            commands.Add(new("Re-run", ConsoleKey.R, 1));
+            commands.Add(new("Force full", ConsoleKey.F, 2));
+        }
+        commands.Add(new("View log", ConsoleKey.V, 3));
+        commands.Add(new("Build detail", ConsoleKey.B, 4));
+        commands.Add(new("Agent Task", ConsoleKey.A, 5));
+        return commands;
+    }
+
+    internal static string BuildAgentContext(BuildAnalysisInfo analysis)
+    {
+        var context = new System.Text.StringBuilder();
+        context.AppendLine(analysis.Category == "known-issue" ? "## Known Issues" : "## Diagnosis");
+        context.AppendLine();
+        if (GetDiagnosisSummary(analysis) is { } diagnosis)
+        {
+            context.AppendLine(diagnosis);
+        }
+        return context.ToString();
     }
 
     internal static List<string> BuildDiagnosisLines(BuildAnalysisInfo analysis, int contentWidth) =>
