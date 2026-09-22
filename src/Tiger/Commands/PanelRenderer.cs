@@ -78,6 +78,7 @@ public class PanelRenderer
     /// <summary>
     /// When true (default), lines are truncated to fit panel width.
     /// When false, lines are allowed to wrap.
+    /// List panels always truncate to keep each item on a single row.
     /// </summary>
     public bool TruncationEnabled { get; set; } = true;
 
@@ -769,18 +770,18 @@ public class PanelRenderer
 
                         // Redraw old line (remove cursor)
                         _console.Cursor.SetPosition(0, prevRow);
-                        RenderPanelLineDirect($"  {items[prevSelected]}");
+                        RenderTruncatedPanelLine($"  {items[prevSelected]}");
 
                         // Redraw new line (add cursor)
                         _console.Cursor.SetPosition(0, newRow);
-                        RenderPanelLineDirect($"[blue]>[/] {items[selected]}");
+                        RenderTruncatedPanelLine($"[blue]>[/] {items[selected]}");
 
                         // Update counter if visible
                         if (items.Count > visibleCount)
                         {
                             var counterRow = listStartRow + visibleCount + 1;
                             _console.Cursor.SetPosition(0, counterRow);
-                            RenderPanelLineDirect($"[dim]({selected + 1}/{items.Count})[/]");
+                            RenderTruncatedPanelLine($"[dim]({selected + 1}/{items.Count})[/]");
                         }
                     }
                 }
@@ -1006,11 +1007,11 @@ public class PanelRenderer
 
         _console.MarkupLine($"[{BorderStyle}]{TopLeft}{new string(Horizontal, width)}{TopRight}[/]");
         var crumbText = string.Join($" {Separator} ", breadcrumbs);
-        RenderPanelLineDirect($"[bold orange1]TIGER[/] [dim]{Separator}[/] {crumbText}");
+        RenderTruncatedPanelLine($"[bold orange1]TIGER[/] [dim]{Separator}[/] {crumbText}");
 
         if (context is not null)
         {
-            RenderPanelLineDirect(context);
+            RenderTruncatedPanelLine(context);
         }
 
         _console.MarkupLine($"[{BorderStyle}]{MiddleLeft}{new string(Horizontal, width)}{MiddleRight}[/]");
@@ -1027,21 +1028,21 @@ public class PanelRenderer
 
             if (!barFocused && idx == selected)
             {
-                RenderPanelLineDirect($"[blue]>[/] {items[idx]}");
+                RenderTruncatedPanelLine($"[blue]>[/] {items[idx]}");
             }
             else
             {
-                RenderPanelLineDirect($"  {items[idx]}");
+                RenderTruncatedPanelLine($"  {items[idx]}");
             }
         }
 
         if (items.Count > visibleCount)
         {
-            RenderPanelLineDirect($"[dim]({selected + 1}/{items.Count})[/]");
+            RenderTruncatedPanelLine($"[dim]({selected + 1}/{items.Count})[/]");
         }
 
         _console.MarkupLine($"[{BorderStyle}]{MiddleLeft}{new string(Horizontal, width)}{MiddleRight}[/]");
-        RenderPanelLineDirect(BuildCommandBarMarkup(commands, barIndex, barFocused));
+        RenderTruncatedPanelLine(BuildCommandBarMarkup(commands, barIndex, barFocused));
         // Use Markup (no trailing newline) to prevent terminal scroll when frame fills the screen
         _console.Markup($"[{BorderStyle}]{BottomLeft}{new string(Horizontal, width)}{BottomRight}[/]");
     }
@@ -1060,8 +1061,11 @@ public class PanelRenderer
             return;
         }
 
-        RenderSinglePanelLine(TruncateToFit(markupContent));
+        RenderTruncatedPanelLine(markupContent);
     }
+
+    private void RenderTruncatedPanelLine(string markupContent) =>
+        RenderSinglePanelLine(TruncateToFit(markupContent));
 
     private void RenderSinglePanelLine(string markupContent)
     {

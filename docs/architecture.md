@@ -185,6 +185,10 @@ behavior. Test failure tasks retain their required instruction entry. Agent name
 are stored through `InsertAgentTask` in the legacy `agent_tasks.test_name` column
 for database compatibility; `session_id` remains the task's primary key.
 
+Selectable list panels always truncate rows to the panel width, independently of
+detail-view wrapping settings. Returning from a wrapped detail or log view keeps
+list items on a single row so cursor movement and paging remain aligned.
+
 - **Escape** and **B** always mean "go back"
 - Toggle hotkeys show current action (e.g., `"[blue]E[/] Show all"` when errors-only is active,
   `"[blue]E[/] Errors only"` when showing all)
