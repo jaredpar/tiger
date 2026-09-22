@@ -174,6 +174,17 @@ with a 500-character summary, the detail view recovers matching full text from t
 saved transcript when available; without that log, re-run the analysis to restore
 the missing text.
 
+Build analysis details expose `[A]gent Task`, using the same `AgentTaskPage`
+component as test failure details. The task preview starts with the full diagnosis
+(or known issues), omitting analysis metadata, with optional additional instructions appended
+to the prompt. The repository is resolved from the build, and the user reviews the
+saved prompt before confirming submission via `gh agent-task create`. Escape cancels
+without submitting. Callers provide the repository, agent name, title, context, and
+whether instructions are required; the shared page has no test- or build-specific
+behavior. Test failure tasks retain their required instruction entry. Agent names
+are stored through `InsertAgentTask` in the legacy `agent_tasks.test_name` column
+for database compatibility; `session_id` remains the task's primary key.
+
 Selectable list panels always truncate rows to the panel width, independently of
 detail-view wrapping settings. Returning from a wrapped detail or log view keeps
 list items on a single row so cursor movement and paging remain aligned.

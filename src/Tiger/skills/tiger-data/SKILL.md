@@ -155,7 +155,7 @@ Tracks Copilot Coding Agent tasks submitted from Tiger via `gh agent-task create
 |--------|------|-------------|
 | session_id | TEXT | Agent session GUID (primary key) |
 | repository | TEXT | GitHub repository (owner/repo format) |
-| test_name | TEXT | Test case title that triggered the task (NULL if not test-related) |
+| test_name | TEXT | Agent name supplied by the originating UI (legacy column name): test case title, pipeline/build label, or another task name. Older non-test tasks may be NULL. |
 | file_path | TEXT | Path to the markdown task file on disk |
 | created_at | TEXT | ISO 8601 timestamp when the task was submitted |
 
