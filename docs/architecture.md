@@ -174,6 +174,10 @@ with a 500-character summary, the detail view recovers matching full text from t
 saved transcript when available; without that log, re-run the analysis to restore
 the missing text.
 
+Selectable list panels always truncate rows to the panel width, independently of
+detail-view wrapping settings. Returning from a wrapped detail or log view keeps
+list items on a single row so cursor movement and paging remain aligned.
+
 - **Escape** and **B** always mean "go back"
 - Toggle hotkeys show current action (e.g., `"[blue]E[/] Show all"` when errors-only is active,
   `"[blue]E[/] Errors only"` when showing all)

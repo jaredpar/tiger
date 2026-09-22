@@ -1335,6 +1335,65 @@ public partial class PanelRendererTests
 
     // ── Cursor Redraw (partial update) ──────────────────────────────
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void SelectInPanel_AfterWrappedDetail_PreservesSingleRowItems(bool moveSelection)
+    {
+        var console = new TestConsole().EmitAnsiSequences().Width(64).Height(12);
+        var renderer = new PanelRenderer(console);
+        var items = new List<string>
+        {
+            "[green]+[/] CI #123 [dim]— [[Build #123]](https://dev.azure.com/org/proj/_build/results?buildId=123)[/]",
+            "[green]+[/] CI #124 [dim]— [[test_job]] failed[/]",
+        };
+        var expected = """
+            [dim]╔══════════════════════════════════════════════════════════════╗[/]
+            [dim]║[/] [bold orange1]TIGER[/] [dim]>[/] Analysis                                             [dim]║[/]
+            [dim]║[/] [dim]2 analysis result(s)[/]                                         [dim]║[/]
+            [dim]╠══════════════════════════════════════════════════════════════╣[/]
+            [dim]║[/] > + CI #123 — [[Build #123]](https://dev.azure.com/org/proj... [dim]║[/]
+            [dim]║[/]   [green]+[/] CI #124 [dim]— [[test_job]] failed[/]                              [dim]║[/]
+            [dim]╠══════════════════════════════════════════════════════════════╣[/]
+            [dim]║[/] [dim]Up/Dn Navigate  Enter Select  Esc Back[/]                       [dim]║[/]
+            [dim]╚══════════════════════════════════════════════════════════════╝[/]
+            """;
+
+        console.Input.PushKey(new ConsoleKeyInfo('\r', ConsoleKey.Enter, false, false, false));
+        Assert.Equal(0, renderer.SelectInPanel(["Analysis"], "[dim]2 analysis result(s)[/]", items, []));
+        Assert.Equal(MarkupToAnsi(expected.ReplaceLineEndings("\n")),
+            StripChrome(console.Output).ReplaceLineEndings("\n"));
+
+        renderer.TruncationEnabled = false;
+        renderer.RenderDetailPanel(["Analysis", "CI #123"], null,
+            ["[bold]Diagnosis[/]", "[[test_job]] failed with a long diagnosis that wraps across multiple lines in the detail view."],
+            "[blue]Esc[/] Back");
+        Assert.False(renderer.HandleDetailScroll(new ConsoleKeyInfo('\x1b', ConsoleKey.Escape, false, false, false)));
+
+        var outputStart = console.Output.Length;
+        if (moveSelection)
+        {
+            console.Input.PushKey(new ConsoleKeyInfo('\0', ConsoleKey.DownArrow, false, false, false));
+        }
+        console.Input.PushKey(new ConsoleKeyInfo('\x1b', ConsoleKey.Escape, false, false, false));
+        Assert.Equal(-1, renderer.SelectInPanel(["Analysis"], "[dim]2 analysis result(s)[/]", items, []));
+
+        var expectedOutput = MarkupToAnsi(expected.ReplaceLineEndings("\n"));
+        if (moveSelection)
+        {
+            var deselected = """
+                [dim]║[/]   + CI #123 — [[Build #123]](https://dev.azure.com/org/proj... [dim]║[/]
+                """;
+            var selected = """
+                [dim]║[/] [blue]>[/] [green]+[/] CI #124 [dim]— [[test_job]] failed[/]                              [dim]║[/]
+                """;
+            expectedOutput += "\x1b[5;0H" + MarkupToAnsi(deselected) + "\n"
+                + "\x1b[6;0H" + MarkupToAnsi(selected) + "\n";
+        }
+        Assert.Equal(expectedOutput, StripChrome(console.Output[outputStart..]).ReplaceLineEndings("\n"));
+        Assert.False(renderer.TruncationEnabled);
+    }
+
     [Fact]
     public void SelectInPanel_CursorMove_PreservesSeparator()
     {
