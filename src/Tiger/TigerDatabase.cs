@@ -10,7 +10,7 @@ namespace Tiger;
 /// </summary>
 public sealed class TigerDatabase : IDisposable
 {
-    public const int CurrentSchemaVersion = 12;
+    public const int CurrentSchemaVersion = 13;
 
     public string DatabasePath { get; }
     private string ConnectionString { get; }
@@ -212,10 +212,14 @@ public sealed class TigerDatabase : IDisposable
                 source_branch TEXT NOT NULL,
                 source_version TEXT,
                 repository_name TEXT,
+                repository_type TEXT,
                 pr_number INTEGER,
                 finish_time TEXT,
                 ingested_at TEXT NOT NULL DEFAULT (datetime('now')),
-                ingestion_tasks_complete INTEGER NOT NULL DEFAULT 0,
+                ingestion_status TEXT NOT NULL DEFAULT 'pending',
+                ingestion_attempts INTEGER NOT NULL DEFAULT 0,
+                ingestion_last_error TEXT,
+                ingestion_next_retry_time TEXT,
                 PRIMARY KEY (organization, build_id)
             );
 
@@ -227,6 +231,9 @@ public sealed class TigerDatabase : IDisposable
 
             CREATE INDEX IF NOT EXISTS ix_builds_repo_def
                 ON builds (repository_name, definition_name, finish_time);
+
+            CREATE INDEX IF NOT EXISTS ix_builds_ingestion_status
+                ON builds (ingestion_status, ingestion_next_retry_time);
 
             CREATE TABLE IF NOT EXISTS test_runs (
                 organization TEXT NOT NULL,
@@ -310,23 +317,6 @@ public sealed class TigerDatabase : IDisposable
 
             CREATE INDEX IF NOT EXISTS ix_timeline_issues_build
                 ON build_timeline_issues (organization, build_id);
-
-            CREATE TABLE IF NOT EXISTS build_ingestion_tasks (
-                organization TEXT NOT NULL,
-                build_id INTEGER NOT NULL,
-                task_type TEXT NOT NULL,
-                status TEXT NOT NULL DEFAULT 'pending',
-                is_complete INTEGER NOT NULL DEFAULT 0,
-                attempts INTEGER NOT NULL DEFAULT 0,
-                last_error TEXT,
-                last_attempt_time TEXT,
-                next_retry_time TEXT,
-                completed_time TEXT,
-                PRIMARY KEY (organization, build_id, task_type)
-            );
-
-            CREATE INDEX IF NOT EXISTS ix_ingestion_tasks_status
-                ON build_ingestion_tasks (is_complete, next_retry_time);
 
             CREATE TABLE IF NOT EXISTS pull_requests (
                 repository TEXT NOT NULL,
@@ -469,19 +459,6 @@ public sealed class TigerDatabase : IDisposable
                 cmd.Transaction = tx;
                 cmd.CommandText = """
                     DELETE FROM build_timeline_issues
-                    WHERE organization = @org AND build_id = @buildId
-                    """;
-                cmd.Parameters.AddWithValue("@org", organization);
-                cmd.Parameters.AddWithValue("@buildId", buildId);
-                cmd.ExecuteNonQuery();
-            }
-
-            // Delete ingestion tasks
-            using (var cmd = conn.CreateCommand())
-            {
-                cmd.Transaction = tx;
-                cmd.CommandText = """
-                    DELETE FROM build_ingestion_tasks
                     WHERE organization = @org AND build_id = @buildId
                     """;
                 cmd.Parameters.AddWithValue("@org", organization);

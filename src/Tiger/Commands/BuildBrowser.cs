@@ -291,7 +291,7 @@ public sealed class BuildBrowser
             cmd.CommandText = $"""
                 SELECT b.organization, b.project, b.build_id, b.build_number, b.definition_name,
                        b.result, b.source_branch, b.pr_number, b.finish_time,
-                       CASE WHEN b.ingestion_tasks_complete = 1 THEN 'complete' ELSE 'pending' END as ingestion_status,
+                       b.ingestion_status,
                        b.definition_id, b.repository_name
                 FROM builds b
                 {whereClause}
@@ -514,7 +514,7 @@ public sealed class BuildBrowser
         var buildInfo = _db.WithCommand(cmd =>
         {
             cmd.CommandText = """
-                SELECT build_number, definition_name, result, source_branch, pr_number, finish_time, repository_name
+                SELECT build_number, definition_name, result, source_branch, pr_number, finish_time, repository_name, ingestion_status
                 FROM builds
                 WHERE organization = @org AND build_id = @buildId
                 """;
@@ -526,7 +526,8 @@ public sealed class BuildBrowser
             if (!reader.Read())
             {
                 return (Found: false, BuildNumber: string.Empty, DefName: string.Empty, Result: (string?)null,
-                    Branch: string.Empty, PrNumber: (int?)null, FinishTime: (string?)null, RepoName: (string?)null);
+                    Branch: string.Empty, PrNumber: (int?)null, FinishTime: (string?)null, RepoName: (string?)null,
+                    IngestionStatus: string.Empty);
             }
 
             return (
@@ -537,7 +538,8 @@ public sealed class BuildBrowser
                 Branch: reader.GetString(3),
                 PrNumber: reader.IsDBNull(4) ? (int?)null : reader.GetInt32(4),
                 FinishTime: reader.IsDBNull(5) ? null : reader.GetString(5),
-                RepoName: reader.IsDBNull(6) ? null : reader.GetString(6));
+                RepoName: reader.IsDBNull(6) ? null : reader.GetString(6),
+                IngestionStatus: reader.GetString(7));
         });
 
         if (!buildInfo.Found)
@@ -560,12 +562,9 @@ public sealed class BuildBrowser
 
         var url = $"https://dev.azure.com/{Uri.EscapeDataString(org)}/{Uri.EscapeDataString(project)}/_build/results?buildId={buildId}";
 
-        // Ingestion status
-        var taskStatuses = GetIngestionTaskStatuses(org, project, buildId);
-        var taskStatusMap = taskStatuses.ToDictionary(t => t.TaskType, t => t);
-
-        var timelineStatus = taskStatusMap.GetValueOrDefault("timeline").Status;
-        var testsStatus = taskStatusMap.GetValueOrDefault("tests").Status;
+        // Ingestion status — tests, timeline, and helix are ingested together in a
+        // single pass, so one status covers all of them.
+        var ingestionStatus = buildInfo.IngestionStatus;
 
         var canForward = _position < _history.Count - 1;
         var buildIndex = _lastBuilds.FindIndex(b => b.BuildId == buildId && b.Org == org && b.Project == project);
@@ -619,7 +618,7 @@ public sealed class BuildBrowser
         }
 
         List<string>? failedJobNames = null;
-        if (timelineStatus == "complete")
+        if (ingestionStatus == "complete")
         {
             failedJobNames = _db.WithCommand(cmd =>
             {
@@ -645,7 +644,7 @@ public sealed class BuildBrowser
         }
 
         List<(string RunName, string Title, string Error)>? failedTests = null;
-        if (testsStatus == "complete")
+        if (ingestionStatus == "complete")
         {
             failedTests = _db.WithCommand(cmd =>
             {
@@ -1434,29 +1433,6 @@ public sealed class BuildBrowser
         var time = BrowserUI.FormatTime(finishTime);
         var branchDisplay = $"[dim]{FormatBranchField(branch)}[/]";
         return $"{resultIcon} {buildId} {Markup.Escape(definitionName)} {branchDisplay} {time}{pr}{pending}";
-    }
-
-    private List<(string TaskType, string Status, int Attempts)> GetIngestionTaskStatuses(
-        string org, string project, int buildId)
-    {
-        return _db.WithCommand(cmd =>
-        {
-            var tasks = new List<(string, string, int)>();
-            cmd.CommandText = """
-                SELECT task_type, status, attempts
-                FROM build_ingestion_tasks
-                WHERE organization = @org AND build_id = @buildId
-                ORDER BY task_type
-                """;
-            cmd.Parameters.AddWithValue("@org", org);
-            cmd.Parameters.AddWithValue("@buildId", buildId);
-            using var reader = cmd.ExecuteReader();
-            while (reader.Read())
-            {
-                tasks.Add((reader.GetString(0), reader.GetString(1), reader.GetInt32(2)));
-            }
-            return tasks;
-        });
     }
 
     // ── Page and Navigation Types ───────────────────────────────────

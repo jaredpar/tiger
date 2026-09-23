@@ -144,7 +144,7 @@ public sealed class HealthAgentService : IDisposable
             cmd.CommandText = $"""
                 SELECT
                     COUNT(*) as total,
-                    COUNT(CASE WHEN b.ingestion_tasks_complete = 1 THEN 1 END) as ready
+                    COUNT(CASE WHEN b.ingestion_status = 'complete' THEN 1 END) as ready
                 FROM builds b
                 WHERE b.repository_name = @repo
                   AND b.definition_name = @def

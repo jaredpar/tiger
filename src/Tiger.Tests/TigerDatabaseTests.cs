@@ -182,8 +182,8 @@ public class TigerDatabaseTests : IDisposable
         db.WithCommand(cmd =>
         {
             cmd.CommandText = $"""
-                INSERT INTO builds (organization, project, build_id, build_number, definition_name, definition_id, status, source_branch, finish_time)
-                VALUES ('{org}', '{project}', {buildId}, '1.0.{buildId}', 'pipeline', 1, 'completed', 'refs/heads/main', '2026-01-01T00:00:00Z');
+                INSERT INTO builds (organization, project, build_id, build_number, definition_name, definition_id, status, source_branch, finish_time, ingestion_status)
+                VALUES ('{org}', '{project}', {buildId}, '1.0.{buildId}', 'pipeline', 1, 'completed', 'refs/heads/main', '2026-01-01T00:00:00Z', 'complete');
 
                 INSERT INTO test_runs (organization, project, build_id, run_id, run_name)
                 VALUES ('{org}', '{project}', {buildId}, {runId}, 'Run {buildId}');
@@ -196,9 +196,6 @@ public class TigerDatabaseTests : IDisposable
 
                 INSERT INTO build_timeline_issues (organization, build_id, record_name, record_type, issue_type, issue_message)
                 VALUES ('{org}', {buildId}, 'Build', 'Job', 'error', 'Something failed');
-
-                INSERT INTO build_ingestion_tasks (organization, build_id, task_type, status)
-                VALUES ('{org}', {buildId}, 'tests', 'completed');
                 """;
             cmd.ExecuteNonQuery();
         });
@@ -225,7 +222,6 @@ public class TigerDatabaseTests : IDisposable
         Assert.Equal(1, CountRows(db, "test_results"));
         Assert.Equal(1, CountRows(db, "helix_work_items"));
         Assert.Equal(1, CountRows(db, "build_timeline_issues"));
-        Assert.Equal(1, CountRows(db, "build_ingestion_tasks"));
 
         db.DeleteBuild("org", 1);
 
@@ -235,7 +231,6 @@ public class TigerDatabaseTests : IDisposable
         Assert.Equal(0, CountRows(db, "test_results"));
         Assert.Equal(0, CountRows(db, "helix_work_items"));
         Assert.Equal(0, CountRows(db, "build_timeline_issues"));
-        Assert.Equal(0, CountRows(db, "build_ingestion_tasks"));
     }
 
     [Fact]
@@ -257,7 +252,6 @@ public class TigerDatabaseTests : IDisposable
         Assert.Equal(1, CountRows(db, "test_results"));
         Assert.Equal(1, CountRows(db, "helix_work_items"));
         Assert.Equal(1, CountRows(db, "build_timeline_issues"));
-        Assert.Equal(1, CountRows(db, "build_ingestion_tasks"));
 
         // Verify it's build 2 that remains
         Assert.Equal(1, CountRows(db, "builds", "build_id = 2"));
