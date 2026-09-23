@@ -26,9 +26,14 @@ Completed CI builds from Azure DevOps.
 | source_branch | TEXT | Branch (e.g. "refs/heads/main", "refs/pull/123/merge") |
 | source_version | TEXT | Git commit SHA |
 | repository_name | TEXT | Repository (e.g. "dotnet/roslyn") |
+| repository_type | TEXT | Repository type (e.g. "GitHub", "TfsGit") |
 | pr_number | INTEGER | PR number if this is a PR build, NULL otherwise |
 | finish_time | TEXT | ISO 8601 finish time |
 | ingested_at | TEXT | When the build was added to the DB |
+| ingestion_status | TEXT | "pending", "running", "complete", "failed", or "abandoned" — tests, timeline, and Helix data are ingested together in a single pass |
+| ingestion_attempts | INTEGER | Number of ingestion attempts so far |
+| ingestion_last_error | TEXT | Last error message if ingestion failed |
+| ingestion_next_retry_time | TEXT | ISO 8601 time when a failed ingestion can be retried |
 
 Primary key: `(organization, build_id)` — build IDs are unique within an organization
 
@@ -83,24 +88,6 @@ Errors and warnings from the AzDO build timeline (jobs and tasks).
 | issue_message | TEXT | The error/warning message |
 | issue_category | TEXT | Issue category (may be NULL) |
 | log_url | TEXT | AzDO timeline log URL for the record (may be NULL) |
-
-### build_ingestion_tasks
-Tracks async ingestion of detailed data per build.
-
-| Column | Type | Description |
-|--------|------|-------------|
-| organization | TEXT | AzDO organization |
-| build_id | INTEGER | FK to builds |
-| task_type | TEXT | "tests", "timeline", or "pr_info" |
-| status | TEXT | "pending", "running", "complete", "failed", "abandoned" |
-| is_complete | INTEGER | 1 when task is terminal (complete or abandoned), 0 otherwise. A build is fully ingested when all its tasks have is_complete = 1. |
-| attempts | INTEGER | Number of attempts so far |
-| last_error | TEXT | Last error message if failed |
-| last_attempt_time | TEXT | ISO 8601 time of last attempt |
-| next_retry_time | TEXT | ISO 8601 time when a failed task can be retried |
-| completed_time | TEXT | ISO 8601 time when the task completed |
-
-Primary key: `(organization, build_id, task_type)`
 
 ### pull_requests
 Cached PR metadata fetched from GitHub.
@@ -239,10 +226,10 @@ LIMIT 20;
 
 ### Ingestion status summary
 ```sql
-SELECT task_type, status, COUNT(*) as count
-FROM build_ingestion_tasks
-GROUP BY task_type, status
-ORDER BY task_type, status;
+SELECT ingestion_status, COUNT(*) as count
+FROM builds
+GROUP BY ingestion_status
+ORDER BY ingestion_status;
 ```
 
 ### Helix work items for a failed test
@@ -291,8 +278,8 @@ ORDER BY b.finish_time DESC;
 - `pull_requests`, `known_issues`, and `helix_work_items` are keyed by repository or job (not org/project)
 - Times are stored as ISO 8601 strings in UTC
 - Only failed test results are stored (not passing tests)
-- The `build_ingestion_tasks` table shows whether test/timeline data is available for a build
-- Helix work items are fetched inline as part of the "tests" task (no separate helix task)
+- The `builds.ingestion_status` column shows whether test/timeline/Helix data is available for a build (tests, timeline, and Helix work items are ingested together in a single atomic pass)
+- Helix work items are fetched inline as part of build ingestion (no separate helix task)
 - Known issues are refreshed every 15 minutes; closed issues are kept for 7 days before purging
 - Use `LIKE '%pattern%'` for fuzzy matching on test names, definition names, etc.
 - PR builds have `source_branch` like `refs/pull/123/merge` and `pr_number` set

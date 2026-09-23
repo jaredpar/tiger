@@ -1,12 +1,16 @@
 using System.Net;
+using System.Text.RegularExpressions;
 using Xunit;
 
 namespace Tiger.Tests;
 
 /// <summary>
-/// Tests for the priority preemption behavior in <see cref="BuildIngestionService"/>.
+/// Tests for the priority queue-jump behavior in <see cref="BuildIngestionService"/>.
+/// Ingestion is now a single atomic pass per build, so priority no longer preempts
+/// in-flight work — it only moves a build to the front of the queue so it's picked
+/// up next once a worker slot frees.
 /// </summary>
-public class BuildIngestionPriorityTests : IDisposable
+public partial class BuildIngestionPriorityTests : IDisposable
 {
     private readonly string _dbPath;
     private readonly TigerDatabase _db;
@@ -25,228 +29,91 @@ public class BuildIngestionPriorityTests : IDisposable
     }
 
     /// <summary>
-    /// Verifies that PrioritizeBuild preempts in-flight 'tests' tasks.
-    /// The preempted tasks must be reset to 'pending' in the DB.
+    /// Verifies that PrioritizeBuild moves a build to the front of the queue: once the
+    /// currently in-flight build finishes, the prioritized build is picked up next,
+    /// ahead of builds that would normally come first (by build_id descending).
     /// </summary>
     [Fact]
-    public async Task PrioritizeBuild_PreemptsTestsTasks()
+    public async Task PrioritizeBuild_JumpsQueue()
     {
-        var normalFetchStarted = new SemaphoreSlim(0);
-        var priorityTaskStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        const int priorityBuildId = 100;
+        var order = new List<int>();
+        var started = new SemaphoreSlim(0);
+        var proceed = new SemaphoreSlim(0);
 
         var handler = new DelegateHandler(async (request, ct) =>
         {
             var url = request.RequestUri?.ToString() ?? "";
-            if (url.Contains($"Build%2F{priorityBuildId}") || url.Contains($"Build/{priorityBuildId}"))
+
+            // Only the initial "test summary" fetch (includeRunDetails=true) is gated;
+            // this is the first HTTP call made per build during ingestion.
+            if (url.Contains("includeRunDetails=true"))
             {
-                priorityTaskStarted.TrySetResult();
-                return CreateJsonResponse("""{"count":0,"value":[]}""");
+                var match = TestSummaryBuildIdRegex().Match(url);
+                if (match.Success)
+                {
+                    var buildId = int.Parse(match.Groups[1].Value);
+                    lock (order)
+                    {
+                        order.Add(buildId);
+                    }
+                    started.Release();
+                    await proceed.WaitAsync(ct);
+                }
             }
-            normalFetchStarted.Release();
-            await Task.Delay(Timeout.Infinite, ct);
-            return null!;
+
+            return CreateJsonResponse("""{"count":0,"value":[]}""");
         });
 
         var factory = new AzdoClientFactory((org, proj) => AzdoClient.Create(handler, org, proj));
-        var service = new BuildIngestionService(_db, factory, maxParallelism: 2);
+        var service = new BuildIngestionService(_db, factory, maxParallelism: 1);
 
-        InsertBuildWithTask("org", "proj", buildId: 1, taskType: "tests");
-        InsertBuildWithTask("org", "proj", buildId: 2, taskType: "tests");
-        InsertBuildWithTask("org", "proj", buildId: priorityBuildId, taskType: "tests");
-
-        service.Start();
-        await normalFetchStarted.WaitAsync();
-        await normalFetchStarted.WaitAsync();
-
-        service.PrioritizeBuild("org", priorityBuildId);
-        await priorityTaskStarted.Task;
-        await service.StopAsync();
-
-        var status1 = GetTaskStatus("org", 1, "tests");
-        var status2 = GetTaskStatus("org", 2, "tests");
-        Assert.Equal("pending", status1);
-        Assert.Equal("pending", status2);
-    }
-
-    /// <summary>
-    /// Verifies that PrioritizeBuild preempts in-flight 'timeline' tasks.
-    /// The preempted tasks must be reset to 'pending' in the DB.
-    /// </summary>
-    [Fact]
-    public async Task PrioritizeBuild_PreemptsTimelineTasks()
-    {
-        var normalFetchStarted = new SemaphoreSlim(0);
-        var priorityTaskStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        const int priorityBuildId = 100;
-
-        var handler = new DelegateHandler(async (request, ct) =>
-        {
-            var url = request.RequestUri?.ToString() ?? "";
-            if (url.Contains($"builds/{priorityBuildId}/timeline"))
-            {
-                priorityTaskStarted.TrySetResult();
-                return CreateJsonResponse("""{"records":[]}""");
-            }
-            normalFetchStarted.Release();
-            await Task.Delay(Timeout.Infinite, ct);
-            return null!;
-        });
-
-        var factory = new AzdoClientFactory((org, proj) => AzdoClient.Create(handler, org, proj));
-        var service = new BuildIngestionService(_db, factory, maxParallelism: 2);
-
-        InsertBuildWithTask("org", "proj", buildId: 1, taskType: "timeline");
-        InsertBuildWithTask("org", "proj", buildId: 2, taskType: "timeline");
-        InsertBuildWithTask("org", "proj", buildId: priorityBuildId, taskType: "timeline");
+        InsertPendingBuild("org", "proj", buildId: 10);
+        InsertPendingBuild("org", "proj", buildId: 20);
+        InsertPendingBuild("org", "proj", buildId: 30);
 
         service.Start();
-        await normalFetchStarted.WaitAsync();
-        await normalFetchStarted.WaitAsync();
 
-        service.PrioritizeBuild("org", priorityBuildId);
-        await priorityTaskStarted.Task;
+        // Without priority, builds are picked in build_id descending order, so build
+        // 30 starts first.
+        await started.WaitAsync();
+
+        // Prioritize builds in the same top-to-bottom order as the build list.
+        // They must be ingested in that order rather than in reverse.
+        service.PrioritizeBuild("org", 10);
+        service.PrioritizeBuild("org", 20);
+        proceed.Release();
+
+        // Build 10 should be picked up next, ahead of build 20.
+        await started.WaitAsync();
+        proceed.Release();
+
+        await started.WaitAsync();
+        proceed.Release();
+
         await service.StopAsync();
 
-        var status1 = GetTaskStatus("org", 1, "timeline");
-        var status2 = GetTaskStatus("org", 2, "timeline");
-        Assert.Equal("pending", status1);
-        Assert.Equal("pending", status2);
-    }
-
-    /// <summary>
-    /// Verifies that PrioritizeBuild preempts in-flight 'tests' tasks that are
-    /// blocked fetching Helix work items. The Helix HTTP calls receive the
-    /// cancellation token and are interrupted properly.
-    /// </summary>
-    [Fact]
-    public async Task PrioritizeBuild_PreemptsHelixFetch()
-    {
-        var normalHelixStarted = new SemaphoreSlim(0);
-        var priorityTaskStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        const int priorityBuildId = 100;
-
-        // AzDO handler: returns test results with helix info for normal builds,
-        // returns empty for priority build
-        var azdoHandler = new DelegateHandler((request, ct) =>
-        {
-            var url = request.RequestUri?.ToString() ?? "";
-
-            if (url.Contains($"Build%2F{priorityBuildId}") || url.Contains($"Build/{priorityBuildId}"))
-            {
-                priorityTaskStarted.TrySetResult();
-                return Task.FromResult(CreateJsonResponse("""{"count":0,"value":[]}"""));
-            }
-
-            // Return test runs with a helix-linked failure so the service proceeds to fetch helix data
-            if (url.Contains("test/runs") && url.Contains("includeRunDetails"))
-            {
-                return Task.FromResult(CreateJsonResponse(
-                    """{"count":1,"value":[{"id":1,"name":"TestRun","totalTests":1,"passedTests":0,"notApplicableTests":0,"unanalyzedTests":0}]}"""));
-            }
-
-            if (url.Contains("test/Runs/") && url.Contains("results"))
-            {
-                return Task.FromResult(CreateJsonResponse("""
-                    {"count":1,"value":[{
-                        "id":1,
-                        "testRun":{"id":"1","name":"TestRun"},
-                        "testCaseTitle":"SomeTest",
-                        "automatedTestName":"Namespace.SomeTest",
-                        "outcome":"Failed",
-                        "comment":"{\"HelixJobId\":\"test-job\",\"HelixWorkItemName\":\"test-workitem\"}"
-                    }]}
-                    """));
-            }
-
-            if (url.Contains("test/runs"))
-            {
-                return Task.FromResult(CreateJsonResponse(
-                    """{"count":1,"value":[{"id":1,"name":"TestRun","totalTests":1,"passedTests":0,"notApplicableTests":0,"unanalyzedTests":0}]}"""));
-            }
-
-            return Task.FromResult(CreateJsonResponse("""{"count":0,"value":[]}"""));
-        });
-
-        // Helix handler: blocks on work item fetch, signals when started
-        var helixHandler = new DelegateHandler(async (request, ct) =>
-        {
-            normalHelixStarted.Release();
-            await Task.Delay(Timeout.Infinite, ct);
-            return null!;
-        });
-
-        var factory = new AzdoClientFactory((org, proj) => AzdoClient.Create(azdoHandler, org, proj));
-        Func<HelixClient> helixFactory = () => HelixClient.Create(helixHandler);
-        var service = new BuildIngestionService(_db, factory, maxParallelism: 2, helixClientFactory: helixFactory);
-
-        InsertBuildWithTask("org", "proj", buildId: 1, taskType: "tests");
-        InsertBuildWithTask("org", "proj", buildId: 2, taskType: "tests");
-        InsertBuildWithTask("org", "proj", buildId: priorityBuildId, taskType: "tests");
-
-        service.Start();
-        await normalHelixStarted.WaitAsync();
-        await normalHelixStarted.WaitAsync();
-
-        service.PrioritizeBuild("org", priorityBuildId);
-        await priorityTaskStarted.Task;
-        await service.StopAsync();
-
-        var status1 = GetTaskStatus("org", 1, "tests");
-        var status2 = GetTaskStatus("org", 2, "tests");
-        Assert.Equal("pending", status1);
-        Assert.Equal("pending", status2);
+        Assert.Equal([30, 10, 20], order);
     }
 
     // ── Helpers ─────────────────────────────────────────────────────
 
-    private void InsertBuildWithTask(string organization, string project, int buildId, string taskType)
+    private void InsertPendingBuild(string organization, string project, int buildId)
     {
         _db.WithCommand(cmd =>
         {
             cmd.CommandText = """
                 INSERT OR IGNORE INTO builds
                     (organization, project, build_id, build_number, definition_name, definition_id,
-                     status, result, source_branch)
+                     status, result, source_branch, ingestion_status)
                 VALUES
                     (@org, @proj, @buildId, @buildNumber, 'test-def', 1,
-                     'completed', 'failed', 'refs/heads/main')
+                     'completed', 'failed', 'refs/heads/main', 'pending')
                 """;
             cmd.Parameters.AddWithValue("@org", organization);
             cmd.Parameters.AddWithValue("@proj", project);
             cmd.Parameters.AddWithValue("@buildId", buildId);
             cmd.Parameters.AddWithValue("@buildNumber", $"20250101.{buildId}");
             cmd.ExecuteNonQuery();
-        });
-
-        _db.WithCommand(cmd =>
-        {
-            cmd.CommandText = """
-                INSERT OR IGNORE INTO build_ingestion_tasks
-                    (organization, build_id, task_type, status, is_complete, attempts)
-                VALUES
-                    (@org, @buildId, @taskType, 'pending', 0, 0)
-                """;
-            cmd.Parameters.AddWithValue("@org", organization);
-            cmd.Parameters.AddWithValue("@buildId", buildId);
-            cmd.Parameters.AddWithValue("@taskType", taskType);
-            cmd.ExecuteNonQuery();
-        });
-    }
-
-    private string GetTaskStatus(string organization, int buildId, string taskType)
-    {
-        return _db.WithCommand(cmd =>
-        {
-            cmd.CommandText = """
-                SELECT status FROM build_ingestion_tasks
-                WHERE organization = @org AND build_id = @buildId AND task_type = @type
-                """;
-            cmd.Parameters.AddWithValue("@org", organization);
-            cmd.Parameters.AddWithValue("@buildId", buildId);
-            cmd.Parameters.AddWithValue("@type", taskType);
-            return cmd.ExecuteScalar() as string ?? throw new InvalidOperationException(
-                $"No task found for org={organization}, buildId={buildId}, taskType={taskType}");
         });
     }
 
@@ -270,4 +137,7 @@ public class BuildIngestionPriorityTests : IDisposable
             Content = new StringContent(json, System.Text.Encoding.UTF8, "application/json"),
         };
     }
+
+    [GeneratedRegex(@"Build%2FBuild%2F(\d+)")]
+    private static partial Regex TestSummaryBuildIdRegex();
 }

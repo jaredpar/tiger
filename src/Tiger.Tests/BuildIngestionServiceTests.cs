@@ -83,7 +83,7 @@ public class BuildIngestionServiceTests : IDisposable
     }
 
     [Fact]
-    public void InsertBuild_GitHubPr_CreatesPrInfoTask()
+    public void InsertBuild_GitHubPr_StoresRepositoryType()
     {
         var build = new AzdoBuild
         {
@@ -102,12 +102,16 @@ public class BuildIngestionServiceTests : IDisposable
 
         _service.InsertBuild("org", "proj", build);
 
-        var taskCount = CountIngestionTasks(4, "pr_info");
-        Assert.Equal(1L, taskCount);
+        var repositoryType = _db.WithCommand(cmd =>
+        {
+            cmd.CommandText = "SELECT repository_type FROM builds WHERE build_id = 4;";
+            return cmd.ExecuteScalar();
+        });
+        Assert.Equal(AzdoRepositoryTypes.GitHub, repositoryType);
     }
 
     [Fact]
-    public void InsertBuild_AzureReposPr_DoesNotCreatePrInfoTask()
+    public void InsertBuild_AzureReposPr_StoresRepositoryType()
     {
         var build = new AzdoBuild
         {
@@ -126,8 +130,61 @@ public class BuildIngestionServiceTests : IDisposable
 
         _service.InsertBuild("org", "proj", build);
 
-        var taskCount = CountIngestionTasks(5, "pr_info");
-        Assert.Equal(0L, taskCount);
+        var repositoryType = _db.WithCommand(cmd =>
+        {
+            cmd.CommandText = "SELECT repository_type FROM builds WHERE build_id = 5;";
+            return cmd.ExecuteScalar();
+        });
+        Assert.Equal(AzdoRepositoryTypes.TfsGit, repositoryType);
+    }
+
+    [Fact]
+    public void InsertBuild_DefaultsToPendingIngestionStatus()
+    {
+        var build = new AzdoBuild
+        {
+            Id = 6,
+            BuildNumber = "20250101.6",
+            DefinitionName = "runtime",
+            DefinitionId = 42,
+            Status = "completed",
+            Uri = "https://dev.azure.com/org/proj/_build/results?buildId=6",
+            SourceBranch = "main",
+        };
+
+        _service.InsertBuild("org", "proj", build);
+
+        var status = _db.WithCommand(cmd =>
+        {
+            cmd.CommandText = "SELECT ingestion_status FROM builds WHERE build_id = 6;";
+            return cmd.ExecuteScalar();
+        });
+        Assert.Equal("pending", status);
+    }
+
+    [Fact]
+    public void InsertBuild_Canceled_MarksIngestionComplete()
+    {
+        var build = new AzdoBuild
+        {
+            Id = 7,
+            BuildNumber = "20250101.7",
+            DefinitionName = "runtime",
+            DefinitionId = 42,
+            Status = "completed",
+            Result = "canceled",
+            Uri = "https://dev.azure.com/org/proj/_build/results?buildId=7",
+            SourceBranch = "main",
+        };
+
+        _service.InsertBuild("org", "proj", build);
+
+        var status = _db.WithCommand(cmd =>
+        {
+            cmd.CommandText = "SELECT ingestion_status FROM builds WHERE build_id = 7;";
+            return cmd.ExecuteScalar();
+        });
+        Assert.Equal("complete", status);
     }
 
     [Fact]
@@ -372,20 +429,6 @@ public class BuildIngestionServiceTests : IDisposable
             Status = "completed",
             Uri = $"https://example.com/{buildId}",
             SourceBranch = "main",
-        });
-    }
-
-    private long CountIngestionTasks(int buildId, string taskType)
-    {
-        return _db.WithCommand(cmd =>
-        {
-            cmd.CommandText = """
-                SELECT COUNT(*) FROM build_ingestion_tasks
-                WHERE organization = 'org' AND build_id = @buildId AND task_type = @taskType
-                """;
-            cmd.Parameters.AddWithValue("@buildId", buildId);
-            cmd.Parameters.AddWithValue("@taskType", taskType);
-            return (long)cmd.ExecuteScalar()!;
         });
     }
 

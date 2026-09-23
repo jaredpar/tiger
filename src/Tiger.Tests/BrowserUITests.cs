@@ -215,15 +215,9 @@ public class BrowserUITests
             {
                 cmd.CommandText = """
                     INSERT INTO builds (organization, project, build_id, build_number, definition_name, definition_id,
-                        status, result, source_branch, finish_time)
+                        status, result, source_branch, finish_time, ingestion_status)
                     VALUES ('dnceng', 'public', 42, '20260617.1', 'roslyn-CI', 100,
-                        'completed', 'failed', 'refs/heads/main', '2025-06-01T12:00:00Z');
-
-                    INSERT INTO build_ingestion_tasks (organization, build_id, task_type, status)
-                    VALUES ('dnceng', 42, 'timeline', 'complete');
-
-                    INSERT INTO build_ingestion_tasks (organization, build_id, task_type, status)
-                    VALUES ('dnceng', 42, 'tests', 'complete');
+                        'completed', 'failed', 'refs/heads/main', '2025-06-01T12:00:00Z', 'complete');
                     """;
                 cmd.ExecuteNonQuery();
             });
