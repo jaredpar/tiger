@@ -598,6 +598,7 @@ public sealed class BuildAnalysisService : IDisposable
 
             await using var session = await client.CreateSessionAsync(new SessionConfig
             {
+                ClientName = "tiger-tool",
                 Model = "gpt-6-astra",
                 Streaming = false,
                 OnPermissionRequest = PermissionHandler.ApproveAll,
