@@ -196,6 +196,61 @@ public class BuildPollerTests : IDisposable
         Assert.Equal(AzdoRepositoryTypes.TfsGit, build.RepositoryType);
     }
 
+    [Fact]
+    public async Task PollSourceAsync_LogsRegisteredBuildsNotIngestedBuilds()
+    {
+        var source = new AzdoSource { Organization = "org", Project = "proj" };
+        var config = new TigerConfig { Sources = [source] };
+        var log = new ServiceLog();
+        using var ingestion = new BuildIngestionService(_db);
+        ingestion.InsertBuild("org", "proj", MakeBuild(1));
+        using var handler = new DelegateHandler((request, ct) => Task.FromResult(CreateJsonResponse("""
+            {
+              "count": 2,
+              "value": [
+                {
+                  "id": 1,
+                  "uri": "vstfs:///Build/Build/1",
+                  "buildNumber": "20250101.1",
+                  "status": "completed",
+                  "result": "failed",
+                  "sourceBranch": "refs/heads/main",
+                  "definition": { "id": 7, "name": "CI" }
+                },
+                {
+                  "id": 2,
+                  "uri": "vstfs:///Build/Build/2",
+                  "buildNumber": "20250101.2",
+                  "status": "completed",
+                  "result": "succeeded",
+                  "sourceBranch": "refs/heads/main",
+                  "definition": { "id": 7, "name": "CI" }
+                }
+              ]
+            }
+            """)));
+        var factory = new AzdoClientFactory((org, proj) => AzdoClient.Create(handler, org, proj));
+        using var poller = new BuildPoller(config, _db, factory, log)
+        {
+            OnNewBuilds = ingestion.InsertBuildsAsync,
+        };
+
+        await poller.PollSourceAsync(source, CancellationToken.None);
+        await poller.PollSourceAsync(source, CancellationToken.None); // Rediscovery is silent.
+
+        Assert.Equal("""
+            Info Poller: Found 1 new builds for org/proj
+            Success Poller: Registered 1 builds for org/proj
+            """,
+            string.Join("\n", log.GetRecent().Select(entry => $"{entry.Level} {entry.Service}: {entry.Message}")),
+            ignoreLineEndingDifferences: true);
+        _db.WithCommand(cmd =>
+        {
+            cmd.CommandText = "SELECT ingestion_status FROM builds WHERE organization = 'org' AND build_id = 2";
+            Assert.Equal("pending", cmd.ExecuteScalar());
+        });
+    }
+
     private BuildPoller CreatePoller()
     {
         var config = new TigerConfig { Sources = [] };

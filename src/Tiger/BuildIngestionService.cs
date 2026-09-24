@@ -39,6 +39,7 @@ public sealed class BuildIngestionService : IDisposable
 
     private const int MaxAttempts = 5;
     private const int WorkerIntervalSeconds = 5;
+    private const int QueueReportIntervalSeconds = 10;
     private const int CircuitBreakerThreshold = 5;
     private const int CircuitBreakerCooldownSeconds = 120;
     private const int DefaultMaxParallelism = 8;
@@ -332,6 +333,36 @@ public sealed class BuildIngestionService : IDisposable
 
     private sealed record InFlightBuild(string Organization, int BuildId, Task<bool> Task);
 
+    internal void ReportQueueStatus(DateTime utcNow, ref DateTime lastQueueReportTime)
+    {
+        if (_log is null ||
+            utcNow - lastQueueReportTime < TimeSpan.FromSeconds(QueueReportIntervalSeconds))
+        {
+            return;
+        }
+
+        var status = _db.WithCommand(cmd =>
+        {
+            cmd.CommandText = """
+                SELECT
+                    COUNT(CASE WHEN ingestion_status = 'pending' THEN 1 END),
+                    COUNT(CASE WHEN ingestion_status = 'running' THEN 1 END),
+                    COUNT(CASE WHEN ingestion_status = 'failed' THEN 1 END),
+                    COUNT(CASE WHEN ingestion_status = 'abandoned' THEN 1 END)
+                FROM builds
+                WHERE ingestion_status IN ('pending', 'running', 'failed', 'abandoned')
+                """;
+            using var reader = cmd.ExecuteReader();
+            reader.Read();
+            return (Pending: reader.GetInt64(0), Running: reader.GetInt64(1),
+                AwaitingRetry: reader.GetInt64(2), Abandoned: reader.GetInt64(3));
+        });
+
+        _log.Info("Worker",
+            $"Ingestion queue: {status.Pending} pending, {status.Running} running, {status.AwaitingRetry} awaiting retry, {status.Abandoned} abandoned");
+        lastQueueReportTime = utcNow;
+    }
+
     /// <summary>
     /// Maintains up to <see cref="_maxParallelism"/> in-flight builds at all times,
     /// adapting concurrency based on AzDO rate-limit headers. When any build
@@ -340,6 +371,7 @@ public sealed class BuildIngestionService : IDisposable
     /// </summary>
     private async Task WorkLoopAsync(CancellationToken ct)
     {
+        DateTime lastQueueReportTime = default;
         var consecutiveFailures = 0;
         var inFlight = new List<InFlightBuild>(_maxParallelism);
 
@@ -350,6 +382,7 @@ public sealed class BuildIngestionService : IDisposable
                 // Circuit breaker
                 if (consecutiveFailures >= CircuitBreakerThreshold)
                 {
+                    ReportQueueStatus(DateTime.UtcNow, ref lastQueueReportTime);
                     _log?.Warning("Worker",
                         $"Circuit breaker: {consecutiveFailures} consecutive failures, cooling down {CircuitBreakerCooldownSeconds}s");
 
@@ -361,6 +394,7 @@ public sealed class BuildIngestionService : IDisposable
                         HandleCompletion(completed.Task);
                     }
 
+                    ReportQueueStatus(DateTime.UtcNow, ref lastQueueReportTime);
                     await Task.Delay(TimeSpan.FromSeconds(CircuitBreakerCooldownSeconds), ct);
                     consecutiveFailures = 0;
                     continue;
@@ -379,6 +413,8 @@ public sealed class BuildIngestionService : IDisposable
                     var (organization, buildId) = next.Value;
                     inFlight.Add(new InFlightBuild(organization, buildId, IngestBuildSafeAsync(organization, buildId, ct)));
                 }
+
+                ReportQueueStatus(DateTime.UtcNow, ref lastQueueReportTime);
 
                 if (inFlight.Count == 0)
                 {

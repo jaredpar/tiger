@@ -418,15 +418,232 @@ public class BuildIngestionServiceTests : IDisposable
         });
     }
 
-    private void InsertSampleBuild(int buildId)
+    [Fact]
+    public void ReportQueueStatus_AggregatesAllOrganizationsProjectsAndRetryTimes()
     {
-        _service.InsertBuild("org", "proj", new AzdoBuild
+        DateTime lastQueueReportTime = default;
+        var now = new DateTime(2025, 1, 1, 12, 0, 0, DateTimeKind.Utc);
+        var log = new ServiceLog();
+        using var reporter = new BuildIngestionService(_db, log);
+        InsertSampleBuild(1);
+        InsertSampleBuild(1, "other-org", "other-project");
+        InsertSampleBuild(2, project: "other-project");
+        SetIngestionStatus(2, "running");
+        InsertSampleBuild(3);
+        SetIngestionStatus(3, "failed", nextRetryTime: now.AddDays(-1));
+        InsertSampleBuild(4, "other-org", "proj");
+        SetIngestionStatus(4, "failed", "other-org", now.AddDays(1));
+        InsertSampleBuild(5, project: "other-project");
+        SetIngestionStatus(5, "failed");
+        InsertSampleBuild(6);
+        SetIngestionStatus(6, "abandoned");
+        InsertSampleBuild(7);
+        SetIngestionStatus(7, "complete");
+        InsertSampleBuild(7); // Rediscovery must not put a completed build back in the queue.
+        InsertSampleBuild(8, result: "canceled");
+
+        reporter.ReportQueueStatus(now, ref lastQueueReportTime);
+        Assert.Equal(now, lastQueueReportTime);
+
+        Assert.Equal(
+            "Info Worker: Ingestion queue: 2 pending, 1 running, 3 awaiting retry, 1 abandoned",
+            QueueLog(log));
+    }
+
+    [Fact]
+    public void ReportQueueStatus_EmptyQueueRepeatsAfterInterval()
+    {
+        DateTime lastQueueReportTime = default;
+        var now = new DateTime(2025, 1, 1, 12, 0, 0, DateTimeKind.Utc);
+        var log = new ServiceLog();
+        using var reporter = new BuildIngestionService(_db, log);
+
+        reporter.ReportQueueStatus(now, ref lastQueueReportTime);
+        reporter.ReportQueueStatus(now.AddSeconds(1), ref lastQueueReportTime);
+        reporter.ReportQueueStatus(now.AddSeconds(10), ref lastQueueReportTime);
+        reporter.ReportQueueStatus(now.AddDays(1), ref lastQueueReportTime);
+
+        Assert.Equal("""
+            Info Worker: Ingestion queue: 0 pending, 0 running, 0 awaiting retry, 0 abandoned
+            Info Worker: Ingestion queue: 0 pending, 0 running, 0 awaiting retry, 0 abandoned
+            Info Worker: Ingestion queue: 0 pending, 0 running, 0 awaiting retry, 0 abandoned
+            """, QueueLog(log), ignoreLineEndingDifferences: true);
+    }
+
+    [Fact]
+    public void ReportQueueStatus_ChangedCountsAtThresholdUseLatestSnapshot()
+    {
+        DateTime lastQueueReportTime = default;
+        var now = new DateTime(2025, 1, 1, 12, 0, 0, DateTimeKind.Utc);
+        var log = new ServiceLog();
+        using var reporter = new BuildIngestionService(_db, log);
+        InsertSampleBuild(1);
+        reporter.ReportQueueStatus(now, ref lastQueueReportTime);
+
+        InsertSampleBuild(2);
+        reporter.ReportQueueStatus(now.AddSeconds(10).AddTicks(-1), ref lastQueueReportTime);
+        Assert.Equal(now, lastQueueReportTime);
+        InsertSampleBuild(3);
+        reporter.ReportQueueStatus(now.AddSeconds(10), ref lastQueueReportTime);
+        Assert.Equal(now.AddSeconds(10), lastQueueReportTime);
+        InsertSampleBuild(4);
+        reporter.ReportQueueStatus(now.AddSeconds(20).AddTicks(-1), ref lastQueueReportTime);
+        reporter.ReportQueueStatus(now.AddSeconds(20), ref lastQueueReportTime);
+
+        Assert.Equal("""
+            Info Worker: Ingestion queue: 1 pending, 0 running, 0 awaiting retry, 0 abandoned
+            Info Worker: Ingestion queue: 3 pending, 0 running, 0 awaiting retry, 0 abandoned
+            Info Worker: Ingestion queue: 4 pending, 0 running, 0 awaiting retry, 0 abandoned
+            """, QueueLog(log), ignoreLineEndingDifferences: true);
+    }
+
+    [Fact]
+    public void ReportQueueStatus_UnchangedNonemptyQueueRepeatsAndResetsThrottle()
+    {
+        DateTime lastQueueReportTime = default;
+        var now = new DateTime(2025, 1, 1, 12, 0, 0, DateTimeKind.Utc);
+        var log = new ServiceLog();
+        using var reporter = new BuildIngestionService(_db, log);
+        InsertSampleBuild(1);
+        reporter.ReportQueueStatus(now, ref lastQueueReportTime);
+        reporter.ReportQueueStatus(now.AddSeconds(20), ref lastQueueReportTime);
+
+        SetIngestionStatus(1, "running");
+        reporter.ReportQueueStatus(now.AddSeconds(21), ref lastQueueReportTime);
+        reporter.ReportQueueStatus(now.AddSeconds(30), ref lastQueueReportTime);
+
+        Assert.Equal("""
+            Info Worker: Ingestion queue: 1 pending, 0 running, 0 awaiting retry, 0 abandoned
+            Info Worker: Ingestion queue: 1 pending, 0 running, 0 awaiting retry, 0 abandoned
+            Info Worker: Ingestion queue: 0 pending, 1 running, 0 awaiting retry, 0 abandoned
+            """, QueueLog(log), ignoreLineEndingDifferences: true);
+    }
+
+    [Fact]
+    public void ReportQueueStatus_DrainedQueueRespectsThrottleWithAbandonedBuilds()
+    {
+        DateTime lastQueueReportTime = default;
+        var now = new DateTime(2025, 1, 1, 12, 0, 0, DateTimeKind.Utc);
+        var log = new ServiceLog();
+        using var reporter = new BuildIngestionService(_db, log);
+        InsertSampleBuild(1);
+        InsertSampleBuild(2);
+        SetIngestionStatus(2, "abandoned");
+        reporter.ReportQueueStatus(now, ref lastQueueReportTime);
+
+        SetIngestionStatus(1, "complete");
+        reporter.ReportQueueStatus(now.AddSeconds(1), ref lastQueueReportTime);
+        reporter.ReportQueueStatus(now.AddSeconds(2), ref lastQueueReportTime);
+        reporter.ReportQueueStatus(now.AddSeconds(30), ref lastQueueReportTime);
+
+        Assert.Equal("""
+            Info Worker: Ingestion queue: 1 pending, 0 running, 0 awaiting retry, 1 abandoned
+            Info Worker: Ingestion queue: 0 pending, 0 running, 0 awaiting retry, 1 abandoned
+            """, QueueLog(log), ignoreLineEndingDifferences: true);
+    }
+
+    [Fact]
+    public void ReportQueueStatus_IntermediateTransitionsDoNotBypassThrottle()
+    {
+        DateTime lastQueueReportTime = default;
+        var now = new DateTime(2025, 1, 1, 12, 0, 0, DateTimeKind.Utc);
+        var log = new ServiceLog();
+        using var reporter = new BuildIngestionService(_db, log);
+        InsertSampleBuild(1);
+        SetIngestionStatus(1, "abandoned");
+        reporter.ReportQueueStatus(now, ref lastQueueReportTime);
+
+        InsertSampleBuild(2);
+        reporter.ReportQueueStatus(now.AddSeconds(1), ref lastQueueReportTime);
+        SetIngestionStatus(2, "complete");
+        reporter.ReportQueueStatus(now.AddSeconds(2), ref lastQueueReportTime);
+        reporter.ReportQueueStatus(now.AddSeconds(3), ref lastQueueReportTime);
+        InsertSampleBuild(3);
+        reporter.ReportQueueStatus(now.AddSeconds(4), ref lastQueueReportTime);
+        SetIngestionStatus(3, "complete");
+        reporter.ReportQueueStatus(now.AddSeconds(5), ref lastQueueReportTime);
+        reporter.ReportQueueStatus(now.AddSeconds(10), ref lastQueueReportTime);
+
+        Assert.Equal("""
+            Info Worker: Ingestion queue: 0 pending, 0 running, 0 awaiting retry, 1 abandoned
+            Info Worker: Ingestion queue: 0 pending, 0 running, 0 awaiting retry, 1 abandoned
+            """, QueueLog(log), ignoreLineEndingDifferences: true);
+    }
+
+    [Fact]
+    public void ReportQueueStatus_FutureRetryAndCompletionReportedAtInterval()
+    {
+        DateTime lastQueueReportTime = default;
+        var now = new DateTime(2025, 1, 1, 12, 0, 0, DateTimeKind.Utc);
+        var log = new ServiceLog();
+        using var reporter = new BuildIngestionService(_db, log);
+        InsertSampleBuild(1);
+        InsertSampleBuild(2);
+        SetIngestionStatus(2, "failed", nextRetryTime: now.AddDays(1));
+        reporter.ReportQueueStatus(now, ref lastQueueReportTime);
+
+        SetIngestionStatus(1, "complete");
+        reporter.ReportQueueStatus(now.AddSeconds(1), ref lastQueueReportTime);
+        reporter.ReportQueueStatus(now.AddSeconds(10), ref lastQueueReportTime);
+        SetIngestionStatus(2, "complete");
+        reporter.ReportQueueStatus(now.AddSeconds(11), ref lastQueueReportTime);
+        reporter.ReportQueueStatus(now.AddSeconds(20), ref lastQueueReportTime);
+
+        Assert.Equal("""
+            Info Worker: Ingestion queue: 1 pending, 0 running, 1 awaiting retry, 0 abandoned
+            Info Worker: Ingestion queue: 0 pending, 0 running, 1 awaiting retry, 0 abandoned
+            Info Worker: Ingestion queue: 0 pending, 0 running, 0 awaiting retry, 0 abandoned
+            """, QueueLog(log), ignoreLineEndingDifferences: true);
+    }
+
+    [Fact]
+    public void ReportQueueStatus_NoLogIsHarmless()
+    {
+        DateTime lastQueueReportTime = default;
+        var now = new DateTime(2025, 1, 1, 12, 0, 0, DateTimeKind.Utc);
+        InsertSampleBuild(1);
+
+        var exception = Record.Exception(() =>
+        {
+            _service.ReportQueueStatus(now, ref lastQueueReportTime);
+            SetIngestionStatus(1, "complete");
+            _service.ReportQueueStatus(now.AddSeconds(1), ref lastQueueReportTime);
+        });
+
+        Assert.Null(exception);
+        Assert.Equal(default, lastQueueReportTime);
+    }
+
+    private static string QueueLog(ServiceLog log) =>
+        string.Join("\n", log.GetRecent().Select(entry => $"{entry.Level} {entry.Service}: {entry.Message}"));
+
+    private void SetIngestionStatus(int buildId, string status, string organization = "org", DateTime? nextRetryTime = null)
+    {
+        _db.WithCommand(cmd =>
+        {
+            cmd.CommandText = """
+                UPDATE builds
+                SET ingestion_status = @status, ingestion_next_retry_time = @nextRetryTime
+                WHERE organization = @org AND build_id = @buildId
+                """;
+            cmd.Parameters.AddWithValue("@status", status);
+            cmd.Parameters.AddWithValue("@nextRetryTime", (object?)nextRetryTime?.ToString("o") ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@org", organization);
+            cmd.Parameters.AddWithValue("@buildId", buildId);
+            Assert.Equal(1, cmd.ExecuteNonQuery());
+        });
+    }
+
+    private void InsertSampleBuild(int buildId, string organization = "org", string project = "proj", string? result = null)
+    {
+        _service.InsertBuild(organization, project, new AzdoBuild
         {
             Id = buildId,
             BuildNumber = $"build-{buildId}",
             DefinitionName = "def",
             DefinitionId = 1,
             Status = "completed",
+            Result = result,
             Uri = $"https://example.com/{buildId}",
             SourceBranch = "main",
         });
