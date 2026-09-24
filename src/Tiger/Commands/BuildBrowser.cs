@@ -1067,60 +1067,7 @@ public sealed class BuildBrowser
         {
             if (needsRender)
             {
-                var commands = new List<CommandBarItem>
-                {
-                    new(errorsOnly ? "Errors: showing" : "Errors only", ConsoleKey.E, -2),
-                    new(truncate ? "Truncate: off" : "Truncate: on", ConsoleKey.T, -3),
-                };
-                var lines = new List<string>();
-                foreach (var (jobName, issues) in jobIssues)
-                {
-                    var filtered = errorsOnly
-                        ? issues.Where(i => i.Type == "error").ToList()
-                        : issues;
-
-                    if (filtered.Count == 0)
-                    {
-                        continue;
-                    }
-
-                    var errorCount = issues.Count(i => i.Type == "error");
-                    var warnCount = issues.Count(i => i.Type == "warning");
-                    var summary = new List<string>();
-                    if (errorCount > 0)
-                    {
-                        summary.Add($"[red]{errorCount} error(s)[/]");
-                    }
-                    if (warnCount > 0)
-                    {
-                        summary.Add($"[yellow]{warnCount} warning(s)[/]");
-                    }
-                    lines.Add($"[bold]{Markup.Escape(jobName)}[/]  {string.Join(" ", summary)}");
-
-                    foreach (var (type, message) in filtered.Take(10))
-                    {
-                        var icon = type == "error" ? "[red]error[/]" : "[yellow]warn[/]";
-                        var msg = message.ReplaceLineEndings(" ");
-                        if (truncate && msg.Length > 120)
-                        {
-                            msg = msg[..117] + "...";
-                        }
-                        lines.Add($"  {icon}: {Markup.Escape(msg)}");
-                    }
-
-                    if (filtered.Count > 10)
-                    {
-                        lines.Add($"  [dim]... and {filtered.Count - 10} more[/]");
-                    }
-
-                    lines.Add("");
-                }
-
-                _ui.RenderDetailPanel(
-                    ["Builds", $"#{page.BuildId}", "Jobs"],
-                    errorsOnly ? "[dim]Showing errors only[/]" : null,
-                    lines,
-                    PanelRenderer.BuildCommandBarString(commands));
+                RenderBuildJobsContent(page.BuildId, jobIssues, errorsOnly, truncate);
 
                 needsRender = false;
             }
@@ -1132,6 +1079,7 @@ public sealed class BuildBrowser
             }
             if (key.Key is ConsoleKey.Escape or ConsoleKey.B)
             {
+                _ui.TruncationEnabled = true;
                 return NavAction.Back.Instance;
             }
             if (key.Key == ConsoleKey.T)
@@ -1145,6 +1093,70 @@ public sealed class BuildBrowser
                 needsRender = true;
             }
         }
+    }
+
+    internal void RenderBuildJobsContent(
+        int buildId,
+        IReadOnlyDictionary<string, List<(string Type, string Message)>> jobIssues,
+        bool errorsOnly,
+        bool truncate)
+    {
+        _ui.TruncationEnabled = truncate;
+
+        var commands = new List<CommandBarItem>
+        {
+            new(errorsOnly ? "Errors: showing" : "Errors only", ConsoleKey.E, -2),
+            new(truncate ? "Truncate: off" : "Truncate: on", ConsoleKey.T, -3),
+        };
+        var lines = new List<string>();
+        foreach (var (jobName, issues) in jobIssues)
+        {
+            var filtered = errorsOnly
+                ? issues.Where(i => i.Type == "error").ToList()
+                : issues;
+
+            if (filtered.Count == 0)
+            {
+                continue;
+            }
+
+            var errorCount = issues.Count(i => i.Type == "error");
+            var warnCount = issues.Count(i => i.Type == "warning");
+            var summary = new List<string>();
+            if (errorCount > 0)
+            {
+                summary.Add($"[red]{errorCount} error(s)[/]");
+            }
+            if (warnCount > 0)
+            {
+                summary.Add($"[yellow]{warnCount} warning(s)[/]");
+            }
+            lines.Add($"[bold]{Markup.Escape(jobName)}[/]  {string.Join(" ", summary)}");
+
+            foreach (var (type, message) in filtered.Take(10))
+            {
+                var icon = type == "error" ? "[red]error[/]" : "[yellow]warn[/]";
+                var msg = message.ReplaceLineEndings(" ");
+                if (truncate && msg.Length > 120)
+                {
+                    msg = msg[..117] + "...";
+                }
+                lines.Add($"  {icon}: {Markup.Escape(msg)}");
+            }
+
+            if (filtered.Count > 10)
+            {
+                lines.Add($"  [dim]... and {filtered.Count - 10} more[/]");
+            }
+
+            lines.Add("");
+        }
+
+        _ui.RenderDetailPanel(
+            ["Builds", $"#{buildId}", "Jobs"],
+            errorsOnly ? "[dim]Showing errors only[/]" : null,
+            lines,
+            PanelRenderer.BuildCommandBarString(commands));
     }
 
     // ── Key Navigation (for detail pages) ───────────────────────────
@@ -1576,4 +1588,3 @@ public sealed class BuildBrowser
         int? PrNumber, string? FinishTime, string IngestionStatus = "pending",
         int DefinitionId = 0, string? RepositoryName = null);
 }
-
