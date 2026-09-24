@@ -98,6 +98,7 @@ Cached PR metadata fetched from GitHub.
 | pr_number | INTEGER | Pull request number |
 | title | TEXT | PR title |
 | author | TEXT | PR author login |
+| target_branch | TEXT | PR target branch/base ref (e.g. "main") |
 | fetched_at | TEXT | When the PR info was cached |
 
 Primary key: `(repository, pr_number)`

@@ -193,6 +193,7 @@ list items on a single row so cursor movement and paging remain aligned.
 - Toggle hotkeys show current action (e.g., `"[blue]E[/] Show all"` when errors-only is active,
   `"[blue]E[/] Errors only"` when showing all)
 - Hotkey labels use format: `[blue]X[/] Label` separated by triple-space (`   `)
+- Rendered terminal links use blue underlined OSC 8 markup via `BrowserUI.FormatLink(...)`
 - Hotkey bar is always the last line rendered before waiting for input
 - Indent hotkey bars with two leading spaces for visual alignment
 

@@ -896,19 +896,19 @@ public sealed class BuildIngestionService : IDisposable
 
         var (prNumber, repository, _) = prInfo.Value;
 
-        var exists = _db.WithCommand(cmd =>
+        var hasTargetBranch = _db.WithCommand(cmd =>
         {
-            cmd.CommandText = "SELECT 1 FROM pull_requests WHERE repository = @repo AND pr_number = @pr";
+            cmd.CommandText = "SELECT target_branch FROM pull_requests WHERE repository = @repo AND pr_number = @pr";
             cmd.Parameters.AddWithValue("@repo", repository);
             cmd.Parameters.AddWithValue("@pr", prNumber);
-            return cmd.ExecuteScalar() is not null;
+            return cmd.ExecuteScalar() is string targetBranch && !string.IsNullOrWhiteSpace(targetBranch);
         });
-        if (exists)
+        if (hasTargetBranch)
         {
             return;
         }
 
-        var psi = new System.Diagnostics.ProcessStartInfo("gh", $"pr view {prNumber} --repo {repository} --json title,author")
+        var psi = new System.Diagnostics.ProcessStartInfo("gh", $"pr view {prNumber} --repo {repository} --json title,author,baseRefName")
         {
             RedirectStandardOutput = true,
             RedirectStandardError = true,
@@ -938,17 +938,24 @@ public sealed class BuildIngestionService : IDisposable
             var title = prDoc.RootElement.TryGetProperty("title", out var t) ? t.GetString() : null;
             var author = prDoc.RootElement.TryGetProperty("author", out var a) && a.TryGetProperty("login", out var login)
                 ? login.GetString() : null;
+            var targetBranch = prDoc.RootElement.TryGetProperty("baseRefName", out var b) ? b.GetString() : null;
 
             _db.WithCommand(cmd =>
             {
                 cmd.CommandText = """
-                    INSERT OR IGNORE INTO pull_requests (repository, pr_number, title, author)
-                    VALUES (@repo, @pr, @title, @author)
+                    INSERT INTO pull_requests (repository, pr_number, title, author, target_branch)
+                    VALUES (@repo, @pr, @title, @author, @targetBranch)
+                    ON CONFLICT(repository, pr_number) DO UPDATE SET
+                        title = excluded.title,
+                        author = excluded.author,
+                        target_branch = excluded.target_branch,
+                        fetched_at = datetime('now')
                     """;
                 cmd.Parameters.AddWithValue("@repo", repository);
                 cmd.Parameters.AddWithValue("@pr", prNumber);
                 cmd.Parameters.AddWithValue("@title", (object?)title ?? DBNull.Value);
                 cmd.Parameters.AddWithValue("@author", (object?)author ?? DBNull.Value);
+                cmd.Parameters.AddWithValue("@targetBranch", (object?)targetBranch ?? DBNull.Value);
                 cmd.ExecuteNonQuery();
             });
             _log?.Info("Worker", $"  Build #{buildId} — PR #{prNumber} info cached ({author})");
