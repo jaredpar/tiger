@@ -4,8 +4,71 @@ using Xunit;
 
 namespace Tiger.Tests;
 
-public class BrowserUITests
+public class BrowserUITests : IDisposable
 {
+    private readonly string _dbPath;
+    private readonly TigerDatabase _db;
+    private readonly string _configDir;
+
+    public BrowserUITests()
+    {
+        _dbPath = Path.Combine(Path.GetTempPath(), $"tiger_test_{Guid.NewGuid():N}.db");
+        _db = TigerDatabase.Open(_dbPath);
+        _configDir = Path.Combine(Path.GetTempPath(), $"tiger_cfg_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(_configDir);
+    }
+
+    public void Dispose()
+    {
+        _db.Dispose();
+
+        if (File.Exists(_dbPath))
+        {
+            File.Delete(_dbPath);
+        }
+
+        if (Directory.Exists(_configDir))
+        {
+            Directory.Delete(_configDir, true);
+        }
+    }
+
+    [Fact]
+    public void RenderBuildJobsContent_WrapsMessages_WhenTruncationDisabled()
+    {
+        var console = new TestConsole().EmitAnsiSequences().Width(72).Height(14);
+        var ui = new PanelRenderer(console);
+        var browser = new BuildBrowser(_db, ui, _configDir);
+        var jobIssues = new Dictionary<string, List<(string Type, string Message)>>
+        {
+            ["Build Job"] =
+            [
+                ("warning", "src/Long/File.cs(10,20): warning CS8602: This is a very long warning message with enough words to wrap cleanly across multiple rows"),
+            ],
+        };
+
+        browser.RenderBuildJobsContent(123, jobIssues, errorsOnly: false, truncate: false);
+
+        var actual = PanelRendererTests.StripChrome(console.Output).ReplaceLineEndings("\n").Trim();
+        var expected = """
+            [dim]╔══════════════════════════════════════════════════════════════════════╗[/]
+            [dim]║[/] [bold orange1]TIGER[/] [dim]>[/] Builds > #123 > Jobs                                         [dim]║[/]
+            [dim]╠══════════════════════════════════════════════════════════════════════╣[/]
+            [dim]║[/] [bold]Build Job[/]  [yellow]1 warning(s)[/]                                              [dim]║[/]
+            [dim]║[/]   [yellow]warn[/]: src/Long/File.cs(10,20): warning CS8602: This is a very long [dim]║[/]
+            [dim]║[/] warning message with enough words to wrap cleanly across multiple    [dim]║[/]
+            [dim]║[/] rows                                                                 [dim]║[/]
+            [dim]║[/]                                                                      [dim]║[/]
+            [dim]║[/]                                                                      [dim]║[/]
+            [dim]║[/]                                                                      [dim]║[/]
+            [dim]║[/]                                                                      [dim]║[/]
+            [dim]╠══════════════════════════════════════════════════════════════════════╣[/]
+            [dim]║[/] [blue][[E]][/]rrors only  [blue][[T]][/]runcate: on  [blue]Esc[/] Back                              [dim]║[/]
+            [dim]╚══════════════════════════════════════════════════════════════════════╝[/]
+            """;
+        Assert.Equal(PanelRendererTests.MarkupToAnsi(expected.ReplaceLineEndings("\n").Trim()), actual);
+    }
+
     [Fact]
     public void BuildTestAgentContext_PreservesFullFailureDetails()
     {
@@ -204,132 +267,106 @@ public class BrowserUITests
         // Previously it had a second "context" line with result + time — that's now in the content pane only.
         // This test goes through BuildBrowser.RenderBuildDetailContent so it exercises the actual
         // rendering path including DB queries and line assembly.
-        var dbPath = Path.Combine(Path.GetTempPath(), $"tiger_test_{Guid.NewGuid():N}.db");
-        using var db = TigerDatabase.Open(dbPath);
-        var configDir = Path.Combine(Path.GetTempPath(), $"tiger_cfg_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(configDir);
-
-        try
+        _db.WithCommand(cmd =>
         {
-            db.WithCommand(cmd =>
-            {
-                cmd.CommandText = """
-                    INSERT INTO builds (organization, project, build_id, build_number, definition_name, definition_id,
-                        status, result, source_branch, finish_time, ingestion_status)
-                    VALUES ('dnceng', 'public', 42, '20260617.1', 'roslyn-CI', 100,
-                        'completed', 'failed', 'refs/heads/main', '2025-06-01T12:00:00Z', 'complete');
-                    """;
-                cmd.ExecuteNonQuery();
-            });
-
-            var console = new TestConsole().EmitAnsiSequences().Width(80).Height(30);
-            var ui = new PanelRenderer(console);
-            var browser = new BuildBrowser(db, ui, configDir);
-
-            var result = browser.RenderBuildDetailContent("dnceng", "public", 42);
-            Assert.True(result);
-
-            var actual = PanelRendererTests.StripChrome(console.Output).ReplaceLineEndings("\n").Trim();
-            var finished = BrowserUI.FormatTime("2025-06-01T12:00:00Z");
-            var finishedPadded = finished.PadRight(66);
-            var expected = $"""
-                [dim]╔══════════════════════════════════════════════════════════════════════════════╗[/]
-                [dim]║[/] [bold orange1]TIGER[/] [dim]>[/] Builds > #42 roslyn-CI                                               [dim]║[/]
-                [dim]╠══════════════════════════════════════════════════════════════════════════════╣[/]
-                [dim]║[/] [bold]Build:[/] #42 — roslyn-CI 20260617.1                                            [dim]║[/]
-                [dim]║[/] [bold]Result:[/] [red]X failed[/]                                                             [dim]║[/]
-                [dim]║[/] [bold]Branch:[/] main                                                                 [dim]║[/]
-                [dim]║[/] [bold]Finished:[/] {finishedPadded} [dim]║[/]
-                [dim]║[/] [bold]URL:[/] [link=https://dev.azure.com/dnceng/public/_build/results?buildId=42][blue underline]https://dev.azure.com/dnceng/public/_build/results?buildId=42[/][/]           [dim]║[/]
-                [dim]║[/]                                                                              [dim]║[/]
-                [dim]║[/] [bold underline]Timeline[/]                                                                     [dim]║[/]
-                [dim]║[/]   [green]No failed jobs[/]                                                             [dim]║[/]
-                [dim]║[/]                                                                              [dim]║[/]
-                [dim]║[/] [bold underline]Tests[/]                                                                        [dim]║[/]
-                [dim]║[/]   [green]All tests passed[/]                                                           [dim]║[/]
-                [dim]║[/]                                                                              [dim]║[/]
-                [dim]║[/]                                                                              [dim]║[/]
-                [dim]║[/]                                                                              [dim]║[/]
-                [dim]║[/]                                                                              [dim]║[/]
-                [dim]║[/]                                                                              [dim]║[/]
-                [dim]║[/]                                                                              [dim]║[/]
-                [dim]║[/]                                                                              [dim]║[/]
-                [dim]║[/]                                                                              [dim]║[/]
-                [dim]║[/]                                                                              [dim]║[/]
-                [dim]║[/]                                                                              [dim]║[/]
-                [dim]║[/]                                                                              [dim]║[/]
-                [dim]║[/]                                                                              [dim]║[/]
-                [dim]║[/]                                                                              [dim]║[/]
-                [dim]╠══════════════════════════════════════════════════════════════════════════════╣[/]
-                [dim]║[/] [blue][[T]][/]ests  [blue][[J]][/]obs  [blue][[H]][/]elix  [blue][[A]][/]nalysis  [blue]Esc[/] Back                               [dim]║[/]
-                [dim]╚══════════════════════════════════════════════════════════════════════════════╝[/]
+            cmd.CommandText = """
+                INSERT INTO builds (organization, project, build_id, build_number, definition_name, definition_id,
+                    status, result, source_branch, finish_time, ingestion_status)
+                VALUES ('dnceng', 'public', 42, '20260617.1', 'roslyn-CI', 100,
+                    'completed', 'failed', 'refs/heads/main', '2025-06-01T12:00:00Z', 'complete');
                 """;
-            Assert.Equal(PanelRendererTests.MarkupToAnsi(expected.ReplaceLineEndings("\n").Trim()), actual);
-        }
-        finally
-        {
-            try { File.Delete(dbPath); } catch { }
-            try { Directory.Delete(configDir, true); } catch { }
-        }
+            cmd.ExecuteNonQuery();
+        });
+
+        var console = new TestConsole().EmitAnsiSequences().Width(80).Height(30);
+        var ui = new PanelRenderer(console);
+        var browser = new BuildBrowser(_db, ui, _configDir);
+
+        var result = browser.RenderBuildDetailContent("dnceng", "public", 42);
+        Assert.True(result);
+
+        var actual = PanelRendererTests.StripChrome(console.Output).ReplaceLineEndings("\n").Trim();
+        var finished = BrowserUI.FormatTime("2025-06-01T12:00:00Z");
+        var finishedPadded = finished.PadRight(66);
+        var expected = $"""
+            [dim]╔══════════════════════════════════════════════════════════════════════════════╗[/]
+            [dim]║[/] [bold orange1]TIGER[/] [dim]>[/] Builds > #42 roslyn-CI                                               [dim]║[/]
+            [dim]╠══════════════════════════════════════════════════════════════════════════════╣[/]
+            [dim]║[/] [bold]Build:[/] #42 — roslyn-CI 20260617.1                                            [dim]║[/]
+            [dim]║[/] [bold]Result:[/] [red]X failed[/]                                                             [dim]║[/]
+            [dim]║[/] [bold]Branch:[/] main                                                                 [dim]║[/]
+            [dim]║[/] [bold]Finished:[/] {finishedPadded} [dim]║[/]
+            [dim]║[/] [bold]URL:[/] [link=https://dev.azure.com/dnceng/public/_build/results?buildId=42][blue underline]https://dev.azure.com/dnceng/public/_build/results?buildId=42[/][/]           [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/] [bold underline]Timeline[/]                                                                     [dim]║[/]
+            [dim]║[/]   [green]No failed jobs[/]                                                             [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/] [bold underline]Tests[/]                                                                        [dim]║[/]
+            [dim]║[/]   [green]All tests passed[/]                                                           [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]╠══════════════════════════════════════════════════════════════════════════════╣[/]
+            [dim]║[/] [blue][[T]][/]ests  [blue][[J]][/]obs  [blue][[H]][/]elix  [blue][[A]][/]nalysis  [blue]Esc[/] Back                               [dim]║[/]
+            [dim]╚══════════════════════════════════════════════════════════════════════════════╝[/]
+            """;
+        Assert.Equal(PanelRendererTests.MarkupToAnsi(expected.ReplaceLineEndings("\n").Trim()), actual);
     }
 
     [Fact]
     public void RenderBuildDetail_BuildNotFound()
     {
-        var dbPath = Path.Combine(Path.GetTempPath(), $"tiger_test_{Guid.NewGuid():N}.db");
-        using var db = TigerDatabase.Open(dbPath);
-        var configDir = Path.Combine(Path.GetTempPath(), $"tiger_cfg_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(configDir);
+        var console = new TestConsole().EmitAnsiSequences().Width(80).Height(30);
+        var ui = new PanelRenderer(console);
+        var browser = new BuildBrowser(_db, ui, _configDir);
 
-        try
-        {
-            var console = new TestConsole().EmitAnsiSequences().Width(80).Height(30);
-            var ui = new PanelRenderer(console);
-            var browser = new BuildBrowser(db, ui, configDir);
+        var result = browser.RenderBuildDetailContent("dnceng", "public", 999);
+        Assert.False(result);
 
-            var result = browser.RenderBuildDetailContent("dnceng", "public", 999);
-            Assert.False(result);
-
-            var actual = PanelRendererTests.StripChrome(console.Output).ReplaceLineEndings("\n").Trim();
-            var expected = """
-                [dim]╔══════════════════════════════════════════════════════════════════════════════╗[/]
-                [dim]║[/] [bold orange1]TIGER[/] [dim]>[/] Builds > #999                                                        [dim]║[/]
-                [dim]╠══════════════════════════════════════════════════════════════════════════════╣[/]
-                [dim]║[/] [red]Build not found.[/]                                                             [dim]║[/]
-                [dim]║[/]                                                                              [dim]║[/]
-                [dim]║[/]                                                                              [dim]║[/]
-                [dim]║[/]                                                                              [dim]║[/]
-                [dim]║[/]                                                                              [dim]║[/]
-                [dim]║[/]                                                                              [dim]║[/]
-                [dim]║[/]                                                                              [dim]║[/]
-                [dim]║[/]                                                                              [dim]║[/]
-                [dim]║[/]                                                                              [dim]║[/]
-                [dim]║[/]                                                                              [dim]║[/]
-                [dim]║[/]                                                                              [dim]║[/]
-                [dim]║[/]                                                                              [dim]║[/]
-                [dim]║[/]                                                                              [dim]║[/]
-                [dim]║[/]                                                                              [dim]║[/]
-                [dim]║[/]                                                                              [dim]║[/]
-                [dim]║[/]                                                                              [dim]║[/]
-                [dim]║[/]                                                                              [dim]║[/]
-                [dim]║[/]                                                                              [dim]║[/]
-                [dim]║[/]                                                                              [dim]║[/]
-                [dim]║[/]                                                                              [dim]║[/]
-                [dim]║[/]                                                                              [dim]║[/]
-                [dim]║[/]                                                                              [dim]║[/]
-                [dim]║[/]                                                                              [dim]║[/]
-                [dim]║[/]                                                                              [dim]║[/]
-                [dim]╠══════════════════════════════════════════════════════════════════════════════╣[/]
-                [dim]║[/] [blue]Esc[/] Back                                                                     [dim]║[/]
-                [dim]╚══════════════════════════════════════════════════════════════════════════════╝[/]
-                """;
-            Assert.Equal(PanelRendererTests.MarkupToAnsi(expected.ReplaceLineEndings("\n").Trim()), actual);
-        }
-        finally
-        {
-            try { File.Delete(dbPath); } catch { }
-            try { Directory.Delete(configDir, true); } catch { }
-        }
+        var actual = PanelRendererTests.StripChrome(console.Output).ReplaceLineEndings("\n").Trim();
+        var expected = """
+            [dim]╔══════════════════════════════════════════════════════════════════════════════╗[/]
+            [dim]║[/] [bold orange1]TIGER[/] [dim]>[/] Builds > #999                                                        [dim]║[/]
+            [dim]╠══════════════════════════════════════════════════════════════════════════════╣[/]
+            [dim]║[/] [red]Build not found.[/]                                                             [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]║[/]                                                                              [dim]║[/]
+            [dim]╠══════════════════════════════════════════════════════════════════════════════╣[/]
+            [dim]║[/] [blue]Esc[/] Back                                                                     [dim]║[/]
+            [dim]╚══════════════════════════════════════════════════════════════════════════════╝[/]
+            """;
+        Assert.Equal(PanelRendererTests.MarkupToAnsi(expected.ReplaceLineEndings("\n").Trim()), actual);
     }
 
     [Fact]
