@@ -1,3 +1,4 @@
+using Microsoft.Data.Sqlite;
 using Spectre.Console;
 
 namespace Tiger.Commands;
@@ -440,6 +441,42 @@ public static class BrowserUI
         if (!pattern.Contains('%'))
             pattern = $"%{pattern}%";
         return (pattern, false);
+    }
+
+    /// <summary>
+    /// Applies a comma-separated list of patterns against a column, adding the resulting
+    /// clause(s) to <paramref name="where"/> and any needed parameters to <paramref name="cmd"/>.
+    /// Each comma-separated token is matched with <see cref="ToSqlPattern"/>. A token prefixed
+    /// with <c>!</c> excludes matches (e.g. <c>!Serialization</c>); tokens without the prefix
+    /// include matches. Include tokens are combined with OR, exclude tokens are combined with AND NOT.
+    /// </summary>
+    public static void ApplyMultiPattern(SqliteCommand cmd, List<string> where, string columnExpr,
+        string rawPattern, string paramPrefix)
+    {
+        var includeClauses = new List<string>();
+        var excludeClauses = new List<string>();
+        var tokens = rawPattern.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var index = 0;
+        foreach (var token in tokens)
+        {
+            var isExclude = token.StartsWith('!');
+            var value = isExclude ? token[1..] : token;
+            if (value.Length == 0) continue;
+
+            var (pattern, isExact) = ToSqlPattern(value);
+            var paramName = $"@{paramPrefix}{index++}";
+            var clause = isExact ? $"{columnExpr} = {paramName}" : $"{columnExpr} LIKE {paramName}";
+            cmd.Parameters.AddWithValue(paramName, pattern);
+
+            if (isExclude)
+                excludeClauses.Add($"NOT ({clause})");
+            else
+                includeClauses.Add(clause);
+        }
+
+        if (includeClauses.Count > 0)
+            where.Add("(" + string.Join(" OR ", includeClauses) + ")");
+        where.AddRange(excludeClauses);
     }
 
     /// <summary>

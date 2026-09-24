@@ -258,9 +258,7 @@ public sealed class TestBrowser
             }
             if (_filter.TestNamePattern is not null)
             {
-                var (pattern, isExact) = BrowserUI.ToSqlPattern(_filter.TestNamePattern);
-                where.Add(isExact ? "tr.test_case_title = @name" : "tr.test_case_title LIKE @name");
-                cmd.Parameters.AddWithValue("@name", pattern);
+                BrowserUI.ApplyMultiPattern(cmd, where, "tr.test_case_title", _filter.TestNamePattern, "name");
             }
             if (_filter.RepoPattern is not null)
             {
@@ -347,7 +345,7 @@ public sealed class TestBrowser
         var currentValue = _filter.IsActive ? _filter.ToString() : null;
         var result = _ui.PromptInPanel(
             ["Tests", "Edit Filter"],
-            "Enter filter expression (e.g. test:Serialization repo:roslyn def:*-CI)",
+            "Enter filter expression (e.g. test:Foo,!Bar,!Baz repo:roslyn def:*-CI)",
             currentValue);
 
         if (result is not null)
@@ -391,7 +389,7 @@ public sealed class TestBrowser
             switch (key.Key)
             {
                 case ConsoleKey.N:
-                    _filter.TestNamePattern = _ui.PromptInPanel(["Tests", "Filter"], "Test name pattern (e.g. Serialization, *EditAndContinue*)");
+                    _filter.TestNamePattern = _ui.PromptInPanel(["Tests", "Filter"], "Test name pattern (e.g. Serialization, !Flaky, Foo,!Bar,!Baz)");
                     SaveFilter();
                     continue;
                 case ConsoleKey.R:
@@ -455,6 +453,10 @@ public sealed class TestBrowser
                 "",
                 "[bold]Exact match (append !):[/]",
                 "  [dim]dotnet/roslyn! - matches exactly 'dotnet/roslyn'[/]",
+                "",
+                "[bold]Exclude test names (test: only, prefix with !):[/]",
+                "  [dim]test:!Serialization - excludes tests containing 'Serialization'[/]",
+                "  [dim]test:Foo,!Bar,!Baz - matches 'Foo' but excludes 'Bar' and 'Baz'[/]",
                 "",
                 "[bold]Filter prefixes:[/]",
                 "  [blue]test:[/]  Test name",

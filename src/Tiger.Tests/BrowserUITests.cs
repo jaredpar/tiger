@@ -70,6 +70,92 @@ public class BrowserUITests : IDisposable
     }
 
     [Fact]
+    public void ApplyMultiPattern_BuildsIncludeAndExcludeClauses()
+    {
+        _db.WithCommand(cmd =>
+        {
+            var where = new List<string>();
+            BrowserUI.ApplyMultiPattern(cmd, where, "tr.test_case_title", "Foo,!Bar,!Baz!", "name");
+
+            Assert.Equal(
+                [
+                    "(tr.test_case_title LIKE @name0)",
+                    "NOT (tr.test_case_title LIKE @name1)",
+                    "NOT (tr.test_case_title = @name2)",
+                ],
+                where);
+            Assert.Equal("%Foo%", cmd.Parameters["@name0"].Value);
+            Assert.Equal("%Bar%", cmd.Parameters["@name1"].Value);
+            Assert.Equal("Baz", cmd.Parameters["@name2"].Value);
+        });
+    }
+
+    [Fact]
+    public void ApplyMultiPattern_ExcludeOnly_OmitsIncludeClause()
+    {
+        _db.WithCommand(cmd =>
+        {
+            var where = new List<string>();
+            BrowserUI.ApplyMultiPattern(cmd, where, "tr.test_case_title", "!Serialization", "name");
+
+            Assert.Equal(["NOT (tr.test_case_title LIKE @name0)"], where);
+            Assert.Equal("%Serialization%", cmd.Parameters["@name0"].Value);
+        });
+    }
+
+    [Fact]
+    public void ApplyMultiPattern_FiltersTestResults_EndToEnd()
+    {
+        SeedTestResult(1, "FooTests.Serialization");
+        SeedTestResult(2, "FooTests.Deserialization");
+        SeedTestResult(3, "FooTests.Networking");
+
+        var titles = _db.WithCommand(cmd =>
+        {
+            var where = new List<string> { "tr.outcome = 'Failed'" };
+            BrowserUI.ApplyMultiPattern(cmd, where, "tr.test_case_title", "Foo,!Serialization", "name");
+            cmd.CommandText = $"SELECT test_case_title FROM test_results tr WHERE {string.Join(" AND ", where)} ORDER BY test_case_title";
+
+            var results = new List<string>();
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+            {
+                results.Add(reader.GetString(0));
+            }
+            return results;
+        });
+
+        Assert.Equal(["FooTests.Networking"], titles);
+    }
+
+    private void SeedTestResult(int resultId, string testCaseTitle)
+    {
+        _db.WithCommand(cmd =>
+        {
+            cmd.CommandText = """
+                INSERT OR IGNORE INTO builds
+                    (organization, project, build_id, build_number, definition_name, definition_id, status, source_branch)
+                VALUES ('org', 'proj', 1, '1', 'def', 1, 'completed', 'refs/heads/main')
+                """;
+            cmd.ExecuteNonQuery();
+
+            cmd.CommandText = """
+                INSERT OR IGNORE INTO test_runs (organization, project, build_id, run_id, run_name)
+                VALUES ('org', 'proj', 1, 1, 'run')
+                """;
+            cmd.ExecuteNonQuery();
+
+            cmd.CommandText = """
+                INSERT INTO test_results (organization, project, run_id, result_id, test_case_title, outcome)
+                VALUES ('org', 'proj', 1, @resultId, @title, 'Failed')
+                """;
+            cmd.Parameters.AddWithValue("@resultId", resultId);
+            cmd.Parameters.AddWithValue("@title", testCaseTitle);
+            cmd.ExecuteNonQuery();
+        });
+    }
+
+    [Fact]
     public void BuildTestAgentContext_PreservesFullFailureDetails()
     {
         var info = new BrowserUI.TestDetailInfo(
