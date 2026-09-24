@@ -122,7 +122,7 @@ public sealed class BuildBackfillService : IDisposable
     private async Task<int> BackfillAsync(bool forceFullWindow, CancellationToken ct)
     {
         _log.Info("Backfill", "Starting backfill...");
-        var totalIngested = 0;
+        var totalRegistered = 0;
 
         foreach (var source in _config.Sources)
         {
@@ -134,7 +134,7 @@ public sealed class BuildBackfillService : IDisposable
             try
             {
                 var count = await BackfillSourceAsync(source, forceFullWindow, ct);
-                totalIngested += count;
+                totalRegistered += count;
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -143,8 +143,8 @@ public sealed class BuildBackfillService : IDisposable
             }
         }
 
-        _log.Success("Backfill", $"Complete — {totalIngested} builds ingested");
-        return totalIngested;
+        _log.Success("Backfill", $"Complete — {totalRegistered} builds registered");
+        return totalRegistered;
     }
 
     internal async Task<int> BackfillSourceAsync(AzdoSource source, bool forceFullWindow, CancellationToken ct)
@@ -193,17 +193,17 @@ public sealed class BuildBackfillService : IDisposable
         }
 
         _log.Info("Backfill",
-            $"{source.Organization}/{source.Project} — ingesting {newBuilds.Count} new builds");
+            $"{source.Organization}/{source.Project} — registering {newBuilds.Count} new builds");
 
-        // Ingest in batches
-        var ingested = 0;
+        // Register in batches
+        var registered = 0;
         foreach (var batch in Batch(newBuilds, 10))
         {
             ct.ThrowIfCancellationRequested();
             await _ingestion.InsertBuildsAsync(source.Organization, source.Project, batch);
-            ingested += batch.Count;
+            registered += batch.Count;
             _log.Info("Backfill",
-                $"{source.Organization}/{source.Project} — {ingested}/{newBuilds.Count} builds ingested");
+                $"{source.Organization}/{source.Project} — {registered}/{newBuilds.Count} builds registered");
         }
 
         // Update watermark to the highest build ID if it's newer
@@ -215,8 +215,8 @@ public sealed class BuildBackfillService : IDisposable
         }
 
         _log.Success("Backfill",
-            $"{source.Organization}/{source.Project} — done ({ingested} builds)");
-        return ingested;
+            $"{source.Organization}/{source.Project} — done ({registered} builds registered)");
+        return registered;
     }
 
     private DateTime? GetLastPollTime(string organization, string project)

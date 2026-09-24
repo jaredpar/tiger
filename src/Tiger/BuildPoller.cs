@@ -125,7 +125,7 @@ public sealed class BuildPoller : IDisposable
         }
 
         _log?.Success("Poller",
-            $"Ingested {newBuilds.Count} builds for {source.Organization}/{source.Project}");
+            $"Registered {newBuilds.Count} builds for {source.Organization}/{source.Project}");
     }
 
     /// <summary>

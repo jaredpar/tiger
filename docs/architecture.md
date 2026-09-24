@@ -21,6 +21,22 @@ Everything runs in one process:
 When you run `tiger`, the process starts the poller + HTTP server and keeps running.
 CLI commands like `tiger report` query the SQLite DB and exit.
 
+### Ingestion Queue Status
+
+The dashboard's Status service log includes a worker summary of discovered builds
+whose detailed ingestion is unfinished: pending, running, and awaiting retry.
+Abandoned builds are reported separately because they require an explicit retry;
+completed builds (including canceled builds marked complete at discovery) are excluded.
+Counts come from SQLite across all organizations and projects, including builds
+registered by polling, backfill, or a previous process.
+
+The worker reports its initial queue state, then current counts during its existing
+processing loop, throttled to at most once every 10 seconds. Unchanged counts and
+empty queues are reported on the same schedule, without extra timer wakeups during
+active ingestion or special handling when the queue drains.
+Poller and backfill messages use "registered" for discovery; only
+completion of the detailed data fetch is called "ingested".
+
 ## Naming Conventions
 
 | Context | Style | Example |
