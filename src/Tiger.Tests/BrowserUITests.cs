@@ -143,6 +143,63 @@ public class BrowserUITests : IDisposable
             ignoreLineEndingDifferences: true);
     }
 
+    [Fact]
+    public void LoadTestDetail_UsesPullRequestTargetBranchInBranchesSection()
+    {
+        _db.WithCommand(cmd =>
+        {
+            cmd.CommandText = """
+                INSERT INTO pull_requests (repository, pr_number, title, author, target_branch)
+                VALUES ('dotnet/runtime', 123, 'Fix runtime test', 'dev', 'release/10.0');
+
+                INSERT INTO builds (organization, project, build_id, build_number, definition_name, definition_id,
+                    status, result, source_branch, repository_name, pr_number, finish_time, ingestion_status)
+                VALUES
+                    ('dnceng', 'public', 41, '20260924.1', 'runtime-CI', 100,
+                        'completed', 'failed', 'refs/heads/main', 'dotnet/runtime', NULL, '2026-09-24T15:00:00Z', 'complete'),
+                    ('dnceng', 'public', 42, '20260924.2', 'runtime-CI', 100,
+                        'completed', 'failed', 'refs/pull/123/merge', 'dotnet/runtime', 123, '2026-09-24T16:00:00Z', 'complete');
+
+                INSERT INTO test_runs (organization, project, build_id, run_id, run_name)
+                VALUES
+                    ('dnceng', 'public', 41, 410, 'Linux x64'),
+                    ('dnceng', 'public', 42, 420, 'Linux x64 PR');
+
+                INSERT INTO test_results (organization, project, run_id, result_id, test_case_title, outcome, error_message)
+                VALUES
+                    ('dnceng', 'public', 410, 1, 'ClientTests.Shutdown', 'Failed', 'main failure'),
+                    ('dnceng', 'public', 420, 1, 'ClientTests.Shutdown', 'Failed', 'pr failure');
+                """;
+            cmd.ExecuteNonQuery();
+        });
+
+        var info = BrowserUI.LoadTestDetail(_db, "dnceng", "public", "ClientTests.Shutdown");
+        Assert.NotNull(info);
+        Assert.Equal("""
+            main
+            release/10.0
+            """.ReplaceLineEndings("\n"), string.Join("\n", info.Branches!));
+
+        var actual = string.Join("\n", BrowserUI.BuildTestDetailLines(info));
+        var expected = """
+            [bold]Test Name:[/] ClientTests.Shutdown
+            [bold]Last Failed Build:[/] [link=https://dev.azure.com/dnceng/public/_build/results?buildId=42][blue underline]Build #42[/][/]
+            [bold]Run:[/] Linux x64 PR
+            [bold]Failed In:[/] 2 build(s)
+            [bold]Branches:[/] main, release/10.0
+
+            [bold underline]Error[/]
+              [red]pr failure[/]
+
+            [bold underline]Stack Trace[/]
+              [dim]No stack trace available[/]
+
+            [bold underline]Helix[/]
+              [dim]No Helix information available[/]
+            """;
+        Assert.Equal(expected.ReplaceLineEndings("\n"), actual);
+    }
+
     [Theory]
     [InlineData("refs/heads/main", "main")]
     [InlineData("refs/heads/release/8.0", "release/8.0")]

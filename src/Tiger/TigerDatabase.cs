@@ -10,7 +10,7 @@ namespace Tiger;
 /// </summary>
 public sealed class TigerDatabase : IDisposable
 {
-    public const int CurrentSchemaVersion = 13;
+    public const int CurrentSchemaVersion = 14;
 
     public string DatabasePath { get; }
     private string ConnectionString { get; }
@@ -159,6 +159,9 @@ public sealed class TigerDatabase : IDisposable
 
         // v11: add log_url to build_timeline_issues
         TryAddColumn("build_timeline_issues", "log_url", "TEXT");
+
+        // v14: cache PR target branch for branch-oriented failure grouping
+        TryAddColumn("pull_requests", "target_branch", "TEXT");
     }
 
     private void TryAddColumn(string table, string column, string type)
@@ -323,6 +326,7 @@ public sealed class TigerDatabase : IDisposable
                 pr_number INTEGER NOT NULL,
                 title TEXT,
                 author TEXT,
+                target_branch TEXT,
                 fetched_at TEXT NOT NULL DEFAULT (datetime('now')),
                 PRIMARY KEY (repository, pr_number)
             );

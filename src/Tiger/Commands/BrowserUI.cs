@@ -247,6 +247,7 @@ public static class BrowserUI
         headerTable.AddRow("[bold]Last Failed Build[/]", FormatLink(buildUrl, $"Build #{info.BuildId}"));
         headerTable.AddRow("[bold]Run[/]", Markup.Escape(info.RunName));
         headerTable.AddRow("[bold]Failed In[/]", $"{info.BuildCount} build(s)");
+        headerTable.AddRow("[bold]Branches[/]", FormatBranchList(info.Branches));
         AnsiConsole.Write(headerTable);
         AnsiConsole.WriteLine();
 
@@ -333,9 +334,10 @@ public static class BrowserUI
 
         lines.Add(PanelRenderer.FormatField("Test Name", Markup.Escape(info.TestName)));
         var buildUrl = $"https://dev.azure.com/{Uri.EscapeDataString(info.Org)}/{Uri.EscapeDataString(info.Project)}/_build/results?buildId={info.BuildId}";
-        lines.Add(PanelRenderer.FormatField("Last Failed Build", Markup.Escape(buildUrl)));
+        lines.Add(PanelRenderer.FormatField("Last Failed Build", FormatLink(buildUrl, $"Build #{info.BuildId}")));
         lines.Add(PanelRenderer.FormatField("Run", Markup.Escape(info.RunName)));
         lines.Add(PanelRenderer.FormatField("Failed In", $"{info.BuildCount} build(s)"));
+        lines.Add(PanelRenderer.FormatField("Branches", FormatBranchList(info.Branches)));
         lines.Add("");
 
         lines.Add(PanelRenderer.FormatSectionTitle("Error"));
@@ -416,8 +418,17 @@ public static class BrowserUI
         {
             lines.Add("  [dim]No Helix information available[/]");
         }
-
         return lines;
+    }
+
+    private static string FormatBranchList(List<string>? branches)
+    {
+        if (branches is not { Count: > 0 })
+        {
+            return "[dim]None[/]";
+        }
+
+        return Markup.Escape(string.Join(", ", branches));
     }
 
     public static (string Pattern, bool IsExact) ToSqlPattern(string input)
@@ -474,7 +485,8 @@ public static class BrowserUI
         string? HelixJobName, string? HelixWorkItemName,
         List<(string Name, string? Uri)>? HelixFiles = null,
         bool IsHelixDeadletter = false,
-        int? HelixExitCode = null);
+        int? HelixExitCode = null,
+        List<string>? Branches = null);
 
     /// <summary>
     /// Loads test detail info from the database.
@@ -534,6 +546,8 @@ public static class BrowserUI
             return Convert.ToInt32(cmd.ExecuteScalar());
         });
 
+        var branches = LoadFailingBranches(db, org, project, testName);
+
         // Load helix files and deadletter status if available
         List<(string Name, string? Uri)>? helixFiles = null;
         var isDeadletter = false;
@@ -580,7 +594,45 @@ public static class BrowserUI
         }
 
         return new TestDetailInfo(testName, org, project, detail.BuildId, detail.RunName, buildCount,
-            detail.ErrorMessage, detail.StackTrace, detail.HelixJob, detail.HelixWorkItem, helixFiles, isDeadletter, helixExitCode);
+            detail.ErrorMessage, detail.StackTrace, detail.HelixJob, detail.HelixWorkItem, helixFiles, isDeadletter, helixExitCode, branches);
+    }
+
+    private static List<string> LoadFailingBranches(TigerDatabase db, string org, string project, string testName)
+    {
+        var rawBranches = db.WithCommand(cmd =>
+        {
+            var branches = new List<string>();
+            cmd.CommandText = """
+                SELECT DISTINCT
+                    CASE
+                        WHEN b.pr_number IS NOT NULL AND pr.target_branch IS NOT NULL THEN pr.target_branch
+                        ELSE b.source_branch
+                    END
+                FROM test_results tr
+                JOIN test_runs r ON tr.organization = r.organization AND tr.run_id = r.run_id
+                JOIN builds b ON r.organization = b.organization AND r.build_id = b.build_id
+                LEFT JOIN pull_requests pr ON b.repository_name = pr.repository AND b.pr_number = pr.pr_number
+                WHERE tr.organization = @org AND tr.project = @proj
+                      AND tr.test_case_title = @testName AND tr.outcome = 'Failed'
+                ORDER BY 1
+                """;
+            cmd.Parameters.AddWithValue("@org", org);
+            cmd.Parameters.AddWithValue("@proj", project);
+            cmd.Parameters.AddWithValue("@testName", testName);
+
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+            {
+                branches.Add(reader.GetString(0));
+            }
+            return branches;
+        });
+
+        return rawBranches
+            .Select(SimplifyBranch)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Order(StringComparer.OrdinalIgnoreCase)
+            .ToList();
     }
 
     /// <summary>
