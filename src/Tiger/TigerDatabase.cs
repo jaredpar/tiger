@@ -498,6 +498,35 @@ public sealed class TigerDatabase : IDisposable
         });
     }
 
+    public int DeleteBuildsOlderThan(DateTime cutoff)
+    {
+        var expiredBuilds = WithCommand(cmd =>
+        {
+            cmd.CommandText = """
+                SELECT organization, build_id
+                FROM builds
+                WHERE finish_time IS NOT NULL
+                  AND datetime(finish_time) < datetime(@cutoff)
+                """;
+            cmd.Parameters.AddWithValue("@cutoff", cutoff.ToUniversalTime().ToString("o"));
+
+            var builds = new List<(string Organization, int BuildId)>();
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+            {
+                builds.Add((reader.GetString(0), reader.GetInt32(1)));
+            }
+            return builds;
+        });
+
+        foreach (var (organization, buildId) in expiredBuilds)
+        {
+            DeleteBuild(organization, buildId);
+        }
+
+        return expiredBuilds.Count;
+    }
+
     /// <summary>
     /// Inserts a new build analysis row with status 'pending'.
     /// </summary>

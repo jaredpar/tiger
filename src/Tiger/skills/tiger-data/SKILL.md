@@ -279,6 +279,7 @@ ORDER BY b.finish_time DESC;
 - `pull_requests`, `known_issues`, and `helix_work_items` are keyed by repository or job (not org/project)
 - Times are stored as ISO 8601 strings in UTC
 - Only failed test results are stored (not passing tests)
+- Build records and their associated test, timeline, Helix, and analysis rows are automatically deleted after the configured `backfillDays` period (14 days by default). Cleanup runs at startup and every 15 minutes. The same setting controls how far back backfill fetches builds.
 - The `builds.ingestion_status` column shows whether test/timeline/Helix data is available for a build (tests, timeline, and Helix work items are ingested together in a single atomic pass)
 - Helix work items are fetched inline as part of build ingestion (no separate helix task)
 - Known issues are refreshed every 15 minutes; closed issues are kept for 7 days before purging

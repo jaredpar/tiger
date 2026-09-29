@@ -84,7 +84,7 @@ public sealed class ConfigEditor
         table.AddColumn("Setting");
         table.AddColumn("Value");
         table.AddRow("Poll interval", $"{_config.PollIntervalSeconds}s");
-        table.AddRow("Backfill days", _config.BackfillDays.ToString());
+        table.AddRow("Ingestion window", $"{_config.BackfillDays} days");
         AnsiConsole.Write(table);
         AnsiConsole.WriteLine();
 
