@@ -88,6 +88,11 @@ public sealed class TigerConfig
         }
 
         var json = File.ReadAllText(path);
+        if (string.IsNullOrWhiteSpace(json))
+        {
+            return CreateDefault();
+        }
+
         var config = JsonSerializer.Deserialize<TigerConfig>(json, s_jsonOptions)
             ?? CreateDefault();
         config.Normalize();
@@ -122,7 +127,7 @@ public sealed class TigerConfig
         }
     }
 
-    private static TigerConfig CreateDefault() => new()
+    internal static TigerConfig CreateDefault() => new()
     {
         PollIntervalSeconds = 300,
         Sources =

@@ -28,7 +28,7 @@ public sealed class HealthCommand : AsyncCommand
         }
 
         using var db = TigerDatabase.Open(dbPath);
-        var config = TigerConfig.Load(configDir);
+        var config = TigerUtils.GetConfig(configDir);
         var agent = new HealthAgentService(config, db);
 
         ShowCombosPage(agent);
@@ -299,4 +299,3 @@ public sealed class HealthCommand : AsyncCommand
         }
     }
 }
-

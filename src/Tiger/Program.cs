@@ -1,6 +1,7 @@
 using Spectre.Console;
 using Spectre.Console.Cli;
 using System.Text;
+using System.Text.Json;
 using Tiger;
 using Tiger.Commands;
 
@@ -9,6 +10,10 @@ Console.OutputEncoding = Encoding.UTF8;
 
 // Warn about missing external tools
 CheckRequiredTools();
+
+// Check for invalid configuration
+if (!CheckConfiguration())
+    return 1;
 
 // Check for outdated database schema
 if (!CheckDatabaseSchema())
@@ -144,6 +149,31 @@ static bool IsOnPath(string tool)
     }
 
     return false;
+}
+
+static bool CheckConfiguration()
+{
+    var configDir = TigerUtils.GetConfigDirectory();
+
+    try
+    {
+        TigerUtils.SetConfig(TigerConfig.Load(configDir));
+        return true;
+    }
+    catch (JsonException ex)
+    {
+        var path = TigerConfig.GetConfigPath(configDir);
+        AnsiConsole.MarkupLine($"[red]Error:[/] Invalid JSON in config file [bold]{Markup.Escape(path)}[/].");
+        AnsiConsole.WriteLine(ex.Message);
+
+        if (!AnsiConsole.Confirm("Continue launching Tiger with the default configuration?", defaultValue: false))
+        {
+            return false;
+        }
+
+        TigerUtils.SetConfig(TigerConfig.CreateDefault());
+        return true;
+    }
 }
 
 /// <summary>

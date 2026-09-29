@@ -55,6 +55,7 @@ public sealed class TigerContext
 public static class TigerUtils
 {
     private const string ConfigDirectoryName = ".tiger";
+    private static TigerConfig? s_config;
     public const string HealthDirectoryName = "health";
     public const string AnalysisLogsDirectoryName = "analysis-logs";
 
@@ -73,9 +74,14 @@ public static class TigerUtils
         var configDir = GetConfigDirectory();
         var credential = CreateCredential();
         var helixToken = ReadHelixToken(configDir);
-        var config = TigerConfig.Load(configDir);
-        return new TigerContext(configDir, credential, helixToken, config);
+        return new TigerContext(configDir, credential, helixToken, GetConfig(configDir));
     }
+
+    public static TigerConfig GetConfig(string configDirectory) =>
+        s_config ??= TigerConfig.Load(configDirectory);
+
+    public static void SetConfig(TigerConfig config) =>
+        s_config = config;
 
     /// <summary>
     /// Gets the configuration directory, creating it if it doesn't exist.

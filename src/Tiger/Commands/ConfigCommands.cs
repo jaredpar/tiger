@@ -10,7 +10,7 @@ public class ConfigShowCommand : Command
     {
         var configDir = TigerUtils.GetConfigDirectory();
         var configPath = TigerConfig.GetConfigPath(configDir);
-        var config = TigerConfig.Load(configDir);
+        var config = TigerUtils.GetConfig(configDir);
 
         AnsiConsole.MarkupLine($"[bold]Config path:[/] {configPath}");
         AnsiConsole.MarkupLine($"[bold]Poll interval:[/] {config.PollIntervalSeconds}s");
