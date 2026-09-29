@@ -70,7 +70,7 @@ public sealed class TigerConfig
     public int PollIntervalSeconds { get; set; } = 300;
 
     [JsonPropertyName("backfillDays")]
-    public int BackfillDays { get; set; } = 7;
+    public int BackfillDays { get; set; } = 14;
 
     [JsonPropertyName("sources")]
     public List<AzdoSource> Sources { get; set; } = [];
@@ -111,6 +111,11 @@ public sealed class TigerConfig
 
     private void Normalize()
     {
+        if (BackfillDays <= 0)
+        {
+            throw new InvalidOperationException("Backfill days must be greater than zero.");
+        }
+
         foreach (var source in Sources)
         {
             source.RepositoryType = AzdoRepositoryTypes.Normalize(source.RepositoryType);
@@ -129,6 +134,6 @@ public sealed class TigerConfig
                 Repositories = ["dotnet/roslyn"],
             }
         ],
-        BackfillDays = 3,
+        BackfillDays = 14,
     };
 }

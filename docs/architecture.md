@@ -69,6 +69,7 @@ src/
 ```json
 {
   "pollIntervalSeconds": 300,
+  "backfillDays": 14,
   "sources": [
     {
       "organization": "dnceng-public",
@@ -83,6 +84,10 @@ src/
   ]
 }
 ```
+
+`backfillDays` is the single build-data window: backfills fetch this many days of builds,
+and a background retention service runs at startup and every 15 minutes, deleting builds
+older than the same window and their associated database rows.
 
 ## SQLite Schema (Multi-Org Aware)
 

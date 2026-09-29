@@ -24,6 +24,7 @@ public sealed class PollStartCommand : AsyncCommand
         var ingestion = new BuildIngestionService(db);
         var clientFactory = new AzdoClientFactory(tigerContext.AzureCredential);
         var poller = new BuildPoller(config, db, clientFactory);
+        var retention = new BuildRetentionService(config, db);
 
         poller.OnNewBuilds = ingestion.InsertBuildsAsync;
 
@@ -38,6 +39,7 @@ public sealed class PollStartCommand : AsyncCommand
         AnsiConsole.WriteLine();
 
         poller.Start();
+        retention.Start();
 
         try
         {
@@ -49,6 +51,7 @@ public sealed class PollStartCommand : AsyncCommand
 
         AnsiConsole.MarkupLine("[yellow]Stopping poller...[/]");
         await poller.StopAsync();
+        await retention.StopAsync();
         AnsiConsole.MarkupLine("[green]Poller stopped.[/]");
 
         return 0;

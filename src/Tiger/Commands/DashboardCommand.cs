@@ -51,6 +51,9 @@ public sealed class DashboardCommand : AsyncCommand
         var healthAgent = new HealthAgentService(config, db, serviceLog);
         healthAgent.Start();
 
+        var retention = new BuildRetentionService(config, db, serviceLog);
+        retention.Start();
+
         var backfill = new BuildBackfillService(config, db, ingestion, clientFactory, serviceLog);
         backfill.Start();
 
@@ -64,6 +67,7 @@ public sealed class DashboardCommand : AsyncCommand
             await ingestion.StopAsync();
             await poller.StopAsync();
             await backfill.StopAsync();
+            await retention.StopAsync();
             await analysisAgent.StopAsync();
         }
 
@@ -266,4 +270,3 @@ public sealed class DashboardCommand : AsyncCommand
         }
     }
 }
-
