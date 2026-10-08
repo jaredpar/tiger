@@ -29,6 +29,8 @@ app.Configure(config =>
     config.AddBranch("azdo", azdo =>
     {
         azdo.SetDescription("Azure DevOps commands");
+        azdo.AddCommand<AzdoRetryCommand>("retry")
+            .WithDescription("Retry a pipeline build in full, or retry only failed jobs with --failed-only");
         azdo.AddCommand<AzdoBuildsCommand>("builds")
             .WithDescription("Get recent builds, optionally filtered by definition ID");
         azdo.AddCommand<AzdoTestsCommand>("tests")

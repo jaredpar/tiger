@@ -1,4 +1,5 @@
 using System.Net.Http.Headers;
+using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Azure.Core;
@@ -112,6 +113,53 @@ public sealed class AzdoClient
                 return pr;
         }
         return null;
+    }
+
+    /// <summary>
+    /// Queues a new run from the original build, or retries failed jobs in the existing run.
+    /// </summary>
+    public async Task<AzdoBuild> RetryBuildAsync(int buildId, bool failedOnly = false, CancellationToken ct = default)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(buildId);
+
+        using var request = new HttpRequestMessage();
+        if (failedOnly)
+        {
+            request.Method = HttpMethod.Patch;
+            request.RequestUri = new Uri($"_apis/build/builds/{buildId}?retry=true&api-version=7.1", UriKind.Relative);
+            request.Content = JsonContent.Create(new { status = "inProgress" });
+        }
+        else
+        {
+            using var originalResponse = await HttpClient.GetAsync($"_apis/build/builds/{buildId}?api-version=7.1", ct);
+            originalResponse.EnsureSuccessStatusCode();
+            var originalJson = await originalResponse.Content.ReadAsStringAsync(ct);
+            var original = JsonSerializer.Deserialize<AzdoBuildRaw>(originalJson, s_jsonOptions)
+                ?? throw new InvalidOperationException("Failed to deserialize original build response");
+            if (original.Definition is null || original.Definition.Id <= 0 ||
+                string.IsNullOrWhiteSpace(original.SourceBranch) || string.IsNullOrWhiteSpace(original.SourceVersion))
+            {
+                throw new InvalidOperationException("The original build must have a pipeline definition, source branch, and source version to retry.");
+            }
+
+            request.Method = HttpMethod.Post;
+            request.RequestUri = new Uri($"_apis/build/builds?sourceBuildId={buildId}&api-version=7.1", UriKind.Relative);
+            request.Content = JsonContent.Create(new
+            {
+                definition = new { id = original.Definition.Id },
+                sourceBranch = original.SourceBranch,
+                sourceVersion = original.SourceVersion,
+                parameters = original.Parameters,
+                templateParameters = original.TemplateParameters,
+            });
+        }
+
+        using var response = await HttpClient.SendAsync(request, ct);
+        response.EnsureSuccessStatusCode();
+        var json = await response.Content.ReadAsStringAsync(ct);
+        var build = JsonSerializer.Deserialize<AzdoBuildRaw>(json, s_jsonOptions)
+            ?? throw new InvalidOperationException("Failed to deserialize retried build response");
+        return MapBuild(build);
     }
 
     public async Task<List<AzdoBuild>> GetRecentBuildsAsync(int? definitionId = null, int top = 10, string? statusFilter = null, CancellationToken ct = default)
@@ -601,6 +649,12 @@ public sealed class AzdoClient
 
         [JsonPropertyName("finishTime")]
         public DateTime? FinishTime { get; init; }
+
+        [JsonPropertyName("parameters")]
+        public string? Parameters { get; init; }
+
+        [JsonPropertyName("templateParameters")]
+        public Dictionary<string, JsonElement>? TemplateParameters { get; init; }
     }
 
     private class AzdoBuildDefinition
@@ -803,14 +857,14 @@ public sealed class AzdoClient
         public long Size { get; init; }
     }
 
-    private sealed class BearerTokenHandler : DelegatingHandler
+    internal sealed class BearerTokenHandler : DelegatingHandler
     {
         private readonly TokenCredential _credential;
         private readonly TokenRequestContext _context = new(["499b84ac-1321-427f-aa17-267ca6975798/.default"]);
         private readonly AzdoRateLimitState _rateLimitState;
 
-        public BearerTokenHandler(TokenCredential credential, AzdoRateLimitState rateLimitState)
-            : base(new HttpClientHandler())
+        public BearerTokenHandler(TokenCredential credential, AzdoRateLimitState rateLimitState, HttpMessageHandler? innerHandler = null)
+            : base(innerHandler ?? new HttpClientHandler())
         {
             _credential = credential;
             _rateLimitState = rateLimitState;
@@ -828,6 +882,9 @@ public sealed class AzdoClient
 
             var token = await _credential.GetTokenAsync(_context, cancellationToken);
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token.Token);
+            var content = request.Content is not null
+                ? await request.Content.ReadAsByteArrayAsync(cancellationToken)
+                : null;
             var response = await base.SendAsync(request, cancellationToken);
             _rateLimitState.Update(response.Headers);
 
@@ -842,6 +899,19 @@ public sealed class AzdoClient
 
                 // Need a fresh request since the original may have been consumed
                 using var retryRequest = new HttpRequestMessage(request.Method, request.RequestUri);
+                foreach (var header in request.Headers)
+                {
+                    retryRequest.Headers.TryAddWithoutValidation(header.Key, header.Value);
+                }
+                if (content is not null)
+                {
+                    retryRequest.Content = new ByteArrayContent(content);
+                    foreach (var header in request.Content!.Headers)
+                    {
+                        retryRequest.Content.Headers.TryAddWithoutValidation(header.Key, header.Value);
+                    }
+                }
+                response.Dispose();
                 token = await _credential.GetTokenAsync(_context, cancellationToken);
                 retryRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token.Token);
                 response = await base.SendAsync(retryRequest, cancellationToken);

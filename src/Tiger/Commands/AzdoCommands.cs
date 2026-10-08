@@ -5,6 +5,27 @@ using Spectre.Console.Cli;
 
 namespace Tiger.Commands;
 
+public class AzdoRetryCommand : AsyncCommand<AzdoRetryCommand.Settings>
+{
+    public class Settings : AzdoBuildSettings
+    {
+        [CommandOption("--failed-only")]
+        [Description("Retry failed jobs in the existing run instead of queuing a full rerun")]
+        public bool FailedOnly { get; set; }
+
+        public override ValidationResult Validate() =>
+            BuildId > 0 ? ValidationResult.Success() : ValidationResult.Error("The build ID must be positive.");
+    }
+
+    protected override async Task<int> ExecuteAsync(CommandContext context, Settings settings, CancellationToken ct)
+    {
+        var client = settings.CreateClient();
+        var build = await client.RetryBuildAsync(settings.BuildId, settings.FailedOnly, ct);
+        Console.WriteLine(JsonSerializer.Serialize(build, JsonOptions.Indented));
+        return 0;
+    }
+}
+
 public class AzdoBuildsCommand : AsyncCommand<AzdoBuildsCommand.Settings>
 {
     public class Settings : AzdoSettings
