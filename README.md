@@ -20,3 +20,17 @@ dotnet build Tiger.slnx
 ```
 dotnet run --project src/Tiger
 ```
+
+## Retrying Azure DevOps pipelines
+
+```
+tiger azdo retry 12345 --org dnceng-public --project public
+tiger azdo retry 12345 --failed-only --org dnceng-public --project public
+```
+
+The default queues a full rerun with a new build ID using the original pipeline,
+branch, commit, and parameters. `--failed-only` retries failed jobs in the existing
+run without rerunning successful jobs, subject to Azure DevOps eligibility and
+dependency rules. Both commands return the resulting build as JSON and require
+permission to queue/retry builds. An unsupported failed-job retry fails; it does
+not fall back to a full rerun.

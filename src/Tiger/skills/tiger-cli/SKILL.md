@@ -1,6 +1,6 @@
 ---
 name: tiger-cli
-description: Use the tiger cli tool to query live Azure DevOps and Helix CI/CD data
+description: Use the tiger cli tool to query live Azure DevOps and Helix CI/CD data and retry pipeline builds
 ---
 
 # Tiger CLI Skill
@@ -34,6 +34,22 @@ All output is structured **JSON** suitable for programmatic consumption.
 | `azdo download-dumps <build-id>` | Download crash dump files from build artifacts |
 | `azdo pr-builds` | Get builds for a pull request |
 | `azdo repo-builds` | Get builds for a repository; use `--repository-type TfsGit` for Azure Repos |
+| `azdo retry <build-id>` | Queue a full rerun from an existing build; use `--failed-only` to retry failed jobs in the existing run |
+
+### Retrying pipelines
+
+`azdo retry <build-id>` queues a new build using the original pipeline, branch,
+commit, and build/template parameters. The response is the new build as JSON,
+including its ID and results-page URI.
+
+`azdo retry <build-id> --failed-only` asks Azure DevOps to retry failed jobs in the
+existing run, preserving successful jobs. The response describes that same build.
+Azure DevOps determines eligibility and dependent-job behavior; unsupported or
+ineligible retries fail rather than falling back to a full rerun.
+
+Both modes accept `--org` and `--project` and require permission to queue/retry
+builds. These commands start pipeline execution; they do not retry local ingestion.
+Use them only when the user has authorized the retry.
 
 ### `tiger helix` — Helix queries
 
