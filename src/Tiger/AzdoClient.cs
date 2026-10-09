@@ -144,19 +144,15 @@ public sealed class AzdoClient
 
             request.Method = HttpMethod.Post;
             request.RequestUri = new Uri($"_apis/build/builds?sourceBuildId={buildId}&api-version=7.1", UriKind.Relative);
-            request.Content = JsonContent.Create(new
-            {
-                definition = new { id = original.Definition.Id },
-                sourceBranch = original.SourceBranch,
-                sourceVersion = original.SourceVersion,
-                parameters = original.Parameters,
-                templateParameters = original.TemplateParameters,
-            });
+            // AzDO copies source context and parameters from sourceBuildId and requires an empty body.
         }
 
         using var response = await HttpClient.SendAsync(request, ct);
-        response.EnsureSuccessStatusCode();
         var json = await response.Content.ReadAsStringAsync(ct);
+        if (!response.IsSuccessStatusCode)
+        {
+            throw new HttpRequestException($"Build retry failed with HTTP {(int)response.StatusCode} ({response.ReasonPhrase}): {json}", null, response.StatusCode);
+        }
         var build = JsonSerializer.Deserialize<AzdoBuildRaw>(json, s_jsonOptions)
             ?? throw new InvalidOperationException("Failed to deserialize retried build response");
         return MapBuild(build);
@@ -298,7 +294,7 @@ public sealed class AzdoClient
     public async Task<List<AzdoBuild>> GetBuildsForPullRequestAsync(string repository, int prNumber, int top = 10, CancellationToken ct = default)
     {
         var branchName = $"refs/pull/{prNumber}/merge";
-        var url = $"_apis/build/builds?api-version=7.1&$top={top}&branchName={Uri.EscapeDataString(branchName)}&repositoryId={Uri.EscapeDataString(repository)}&repositoryType=GitHub";
+        var url = $"_apis/build/builds?api-version=7.1&$top={top}&branchName={Uri.EscapeDataString(branchName)}&repositoryId={Uri.EscapeDataString(repository)}&repositoryType=GitHub&queryOrder=queueTimeDescending";
 
         var response = await HttpClient.GetAsync(url, ct);
         response.EnsureSuccessStatusCode();

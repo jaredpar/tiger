@@ -34,7 +34,7 @@ All output is structured **JSON** suitable for programmatic consumption.
 | `azdo download-dumps <build-id>` | Download crash dump files from build artifacts |
 | `azdo pr-builds` | Get builds for a pull request |
 | `azdo repo-builds` | Get builds for a repository; use `--repository-type TfsGit` for Azure Repos |
-| `azdo retry <build-id>` | Queue a full rerun from an existing build; use `--failed-only` to retry failed jobs in the existing run |
+| `azdo retry [build-id]` | Retry a build by ID or the latest PR build with `--pr <number> --repo <owner/repo>`; use `--failed-only` to retry failed jobs in the existing run |
 
 ### Retrying pipelines
 
@@ -47,8 +47,19 @@ existing run, preserving successful jobs. The response describes that same build
 Azure DevOps determines eligibility and dependent-job behavior; unsupported or
 ineligible retries fail rather than falling back to a full rerun.
 
+Alternatively, `azdo retry --pr <number> --repo <owner/repo> --org <organization>`
+queries live Azure DevOps and retries the single most recently queued build for
+that PR in the selected organization/project. Selection spans all matching pipelines,
+regardless of build status or result. `--failed-only` also works with this form.
+`--repo` is required with `--pr`; a build ID and `--pr` are mutually exclusive.
+No matching build is an error and does not start a retry.
+Azure DevOps queue-time variable policies can reject full retries when copying
+the original build's PR system variables. The server's error details are reported;
+the command does not bypass pipeline policies or fall back to another retry mode.
+
 Both modes accept `--org` and `--project` and require permission to queue/retry
-builds. These commands start pipeline execution; they do not retry local ingestion.
+builds (defaults: `dnceng-public` and `public`). These commands start pipeline
+execution; they do not retry local ingestion.
 Use them only when the user has authorized the retry.
 
 ### `tiger helix` — Helix queries

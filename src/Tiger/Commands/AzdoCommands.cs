@@ -7,22 +7,86 @@ namespace Tiger.Commands;
 
 public class AzdoRetryCommand : AsyncCommand<AzdoRetryCommand.Settings>
 {
-    public class Settings : AzdoBuildSettings
+    public class Settings : AzdoSettings
     {
+        [CommandArgument(0, "[build-id]")]
+        [Description("The AzDO build ID (mutually exclusive with --pr)")]
+        public int? BuildId { get; set; }
+
+        [CommandOption("--pr")]
+        [Description("Retry the most recently queued build for this pull request (requires --repo)")]
+        public int? PrNumber { get; set; }
+
+        [CommandOption("--repo")]
+        [Description("GitHub repository in owner/repo format (required with --pr)")]
+        public string? Repository { get; set; }
+
         [CommandOption("--failed-only")]
         [Description("Retry failed jobs in the existing run instead of queuing a full rerun")]
         public bool FailedOnly { get; set; }
 
-        public override ValidationResult Validate() =>
-            BuildId > 0 ? ValidationResult.Success() : ValidationResult.Error("The build ID must be positive.");
+        public override ValidationResult Validate()
+        {
+            if (BuildId is null && PrNumber is null)
+            {
+                return ValidationResult.Error("Specify a build ID or --pr with --repo.");
+            }
+            if (BuildId is not null && PrNumber is not null)
+            {
+                return ValidationResult.Error("The build ID and --pr are mutually exclusive.");
+            }
+            if (BuildId <= 0)
+            {
+                return ValidationResult.Error("The build ID must be positive.");
+            }
+            if (PrNumber <= 0)
+            {
+                return ValidationResult.Error("The pull request number must be positive.");
+            }
+            if (PrNumber is not null && string.IsNullOrWhiteSpace(Repository))
+            {
+                return ValidationResult.Error("--repo is required with --pr.");
+            }
+            if (PrNumber is null && Repository is not null)
+            {
+                return ValidationResult.Error("--repo requires --pr.");
+            }
+            return ValidationResult.Success();
+        }
     }
 
     protected override async Task<int> ExecuteAsync(CommandContext context, Settings settings, CancellationToken ct)
     {
         var client = settings.CreateClient();
-        var build = await client.RetryBuildAsync(settings.BuildId, settings.FailedOnly, ct);
+        var build = await RetryAsync(client, settings, ct);
         Console.WriteLine(JsonSerializer.Serialize(build, JsonOptions.Indented));
         return 0;
+    }
+
+    internal static async Task<AzdoBuild> RetryAsync(AzdoClient client, Settings settings, CancellationToken ct = default)
+    {
+        var validation = settings.Validate();
+        if (!validation.Successful)
+        {
+            throw new ArgumentException(validation.Message, nameof(settings));
+        }
+
+        int buildId;
+        if (settings.BuildId is int id)
+        {
+            buildId = id;
+        }
+        else
+        {
+            var builds = await client.GetBuildsForPullRequestAsync(settings.Repository!, settings.PrNumber!.Value, top: 1, ct: ct);
+            if (builds.Count == 0)
+            {
+                throw new InvalidOperationException($"No builds found for pull request {settings.Repository}#{settings.PrNumber} in {settings.Organization}/{settings.Project}.");
+            }
+            buildId = builds[0].Id;
+        }
+
+        return await client.RetryBuildAsync(buildId, settings.FailedOnly, ct);
     }
 }
 
