@@ -23,7 +23,7 @@
     <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.9" />
     <PackageReference Include="ModelContextProtocol" Version="*-*" />
     <PackageReference Include="Microsoft.Extensions.Hosting" Version="*" />
-    <PackageReference Include="Spectre.Console.Cli" Version="0.55.0" />
+    <PackageReference Include="Spectre.Console.Cli" Version="0.57.2" />
   </ItemGroup>
 
 </Project>
