@@ -214,7 +214,7 @@ public class AzdoRetryTests
 
     public sealed class ParseRetryCommand : AsyncCommand<AzdoRetryCommand.Settings>
     {
-        protected override Task<int> ExecuteAsync(CommandContext context, AzdoRetryCommand.Settings settings, CancellationToken ct)
+        public override Task<int> ExecuteAsync(CommandContext context, AzdoRetryCommand.Settings settings, CancellationToken ct)
         {
             Assert.Equal(settings.BuildId is null ? """
                 {"buildId":null,"prNumber":42,"repository":"dotnet/roslyn","organization":"test-org","project":"test-project","failedOnly":true}

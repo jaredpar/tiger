@@ -17,7 +17,7 @@ public class HelixWorkItemsCommand : AsyncCommand<HelixWorkItemsCommand.Settings
         public string? WorkItemName { get; set; }
     }
 
-    protected override async Task<int> ExecuteAsync(CommandContext context, Settings settings, CancellationToken ct)
+    public override async Task<int> ExecuteAsync(CommandContext context, Settings settings, CancellationToken ct)
     {
         var helix = HelixClient.Create();
 
@@ -49,7 +49,7 @@ public class HelixConsoleCommand : AsyncCommand<HelixConsoleCommand.Settings>
         public required string WorkItemName { get; set; }
     }
 
-    protected override async Task<int> ExecuteAsync(CommandContext context, Settings settings, CancellationToken ct)
+    public override async Task<int> ExecuteAsync(CommandContext context, Settings settings, CancellationToken ct)
     {
         var helix = HelixClient.Create();
         var console = await helix.GetConsoleAsync(settings.JobName, settings.WorkItemName);
@@ -79,7 +79,7 @@ public class HelixFilesCommand : AsyncCommand<HelixFilesCommand.Settings>
         public string OutputDir { get; set; } = ".tiger/files";
     }
 
-    protected override async Task<int> ExecuteAsync(CommandContext context, Settings settings, CancellationToken ct)
+    public override async Task<int> ExecuteAsync(CommandContext context, Settings settings, CancellationToken ct)
     {
         var helix = HelixClient.Create();
 

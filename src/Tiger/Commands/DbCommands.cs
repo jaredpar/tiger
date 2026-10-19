@@ -21,7 +21,7 @@ public class DbDeleteBuildCommand : Command<DbDeleteBuildCommand.Settings>
         public int? OlderThanDays { get; set; }
     }
 
-    protected override int Execute(CommandContext context, Settings settings, CancellationToken ct)
+    public override int Execute(CommandContext context, Settings settings, CancellationToken ct)
     {
         var configDir = TigerUtils.GetConfigDirectory();
         var dbPath = Path.Combine(configDir, "tiger.db");
