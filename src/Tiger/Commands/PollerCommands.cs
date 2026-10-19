@@ -9,7 +9,7 @@ namespace Tiger.Commands;
 /// </summary>
 public sealed class PollStartCommand : AsyncCommand
 {
-    protected override async Task<int> ExecuteAsync(CommandContext context, CancellationToken ct)
+    public override async Task<int> ExecuteAsync(CommandContext context, CancellationToken ct)
     {
         var tigerContext = TigerUtils.CreateContext();
         var db = tigerContext.GetDatabase();
@@ -63,7 +63,7 @@ public sealed class PollStartCommand : AsyncCommand
 /// </summary>
 public sealed class StatusCommand : AsyncCommand
 {
-    protected override async Task<int> ExecuteAsync(CommandContext context, CancellationToken ct)
+    public override async Task<int> ExecuteAsync(CommandContext context, CancellationToken ct)
     {
         var tigerContext = TigerUtils.CreateContext();
         var db = tigerContext.GetDatabase();

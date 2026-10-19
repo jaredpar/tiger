@@ -16,7 +16,7 @@ public sealed class HealthCommand : AsyncCommand
         await ExecuteAsync(null!, ct);
     }
 
-    protected override Task<int> ExecuteAsync(Spectre.Console.Cli.CommandContext context, CancellationToken ct)
+    public override Task<int> ExecuteAsync(Spectre.Console.Cli.CommandContext context, CancellationToken ct)
     {
         var configDir = TigerUtils.GetConfigDirectory();
         var dbPath = Path.Combine(configDir, "tiger.db");

@@ -6,7 +6,7 @@ namespace Tiger.Commands;
 
 public class ConfigShowCommand : Command
 {
-    protected override int Execute(CommandContext context, CancellationToken ct)
+    public override int Execute(CommandContext context, CancellationToken ct)
     {
         var configDir = TigerUtils.GetConfigDirectory();
         var configPath = TigerConfig.GetConfigPath(configDir);
@@ -40,7 +40,7 @@ public class ConfigShowCommand : Command
 
 public class ConfigInitCommand : Command
 {
-    protected override int Execute(CommandContext context, CancellationToken ct)
+    public override int Execute(CommandContext context, CancellationToken ct)
     {
         var configDir = TigerUtils.GetConfigDirectory();
         var configPath = TigerConfig.GetConfigPath(configDir);
@@ -60,7 +60,7 @@ public class ConfigInitCommand : Command
 
 public class ConfigPathCommand : Command
 {
-    protected override int Execute(CommandContext context, CancellationToken ct)
+    public override int Execute(CommandContext context, CancellationToken ct)
     {
         var configDir = TigerUtils.GetConfigDirectory();
         Console.WriteLine(TigerConfig.GetConfigPath(configDir));

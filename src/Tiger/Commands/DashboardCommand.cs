@@ -20,7 +20,7 @@ public sealed class DashboardCommand : AsyncCommand
     private const int MenuStatus = 6;
     private const int MenuQuit = 7;
 
-    protected override async Task<int> ExecuteAsync(CommandContext context, CancellationToken ct)
+    public override async Task<int> ExecuteAsync(CommandContext context, CancellationToken ct)
     {
         var tigerContext = TigerUtils.CreateContext();
         var db = tigerContext.GetDatabase();

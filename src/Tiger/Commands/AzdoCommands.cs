@@ -55,7 +55,7 @@ public class AzdoRetryCommand : AsyncCommand<AzdoRetryCommand.Settings>
         }
     }
 
-    protected override async Task<int> ExecuteAsync(CommandContext context, Settings settings, CancellationToken ct)
+    public override async Task<int> ExecuteAsync(CommandContext context, Settings settings, CancellationToken ct)
     {
         var client = settings.CreateClient();
         var build = await RetryAsync(client, settings, ct);
@@ -103,7 +103,7 @@ public class AzdoBuildsCommand : AsyncCommand<AzdoBuildsCommand.Settings>
         public int Top { get; set; } = 10;
     }
 
-    protected override async Task<int> ExecuteAsync(CommandContext context, Settings settings, CancellationToken ct)
+    public override async Task<int> ExecuteAsync(CommandContext context, Settings settings, CancellationToken ct)
     {
         var client = settings.CreateClient();
         var builds = await client.GetRecentBuildsAsync(settings.DefinitionId, settings.Top);
@@ -114,7 +114,7 @@ public class AzdoBuildsCommand : AsyncCommand<AzdoBuildsCommand.Settings>
 
 public class AzdoTestsCommand : AsyncCommand<AzdoBuildSettings>
 {
-    protected override async Task<int> ExecuteAsync(CommandContext context, AzdoBuildSettings settings, CancellationToken ct)
+    public override async Task<int> ExecuteAsync(CommandContext context, AzdoBuildSettings settings, CancellationToken ct)
     {
         var client = settings.CreateClient();
         var failures = await client.GetTestFailuresAsync(settings.BuildId);
@@ -125,7 +125,7 @@ public class AzdoTestsCommand : AsyncCommand<AzdoBuildSettings>
 
 public class AzdoTestSummaryCommand : AsyncCommand<AzdoBuildSettings>
 {
-    protected override async Task<int> ExecuteAsync(CommandContext context, AzdoBuildSettings settings, CancellationToken ct)
+    public override async Task<int> ExecuteAsync(CommandContext context, AzdoBuildSettings settings, CancellationToken ct)
     {
         var client = settings.CreateClient();
         var summaries = await client.GetTestSummaryByJobAsync(settings.BuildId);
@@ -176,7 +176,7 @@ public class AzdoTestSummaryCommand : AsyncCommand<AzdoBuildSettings>
 
 public class AzdoTimelineCommand : AsyncCommand<AzdoBuildSettings>
 {
-    protected override async Task<int> ExecuteAsync(CommandContext context, AzdoBuildSettings settings, CancellationToken ct)
+    public override async Task<int> ExecuteAsync(CommandContext context, AzdoBuildSettings settings, CancellationToken ct)
     {
         var client = settings.CreateClient();
         var timeline = await client.GetTimelineAsync(settings.BuildId);
@@ -202,7 +202,7 @@ public class AzdoArtifactsCommand : AsyncCommand<AzdoArtifactsCommand.Settings>
         public string? FileFilter { get; set; }
     }
 
-    protected override async Task<int> ExecuteAsync(CommandContext context, Settings settings, CancellationToken ct)
+    public override async Task<int> ExecuteAsync(CommandContext context, Settings settings, CancellationToken ct)
     {
         var client = settings.CreateClient();
         var artifacts = await client.GetArtifactsAsync(settings.BuildId);
@@ -263,7 +263,7 @@ public class AzdoJobsCommand : AsyncCommand<AzdoJobsCommand.Settings>
     {
     }
 
-    protected override async Task<int> ExecuteAsync(CommandContext context, Settings settings, CancellationToken ct)
+    public override async Task<int> ExecuteAsync(CommandContext context, Settings settings, CancellationToken ct)
     {
         var client = settings.CreateClient();
         var timeline = await client.GetTimelineAsync(settings.BuildId);
@@ -290,7 +290,7 @@ public class AzdoDownloadCommand : AsyncCommand<AzdoDownloadCommand.Settings>
         public required string OutputPath { get; set; }
     }
 
-    protected override async Task<int> ExecuteAsync(CommandContext context, Settings settings, CancellationToken ct)
+    public override async Task<int> ExecuteAsync(CommandContext context, Settings settings, CancellationToken ct)
     {
         var client = settings.CreateClient();
         await client.DownloadArtifactAsync(settings.BuildId, settings.ArtifactName, settings.OutputPath);
@@ -312,7 +312,7 @@ public class AzdoDownloadDumpsCommand : AsyncCommand<AzdoDownloadDumpsCommand.Se
         public string OutputDirectory { get; set; } = ".";
     }
 
-    protected override async Task<int> ExecuteAsync(CommandContext context, Settings settings, CancellationToken ct)
+    public override async Task<int> ExecuteAsync(CommandContext context, Settings settings, CancellationToken ct)
     {
         var client = settings.CreateClient();
         var artifacts = await client.GetArtifactsAsync(settings.BuildId);
@@ -419,7 +419,7 @@ public class AzdoPrBuildsCommand : AsyncCommand<AzdoPrBuildsCommand.Settings>
         public int Top { get; set; } = 10;
     }
 
-    protected override async Task<int> ExecuteAsync(CommandContext context, Settings settings, CancellationToken ct)
+    public override async Task<int> ExecuteAsync(CommandContext context, Settings settings, CancellationToken ct)
     {
         var client = settings.CreateClient();
         var builds = await client.GetBuildsForPullRequestAsync(settings.Repository, settings.PrNumber, settings.Top);
@@ -453,7 +453,7 @@ public class AzdoRepoBuildsCommand : AsyncCommand<AzdoRepoBuildsCommand.Settings
         public string RepositoryType { get; set; } = AzdoRepositoryTypes.GitHub;
     }
 
-    protected override async Task<int> ExecuteAsync(CommandContext context, Settings settings, CancellationToken ct)
+    public override async Task<int> ExecuteAsync(CommandContext context, Settings settings, CancellationToken ct)
     {
         string? reasonFilter = (settings.PrOnly, settings.CiOnly) switch
         {
