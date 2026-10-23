@@ -39,6 +39,19 @@ WHERE r.build_id = @buildId
 
 The method for retrieving the dump file depends on whether the test ran on Helix or not.
 
+### Invoking Tiger
+
+For both source builds and installed tools, resolve `..\..\tiger.dll` on Windows
+(`../../tiger.dll` on Unix) from the directory containing this loaded `SKILL.md`,
+not from the shell's current directory. Replace `<absolute-path-to-tiger.dll>` in
+the examples with the resulting absolute path and keep it quoted.
+
+The dashboard registers skills from the application's output directory, where this
+DLL is already present even when running from source. No global `tiger` command or
+additional `dotnet run` is needed. If the DLL is missing because the skill was loaded
+directly from the source tree, build Tiger and load its output skills first.
+Run the relevant command with `--help` before using it to discover its options.
+
 ### Normal (non-Helix) tests
 
 When `helix_job_name` is NULL, the crash dump is uploaded inside an **Azure DevOps pipeline artifact** associated with the test job.
@@ -47,18 +60,16 @@ When `helix_job_name` is NULL, the crash dump is uploaded inside an **Azure DevO
 
 ```shell
 # Download all dump files from a build
-tiger azdo download-dumps <build-id>
+dotnet "<absolute-path-to-tiger.dll>" azdo download-dumps <build-id>
 
 # Download dumps only from a specific test run
-tiger azdo download-dumps <build-id> --run-id <run-id>
+dotnet "<absolute-path-to-tiger.dll>" azdo download-dumps <build-id> --run-id <run-id>
 
 # Specify output directory
-tiger azdo download-dumps <build-id> --output ./dumps
+dotnet "<absolute-path-to-tiger.dll>" azdo download-dumps <build-id> --output ./dumps
 ```
 
 This command scans build artifacts, finds `.dmp` files, and downloads them individually without downloading entire artifacts.
-
-The `tiger` CLI is available at `../../tiger` (relative to this skill).
 
 **How it works under the hood:**
 1. Lists all artifacts for the build
@@ -72,10 +83,10 @@ If `download-dumps` doesn't work, you can download the entire artifact containin
 
 ```shell
 # List artifacts to find the right one
-tiger azdo artifacts <build-id>
+dotnet "<absolute-path-to-tiger.dll>" azdo artifacts <build-id>
 
 # Download the full artifact (artifact name = test run name with underscores + "Attempt N Logs")
-tiger azdo download <build-id> --artifact "<artifact-name>" --output ./logs.zip
+dotnet "<absolute-path-to-tiger.dll>" azdo download <build-id> --artifact "<artifact-name>" --output ./logs.zip
 ```
 
 As a last resort, use the AzDO REST API or the build's Artifacts tab in the web UI.

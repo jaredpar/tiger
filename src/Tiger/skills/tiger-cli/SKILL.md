@@ -10,13 +10,41 @@ real-time CI/CD information that may not yet be in the local database.
 
 ## Location
 
-The Tiger executable is located at `../../tiger` relative to this skill file. Run it as:
+Tiger's skills are copied beside the application in both source builds and installed
+tools. Running from source does **not** require a separate `tiger` command on PATH or
+another `dotnet run`.
+
+Resolve `..\..\tiger.dll` on Windows (`../../tiger.dll` on Unix) from the directory
+containing this loaded `SKILL.md`, **not** from the shell's current directory. Use the
+resulting absolute path:
 
 ```
-dotnet run --project src/Tiger/Tiger.csproj --
+dotnet "<absolute-path-to-tiger.dll>" azdo tests --help
 ```
 
-All output is structured **JSON** suitable for programmatic consumption.
+Replace `<absolute-path-to-tiger.dll>` in every example with that resolved path;
+keep it quoted for paths containing spaces. This works for both source-build output
+and installed tool packages. Source builds also provide an adjacent `tiger.exe`
+(or `tiger` on Unix), but the DLL form works without an apphost.
+
+For example, a Windows source build has this layout:
+
+```text
+<checkout>\artifacts\bin\Tiger\debug\
+  tiger.exe
+  tiger.dll
+  skills\
+    tiger-cli\SKILL.md
+```
+
+The dashboard registers this output's `skills` directory with Copilot, not the
+repository's `src\Tiger\skills` directory. If the loaded skill is instead a manually
+registered source file and has no adjacent application, build Tiger and load the
+output skills before continuing. Do not assume a global `tiger` installation exists.
+
+Below, `tiger` in command names is shorthand for the resolved invocation above.
+AzDO and Helix command results are structured **JSON** suitable for programmatic
+consumption; `--help` displays help text.
 
 ## Available Commands
 
@@ -77,6 +105,6 @@ Each command supports `--help` for full argument and option details. Always run
 options. For example:
 
 ```
-dotnet run --project src/Tiger/Tiger.csproj -- azdo tests --help
-dotnet run --project src/Tiger/Tiger.csproj -- helix workitems --help
+dotnet "<absolute-path-to-tiger.dll>" azdo tests --help
+dotnet "<absolute-path-to-tiger.dll>" helix workitems --help
 ```
