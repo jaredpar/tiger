@@ -6,6 +6,8 @@ See `docs/architecture.md` for full design details and `docs/todo.md` for the wo
 
 ## Prerequisites
 
+Install the .NET 10 SDK and Git to build and run from this repository.
+
 1. Be connected to the VPN.
 2. This tool uses Azure Identity for authentication — use `az login` to authenticate. You can also use `az account set -s <subscription name>` to set the subscription.
 
@@ -16,6 +18,34 @@ dotnet build Tiger.slnx
 ```
 
 ## Running
+
+Use the launcher in the repository root as the primary local entry point.
+Every invocation fetches from GitHub (`origin`), fast-forwards the current branch
+to `origin/main`, builds Tiger, and runs it with all supplied arguments.
+If updating or building fails, the launcher stops without running Tiger.
+
+From Command Prompt:
+
+```cmd
+tiger.cmd azdo --help
+```
+
+From PowerShell:
+
+```powershell
+.\tiger.cmd azdo --help
+```
+
+From Bash (Linux/macOS or Git Bash):
+
+```bash
+./tiger.sh azdo --help
+```
+
+Omit arguments to open the interactive dashboard. Both launchers resolve the
+repository from their own location and return Tiger's exit code.
+
+To run directly without automatically updating from GitHub:
 
 ```
 dotnet run --project src/Tiger
