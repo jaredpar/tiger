@@ -158,6 +158,18 @@ public sealed class AzdoClient
         return MapBuild(build);
     }
 
+    public async Task<AzdoBuild> GetBuildAsync(int buildId, CancellationToken ct = default)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(buildId);
+
+        using var response = await HttpClient.GetAsync($"_apis/build/builds/{buildId}?api-version=7.1", ct);
+        response.EnsureSuccessStatusCode();
+        var json = await response.Content.ReadAsStringAsync(ct);
+        var build = JsonSerializer.Deserialize<AzdoBuildRaw>(json, s_jsonOptions)
+            ?? throw new InvalidOperationException("Failed to deserialize build response");
+        return MapBuild(build);
+    }
+
     public async Task<List<AzdoBuild>> GetRecentBuildsAsync(int? definitionId = null, int top = 10, string? statusFilter = null, CancellationToken ct = default)
     {
         var url = $"_apis/build/builds?api-version=7.1&$top={top}";

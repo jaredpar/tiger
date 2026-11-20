@@ -53,6 +53,7 @@ consumption; `--help` displays help text.
 | Command | Description |
 |---------|-------------|
 | `azdo builds` | Get recent builds, optionally filtered by definition ID |
+| `azdo wait <build-id>` | Wait for a pipeline run or jobs selected by `--job-name <substring>` and/or `--job-id <timeline-guid>` |
 | `azdo tests <build-id>` | Get test failures for a build |
 | `azdo test-summary <build-id>` | Get test counts per job for a build |
 | `azdo timeline <build-id>` | Get the timeline for a build |
@@ -63,6 +64,30 @@ consumption; `--help` displays help text.
 | `azdo pr-builds` | Get builds for a pull request |
 | `azdo repo-builds` | Get builds for a repository; use `--repository-type TfsGit` for Azure Repos |
 | `azdo retry [build-id]` | Retry a build by ID or the latest PR build with `--pr <number> --repo <owner/repo>`; use `--failed-only` to retry failed jobs in the existing run |
+
+### Waiting for pipelines and jobs
+
+`azdo wait <build-id>` waits for the specific run to complete. Add
+`--job-name <substring>` to wait for all jobs whose display names contain the text
+(case-insensitive), or `--job-id <guid>` for the exact timeline record ID returned
+by `azdo jobs`. Both filters together require both to match.
+
+Matching jobs are rediscovered from the live timeline each check. No matches yet
+means keep waiting; no matches when the build completes is an error. Because AzDO
+only creates Job records when a stage/phase starts, `--job-name` mode also keeps
+waiting while any unfinished stage or phase has no jobs yet (listed as
+`pendingJobSources` in progress output). Already-running unrelated jobs do not
+block completion; `--job-id` alone returns once that job completes. A completed
+build with unfinished matching records is reported as an error rather than waiting forever.
+
+Stderr emits JSON progress snapshots listing job IDs, names, states, results, and
+`pendingJobSources` initially and on changes. Stdout emits a single final JSON object with `build`
+and `jobs` (empty for whole-run mode). Exit code 0 means completion, not success:
+failed, canceled, and skipped outcomes are returned normally. Errors, cancellation,
+and timeout return a nonzero code.
+
+Use `--poll-interval <seconds>` (default 10) and `--timeout <seconds>` (default
+unlimited), both positive integers. Accepts `--org` and `--project`.
 
 ### Retrying pipelines
 

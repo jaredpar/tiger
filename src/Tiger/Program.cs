@@ -29,6 +29,8 @@ app.Configure(config =>
     config.AddBranch("azdo", azdo =>
     {
         azdo.SetDescription("Azure DevOps commands");
+        azdo.AddCommand<AzdoWaitCommand>("wait")
+            .WithDescription("Wait for a build or matching jobs to complete");
         azdo.AddCommand<AzdoRetryCommand>("retry")
             .WithDescription("Retry a build by ID or the latest PR build with --pr and --repo; use --failed-only to retry failed jobs");
         azdo.AddCommand<AzdoBuildsCommand>("builds")
